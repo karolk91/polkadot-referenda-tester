@@ -11,7 +11,7 @@ import * as path from 'path';
 import { ChainInfo, ChainNetwork, getChainInfo, createApiForChain } from './chain-registry';
 
 interface CoordinatorConfig {
-  governance: string;
+  governance?: string;
   governanceBlock?: number;
   fellowship?: string;
   fellowshipBlock?: number;
@@ -21,7 +21,7 @@ interface CoordinatorConfig {
 
 export class NetworkCoordinator {
   private logger: Logger;
-  private governanceEndpoint: string;
+  private governanceEndpoint?: string;
   private governanceBlock?: number;
   private fellowshipEndpoint?: string;
   private fellowshipBlock?: number;
@@ -74,17 +74,35 @@ export class NetworkCoordinator {
   }
 
   async testWithFellowship(
-    mainRefId: number,
+    mainRefId: number | undefined,
     fellowshipRefId: number | undefined,
     _basePort: number,
     cleanup: boolean = true
   ): Promise<void> {
-    if (!fellowshipRefId) {
+    // Fellowship-only mode (no main referendum)
+    if (!mainRefId && fellowshipRefId) {
+      if (!this.fellowshipEndpoint) {
+        throw new Error('Fellowship chain URL must be provided when testing fellowship referendum');
+      }
+      return this.testFellowshipOnly(fellowshipRefId, _basePort, cleanup);
+    }
+
+    // Main referendum only (no fellowship)
+    if (mainRefId && !fellowshipRefId) {
       return this.testSingleReferendum(mainRefId, _basePort);
+    }
+
+    // Both main and fellowship referenda
+    if (!fellowshipRefId || !mainRefId) {
+      throw new Error('Both referendum IDs must be provided for dual testing');
     }
 
     if (!this.fellowshipEndpoint) {
       throw new Error('Fellowship chain URL must be provided when fellowship referendum ID is set');
+    }
+
+    if (!this.governanceEndpoint) {
+      throw new Error('Governance chain URL must be provided when testing both referenda');
     }
 
     // Detect chain types first
@@ -112,6 +130,10 @@ export class NetworkCoordinator {
   }
 
   private async testSingleReferendum(refId: number, _port: number): Promise<void> {
+    if (!this.governanceEndpoint) {
+      throw new Error('Governance endpoint must be set for single referendum testing');
+    }
+
     this.logger.startSpinner('Starting Chopsticks...');
 
     const chopsticks = new ChopsticksManager(this.logger);
@@ -168,6 +190,78 @@ export class NetworkCoordinator {
     }
   }
 
+  private async testFellowshipOnly(refId: number, _port: number, cleanup: boolean = true): Promise<void> {
+    if (!this.fellowshipEndpoint) {
+      throw new Error('Fellowship endpoint must be set for fellowship-only testing');
+    }
+
+    this.logger.startSpinner('Starting Chopsticks for fellowship chain...');
+
+    const chopsticks = new ChopsticksManager(this.logger);
+    let client: any;
+
+    try {
+      const config: any = {
+        endpoint: this.fellowshipEndpoint,
+        'build-block-mode': 'manual',
+      };
+
+      if (this.fellowshipBlock !== undefined) {
+        config.block = this.fellowshipBlock;
+      }
+
+      const context = await chopsticks.setup(config);
+
+      const endpoint = context.ws.endpoint;
+      const wsProvider = getWsProvider(endpoint);
+      client = createClient(withPolkadotSdkCompat(wsProvider));
+      const api = createApiForChain(client);
+
+      this.logger.succeedSpinner(`Chopsticks ready at ${endpoint}`);
+
+      // Wait for chain to be ready
+      this.logger.startSpinner('Waiting for chain to be ready...');
+      await chopsticks.waitForChainReady(api);
+      this.logger.succeedSpinner('Chain is ready');
+
+      // Detect chain info from runtime
+      this.fellowshipChain = await getChainInfo(api, this.fellowshipEndpoint);
+      this.logger.info(
+        `Detected chain: ${this.fellowshipChain.label} (${this.fellowshipChain.specName})`
+      );
+
+      const fetcher = new ReferendaFetcher(this.logger);
+      const referendum = await fetcher.fetchReferendum(api, refId, true); // true = isFellowship
+
+      if (!referendum) {
+        throw new Error(`Failed to fetch fellowship referendum ${refId}`);
+      }
+
+      const simulator = new ReferendumSimulator(this.logger, chopsticks, api, true); // isFellowship = true
+      const result = await simulator.simulate(referendum);
+
+      if (!result.executionSucceeded) {
+        if (result.errors) {
+          result.errors.forEach((err) => this.logger.error(`  ${err}`));
+        }
+        throw new Error(`Fellowship referendum #${refId} execution failed`);
+      }
+
+      this.logger.success(`\n✓ Fellowship referendum #${refId} executed successfully!`);
+    } finally {
+      if (client) {
+        client.destroy();
+      }
+      if (cleanup) {
+        await chopsticks.cleanup();
+      } else {
+        this.logger.info(`\nChopsticks instance still running for inspection`);
+        this.logger.info('Press Ctrl+C to exit');
+        await chopsticks.pause();
+      }
+    }
+  }
+
   private async testSameChainWithFellowship(
     mainRefId: number,
     fellowshipRefId: number
@@ -178,8 +272,14 @@ export class NetworkCoordinator {
     let client: any;
 
     try {
+      // Use governance endpoint if available, otherwise fellowship
+      const chainEndpoint = this.governanceEndpoint || this.fellowshipEndpoint;
+      if (!chainEndpoint) {
+        throw new Error('At least one chain endpoint must be provided');
+      }
+
       const config: any = {
-        endpoint: this.governanceEndpoint,
+        endpoint: chainEndpoint,
         'build-block-mode': 'manual',
       };
 
@@ -204,7 +304,7 @@ export class NetworkCoordinator {
       this.logger.succeedSpinner('Chain is ready');
 
       // Detect chain info from runtime
-      this.governanceChain = await getChainInfo(api, this.governanceEndpoint);
+      this.governanceChain = await getChainInfo(api, chainEndpoint);
       this.fellowshipChain = this.governanceChain; // Same chain
       this.logger.info(
         `Detected chain: ${this.governanceChain.label} (${this.governanceChain.specName})`
@@ -277,9 +377,14 @@ export class NetworkCoordinator {
       await fellowshipChopsticks.waitForChainReady(fellowshipApi);
       this.logger.succeedSpinner('Chains are ready');
 
+      // Validate endpoints are set (should be guaranteed by caller but TypeScript needs to know)
+      if (!this.governanceEndpoint || !this.fellowshipEndpoint) {
+        throw new Error('Both governance and fellowship endpoints must be set for multi-chain testing');
+      }
+
       // Detect chain info from runtimes
       this.governanceChain = await getChainInfo(governanceApi, this.governanceEndpoint);
-      this.fellowshipChain = await getChainInfo(fellowshipApi, this.fellowshipEndpoint!);
+      this.fellowshipChain = await getChainInfo(fellowshipApi, this.fellowshipEndpoint);
       this.logger.info(
         `Governance: ${this.governanceChain.label} (${this.governanceChain.specName})`
       );
@@ -418,11 +523,13 @@ export class NetworkCoordinator {
 
     const clients: any[] = [];
     try {
-      // Detect governance chain
-      const govClient = createClient(withPolkadotSdkCompat(getWsProvider(this.governanceEndpoint)));
-      clients.push(govClient);
-      const govApi = createApiForChain(govClient);
-      this.governanceChain = await getChainInfo(govApi, this.governanceEndpoint);
+      // Detect governance chain if provided
+      if (this.governanceEndpoint) {
+        const govClient = createClient(withPolkadotSdkCompat(getWsProvider(this.governanceEndpoint)));
+        clients.push(govClient);
+        const govApi = createApiForChain(govClient);
+        this.governanceChain = await getChainInfo(govApi, this.governanceEndpoint);
+      }
 
       // Detect fellowship chain if provided
       if (this.fellowshipEndpoint) {
@@ -444,7 +551,9 @@ export class NetworkCoordinator {
       }
 
       this.logger.succeedSpinner('Chain types detected');
-      this.logger.info(`Governance: ${this.governanceChain.label} (${this.governanceChain.kind})`);
+      if (this.governanceChain) {
+        this.logger.info(`Governance: ${this.governanceChain.label} (${this.governanceChain.kind})`);
+      }
       if (this.fellowshipChain) {
         this.logger.info(
           `Fellowship: ${this.fellowshipChain.label} (${this.fellowshipChain.kind})`

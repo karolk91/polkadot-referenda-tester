@@ -20,7 +20,7 @@ program
 program
   .command('test')
   .description('Test a referendum by simulating its execution')
-  .requiredOption(
+  .option(
     '--governance-chain-url <url>',
     'Governance chain RPC endpoint URL. Format: url or url,block (e.g., wss://polkadot.io or wss://polkadot.io,12345)'
   )
@@ -28,7 +28,7 @@ program
     '--fellowship-chain-url <url>',
     'Fellowship chain RPC endpoint URL. Format: url or url,block (only required when using --fellowship)'
   )
-  .requiredOption('-r, --referendum <id>', 'Main governance referendum ID to test')
+  .option('-r, --referendum <id>', 'Main governance referendum ID to test')
   .option('-f, --fellowship <id>', 'Fellowship referendum ID (for whitelisting scenarios)')
   .option('-p, --port <port>', 'Local Chopsticks starting port', '8000')
   .option(

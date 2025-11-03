@@ -1,6 +1,6 @@
 export interface TestOptions {
-  governanceChainUrl: string;
-  referendum: string;
+  governanceChainUrl?: string;
+  referendum?: string;
   fellowship?: string; // Optional fellowship referendum ID
   fellowshipChainUrl?: string;
   port: string;

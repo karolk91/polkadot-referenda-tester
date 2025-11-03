@@ -15,6 +15,11 @@ export async function testReferendum(options: TestOptions): Promise<void> {
   const cleanupEnabled = options.cleanup !== false;
 
   try {
+    // Validate that at least one referendum is provided
+    if (!options.referendum && !options.fellowship) {
+      throw new Error('At least one of --referendum or --fellowship must be specified');
+    }
+
     // Check if fellowship referendum is provided
     if (options.fellowship) {
       // Use NetworkCoordinator for multi-chain setup
@@ -23,6 +28,16 @@ export async function testReferendum(options: TestOptions): Promise<void> {
 
     // Otherwise continue with single-chain test below
 
+    // Validate governance chain URL is provided for single referendum test
+    if (!options.governanceChainUrl) {
+      throw new Error('--governance-chain-url is required when testing a governance referendum');
+    }
+
+    // Validate referendum ID
+    if (!options.referendum) {
+      throw new Error('--referendum is required when testing a governance referendum');
+    }
+
     // Parse governance URL and optional block number
     const governanceParsed = parseEndpoint(options.governanceChainUrl);
     const governanceUrl = governanceParsed.url;
@@ -30,7 +45,6 @@ export async function testReferendum(options: TestOptions): Promise<void> {
     // Block number from url,block format or use latest
     const specifiedBlock = governanceParsed.block;
 
-    // Validate referendum ID
     const referendumId = parseInt(options.referendum);
     if (isNaN(referendumId)) {
       throw new Error(`Invalid referendum ID: ${options.referendum}`);
@@ -203,15 +217,33 @@ async function testWithFellowship(
 ): Promise<void> {
   logger.section('Polkadot Referenda Tester (Fellowship Mode)');
 
-  const mainRefId = parseInt(options.referendum);
   const fellowshipRefId = parseInt(options.fellowship!);
 
-  if (isNaN(mainRefId) || isNaN(fellowshipRefId)) {
-    throw new Error('Invalid referendum ID');
+  if (isNaN(fellowshipRefId)) {
+    throw new Error('Invalid fellowship referendum ID');
   }
 
-  // Parse governance endpoint and optional block
-  const governanceParsed = parseEndpoint(options.governanceChainUrl);
+  // Check if we're testing fellowship only (no main referendum)
+  const mainRefId = options.referendum ? parseInt(options.referendum) : undefined;
+
+  if (mainRefId !== undefined && isNaN(mainRefId)) {
+    throw new Error('Invalid main referendum ID');
+  }
+
+  // If only testing fellowship (no main ref), validate fellowship chain URL is provided
+  if (!mainRefId && !options.fellowshipChainUrl) {
+    throw new Error('--fellowship-chain-url is required when testing a fellowship referendum');
+  }
+
+  // If testing with both refs, validate governance chain URL is provided
+  if (mainRefId && !options.governanceChainUrl) {
+    throw new Error('--governance-chain-url is required when testing both governance and fellowship referenda');
+  }
+
+  // Parse governance endpoint and optional block (if provided)
+  const governanceParsed = options.governanceChainUrl
+    ? parseEndpoint(options.governanceChainUrl)
+    : undefined;
 
   // Parse fellowship endpoint and optional block
   const fellowshipParsed = options.fellowshipChainUrl
@@ -236,16 +268,20 @@ async function testWithFellowship(
   }
 
   const coordinator = new NetworkCoordinator(logger, {
-    governance: governanceParsed.url,
-    governanceBlock: governanceParsed.block,
+    governance: governanceParsed?.url,
+    governanceBlock: governanceParsed?.block,
     fellowship: fellowshipParsed.url,
     fellowshipBlock: fellowshipParsed.block,
     additionalChains: additionalChainsParsed.map((c) => c.url),
     additionalChainBlocks: additionalChainsParsed.map((c) => c.block),
   });
 
-  logger.info(`Fellowship Referendum: #${fellowshipRefId}`);
-  logger.info(`Main Referendum: #${mainRefId}\n`);
+  if (mainRefId) {
+    logger.info(`Fellowship Referendum: #${fellowshipRefId}`);
+    logger.info(`Main Referendum: #${mainRefId}\n`);
+  } else {
+    logger.info(`Fellowship Referendum: #${fellowshipRefId}\n`);
+  }
 
   await coordinator.testWithFellowship(
     mainRefId,

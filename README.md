@@ -18,6 +18,23 @@ npx github:karolk91/polkadot-referenda-tester test \
   --fellowship-chain-url wss://polkadot-collectives-rpc.polkadot.io \
   --referendum 1777 \
   --fellowship 425
+
+# With fellowship companion using state at specific blocks
+npx github:karolk91/polkadot-referenda-tester test \
+  --governance-chain-url wss://polkadot-rpc.dwellir.com \
+  --fellowship-chain-url wss://polkadot-collectives-rpc.polkadot.io \
+  --referendum 1777 \
+  --fellowship 425
+
+# List fellowship ongoing referendas at specific block
+npx github:karolk91/polkadot-referenda-tester list \
+  --fellowship-chain-url wss://polkadot-collectives-rpc.polkadot.io,7473112 \
+  --status ongoing
+
+# Test some fellowship ref alone
+npx github:karolk91/polkadot-referenda-tester test \
+  --fellowship-chain-url wss://polkadot-collectives-rpc.polkadot.io \
+  --fellowship 425
 ```
 
 ## Local Development
@@ -36,8 +53,8 @@ yarn cli test \
 
 | Flag | Description |
 | --- | --- |
-| `--governance-chain-url <url>` | Governance chain RPC endpoint. Format: `url` or `url,block` (e.g., `wss://polkadot.io,12345`) **Required** |
-| `-r, --referendum <id>` | Main governance referendum ID to test **Required** |
+| `--governance-chain-url <url>` | Governance chain RPC endpoint. Format: `url` or `url,block` (e.g., `wss://polkadot.io,12345`) |
+| `-r, --referendum <id>` | Main governance referendum ID to test |
 | `--fellowship-chain-url <url>` | Fellowship chain RPC endpoint. Format: `url` or `url,block` (required when using `--fellowship`) |
 | `-f, --fellowship <id>` | Fellowship referendum ID for whitelisting scenarios |
 | `-p, --port <port>` | Local Chopsticks starting port (default: `8000`) |
