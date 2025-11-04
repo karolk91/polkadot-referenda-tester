@@ -122,10 +122,6 @@ export class NetworkCoordinator {
       return this.testSameChainWithFellowship(mainRefId, fellowshipRefId);
     }
 
-    if (this.governanceChain!.kind !== 'relay' && this.fellowshipChain!.kind !== 'relay') {
-      throw new Error('At least one of governance or fellowship chains must be a relay chain');
-    }
-
     return this.testMultiChain(mainRefId, fellowshipRefId, cleanup);
   }
 
@@ -578,24 +574,39 @@ export class NetworkCoordinator {
     const governanceIsRelay = this.governanceChain.kind === 'relay';
     const fellowshipIsRelay = this.fellowshipChain.kind === 'relay';
 
-    const relayChain = governanceIsRelay ? this.governanceChain : this.fellowshipChain;
-    const parachain = governanceIsRelay ? this.fellowshipChain : this.governanceChain;
-
-    // Determine which block numbers to use
-    const relayBlock = governanceIsRelay ? this.governanceBlock : this.fellowshipBlock;
-    const parachainBlock = governanceIsRelay ? this.fellowshipBlock : this.governanceBlock;
-
-    const relayKey = this.getRelayKey(relayChain.network);
-    const parachainKey = governanceIsRelay ? 'fellowship' : 'governance';
-
     // Build network config including additional chains
-    const networkConfig: Record<string, any> = {
-      [relayKey]: this.buildConfig(relayChain.endpoint, relayBlock),
-      [parachainKey]: this.buildConfig(parachain.endpoint, parachainBlock),
-    };
+    const networkConfig: Record<string, any> = {};
+    let governanceKey: string;
+    let fellowshipKey: string;
+
+    // Handle different chain configurations
+    if (!governanceIsRelay && !fellowshipIsRelay) {
+      // Both are parachains - set them up independently without a relay chain
+      governanceKey = 'governance';
+      fellowshipKey = 'fellowship';
+      networkConfig[governanceKey] = this.buildConfig(this.governanceChain.endpoint, this.governanceBlock);
+      networkConfig[fellowshipKey] = this.buildConfig(this.fellowshipChain.endpoint, this.fellowshipBlock);
+    } else {
+      // At least one is a relay chain - use traditional relay/parachain setup
+      const relayChain = governanceIsRelay ? this.governanceChain : this.fellowshipChain;
+      const parachain = governanceIsRelay ? this.fellowshipChain : this.governanceChain;
+
+      // Determine which block numbers to use
+      const relayBlock = governanceIsRelay ? this.governanceBlock : this.fellowshipBlock;
+      const parachainBlock = governanceIsRelay ? this.fellowshipBlock : this.governanceBlock;
+
+      const relayKey = this.getRelayKey(relayChain.network);
+      const parachainKey = governanceIsRelay ? 'fellowship' : 'governance';
+
+      governanceKey = governanceIsRelay ? relayKey : parachainKey;
+      fellowshipKey = fellowshipIsRelay ? relayKey : parachainKey;
+
+      networkConfig[relayKey] = this.buildConfig(relayChain.endpoint, relayBlock);
+      networkConfig[parachainKey] = this.buildConfig(parachain.endpoint, parachainBlock);
+    }
 
     // Track which endpoints are already in the network and map chains to their network keys
-    const usedEndpoints = new Set([relayChain.endpoint, parachain.endpoint]);
+    const usedEndpoints = new Set([this.governanceChain.endpoint, this.fellowshipChain.endpoint]);
     const chainToNetworkKey = new Map<string, string>();
 
     // Add additional chains to the network (skip duplicates)
@@ -617,8 +628,8 @@ export class NetworkCoordinator {
 
     const networks = await setupNetworks(networkConfig);
 
-    const governanceContext = governanceIsRelay ? networks[relayKey] : networks[parachainKey];
-    const fellowshipContext = fellowshipIsRelay ? networks[relayKey] : networks[parachainKey];
+    const governanceContext = networks[governanceKey];
+    const fellowshipContext = networks[fellowshipKey];
 
     // Collect additional chain managers (excluding governance and fellowship)
     const additionalManagers = new Map<string, ChopsticksManager>();
