@@ -674,18 +674,17 @@ export class ReferendumSimulator {
       (e) => `ExtrinsicFailed: ${this.formatDispatchError(e.data)}`
     );
 
-    // Log summary of all events
-    const eventSummary: Record<string, number> = {};
+    // Log all events individually
+    this.logger.info(`Events in block:`);
     events.forEach((e) => {
-      const key = `${e.section}.${e.method}`;
-      eventSummary[key] = (eventSummary[key] || 0) + 1;
-    });
+      this.logger.info(`  • ${e.section}.${e.method}`);
 
-    this.logger.debug(
-      `Event summary: ${Object.entries(eventSummary)
-        .map(([k, v]) => `${k}(${v})`)
-        .join(', ')}`
-    );
+      // Show event data in verbose mode
+      if (this.logger.isVerbose() && e.data) {
+        const serialized = this.serializeEventData(e.data);
+        this.logger.debug(`    Data: ${JSON.stringify(serialized, null, 2)}`);
+      }
+    });
 
     // Check if proposal scheduled future tasks (common with Treasury proposals)
     const scheduledEvents = events.filter(
@@ -1528,5 +1527,105 @@ export class ReferendumSimulator {
       this.logger.warn(`Failed to get events for block ${blockNumber}: ${error}`);
       return [];
     }
+  }
+
+  /**
+   * Serialize event data, converting Uint8Arrays and other binary data to hex strings
+   */
+  private serializeEventData(data: any): any {
+    if (data === null || data === undefined) {
+      return data;
+    }
+
+    // Handle Uint8Array
+    if (data instanceof Uint8Array) {
+      return '0x' + Buffer.from(data).toString('hex');
+    }
+
+    // Handle Buffer
+    if (Buffer.isBuffer(data)) {
+      return '0x' + data.toString('hex');
+    }
+
+    // Handle polkadot-api FixedSizeBinary and similar types (check for asHex property)
+    if (typeof data === 'object' && 'asHex' in data) {
+      try {
+        // asHex might be a function or a getter
+        const hex = typeof data.asHex === 'function' ? data.asHex() : data.asHex;
+        if (hex !== undefined && hex !== null) {
+          return hex;
+        }
+        // Fallback to asBytes if asHex doesn't work
+        if ('asBytes' in data) {
+          const bytes = typeof data.asBytes === 'function' ? data.asBytes() : data.asBytes;
+          if (bytes instanceof Uint8Array) {
+            return '0x' + Buffer.from(bytes).toString('hex');
+          }
+        }
+      } catch (e) {
+        // Ignore errors, fall through to other methods
+      }
+    }
+
+    // Handle objects with toHex method
+    if (typeof data === 'object' && typeof data.toHex === 'function') {
+      return data.toHex();
+    }
+
+    // Handle objects with toU8a method (convert to Uint8Array then to hex)
+    if (typeof data === 'object' && typeof data.toU8a === 'function') {
+      const u8a = data.toU8a();
+      return '0x' + Buffer.from(u8a).toString('hex');
+    }
+
+    // Handle objects with toString that might give us useful info
+    if (typeof data === 'object' && typeof data.toString === 'function') {
+      const str = data.toString();
+      // If toString gives us a hex string, use it
+      if (str.startsWith('0x')) {
+        return str;
+      }
+    }
+
+    // Handle arrays
+    if (Array.isArray(data)) {
+      return data.map((item) => this.serializeEventData(item));
+    }
+
+    // Handle array-like objects (objects with numeric keys)
+    if (typeof data === 'object' && !Array.isArray(data)) {
+      // Check if it's an array-like object (has numeric keys like 0, 1, 2...)
+      const keys = Object.keys(data);
+      const isArrayLike = keys.length > 0 && keys.every((k) => !isNaN(Number(k)));
+
+      if (isArrayLike) {
+        // Convert to array and serialize as bytes
+        const bytes: number[] = [];
+        for (let i = 0; i < keys.length; i++) {
+          if (data[i] !== undefined) {
+            bytes.push(data[i]);
+          }
+        }
+        if (bytes.length > 0) {
+          return '0x' + Buffer.from(bytes).toString('hex');
+        }
+      }
+    }
+
+    // Handle plain objects
+    if (typeof data === 'object') {
+      const result: any = {};
+      for (const [key, value] of Object.entries(data)) {
+        result[key] = this.serializeEventData(value);
+      }
+      return result;
+    }
+
+    // Handle bigint
+    if (typeof data === 'bigint') {
+      return data.toString();
+    }
+
+    return data;
   }
 }

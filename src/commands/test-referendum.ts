@@ -9,33 +9,54 @@ import { ReferendumSimulator } from '../services/referendum-simulator';
 import { NetworkCoordinator } from '../services/network-coordinator';
 import { getChainInfo, createApiForChain } from '../services/chain-registry';
 import { parseEndpoint, parseMultipleEndpoints } from '../utils/chain-endpoint-parser';
+import { ReferendumCreator } from '../services/referendum-creator';
 
 export async function testReferendum(options: TestOptions): Promise<void> {
   const logger = new Logger(options.verbose);
   const cleanupEnabled = options.cleanup !== false;
 
   try {
-    // Validate that at least one referendum is provided
-    if (!options.referendum && !options.fellowship) {
-      throw new Error('At least one of --referendum or --fellowship must be specified');
+    // Validate mutually exclusive parameters
+    if (options.referendum && options.callToCreateGovernanceReferendum) {
+      throw new Error(
+        'Cannot specify both --referendum (existing ID) and --call-to-create-governance-referendum (create new). Use one or the other.'
+      );
     }
 
-    // Check if fellowship referendum is provided
-    if (options.fellowship) {
+    if (options.fellowship && options.callToCreateFellowshipReferendum) {
+      throw new Error(
+        'Cannot specify both --fellowship (existing ID) and --call-to-create-fellowship-referendum (create new). Use one or the other.'
+      );
+    }
+
+    // Validate that at least one referendum is provided or will be created
+    const hasGovernanceRef = !!(options.referendum || options.callToCreateGovernanceReferendum);
+    const hasFellowshipRef = !!(options.fellowship || options.callToCreateFellowshipReferendum);
+
+    if (!hasGovernanceRef && !hasFellowshipRef) {
+      throw new Error(
+        'At least one referendum must be specified (--referendum, --fellowship) or created (--call-to-create-governance-referendum, --call-to-create-fellowship-referendum)'
+      );
+    }
+
+    // Check if fellowship referendum is provided or will be created
+    if (hasFellowshipRef) {
       // Use NetworkCoordinator for multi-chain setup
       return await testWithFellowship(options, logger, cleanupEnabled);
     }
 
-    // Otherwise continue with single-chain test below
+    // Otherwise continue with single-chain test below (governance only)
 
     // Validate governance chain URL is provided for single referendum test
     if (!options.governanceChainUrl) {
       throw new Error('--governance-chain-url is required when testing a governance referendum');
     }
 
-    // Validate referendum ID
-    if (!options.referendum) {
-      throw new Error('--referendum is required when testing a governance referendum');
+    // Validate referendum ID or creation call is provided
+    if (!options.referendum && !options.callToCreateGovernanceReferendum) {
+      throw new Error(
+        '--referendum or --call-to-create-governance-referendum is required when testing a governance referendum'
+      );
     }
 
     // Parse governance URL and optional block number
@@ -45,9 +66,13 @@ export async function testReferendum(options: TestOptions): Promise<void> {
     // Block number from url,block format or use latest
     const specifiedBlock = governanceParsed.block;
 
-    const referendumId = parseInt(options.referendum);
-    if (isNaN(referendumId)) {
-      throw new Error(`Invalid referendum ID: ${options.referendum}`);
+    // Parse referendum ID if provided, otherwise it will be created later
+    let referendumId: number | undefined;
+    if (options.referendum) {
+      referendumId = parseInt(options.referendum);
+      if (isNaN(referendumId)) {
+        throw new Error(`Invalid referendum ID: ${options.referendum}`);
+      }
     }
 
     // Determine fork block and get chain info (if needed for latest block)
@@ -74,7 +99,7 @@ export async function testReferendum(options: TestOptions): Promise<void> {
     const tableData: Record<string, string> = {
       'Governance Endpoint': governanceUrl,
       'Governance Chain': governanceChain?.label || 'detecting...',
-      'Referendum ID': options.referendum,
+      'Referendum ID': options.referendum || '(creating...)',
       Port: options.port,
       Block: forkBlock.toString(),
     };
@@ -117,6 +142,24 @@ export async function testReferendum(options: TestOptions): Promise<void> {
       logger.succeedSpinner(
         `Detected chain: ${governanceChain.label} (${governanceChain.specName})`
       );
+    }
+
+    // Create referendum if needed
+    if (options.callToCreateGovernanceReferendum) {
+      logger.section('Creating Governance Referendum');
+      const creator = new ReferendumCreator(logger, chopsticks);
+      const creationResult = await creator.createReferendum(
+        localApi,
+        options.callToCreateGovernanceReferendum,
+        options.callToNotePreimageForGovernanceReferendum,
+        false // not fellowship
+      );
+      referendumId = creationResult.referendumId;
+      logger.success(`Referendum #${referendumId} created successfully`);
+    }
+
+    if (!referendumId) {
+      throw new Error('Referendum ID is required but was not provided or created');
     }
 
     logger.section('Fetching Referendum Data');
@@ -217,9 +260,10 @@ async function testWithFellowship(
 ): Promise<void> {
   logger.section('Polkadot Referenda Tester (Fellowship Mode)');
 
-  const fellowshipRefId = parseInt(options.fellowship!);
+  // Parse fellowship referendum ID if provided (otherwise it will be created)
+  const fellowshipRefId = options.fellowship ? parseInt(options.fellowship) : undefined;
 
-  if (isNaN(fellowshipRefId)) {
+  if (fellowshipRefId !== undefined && isNaN(fellowshipRefId)) {
     throw new Error('Invalid fellowship referendum ID');
   }
 
@@ -230,13 +274,17 @@ async function testWithFellowship(
     throw new Error('Invalid main referendum ID');
   }
 
+  // Determine if we're testing fellowship only (no main referendum)
+  const hasFellowship = fellowshipRefId !== undefined || !!options.callToCreateFellowshipReferendum;
+  const hasMain = mainRefId !== undefined || !!options.callToCreateGovernanceReferendum;
+
   // If only testing fellowship (no main ref), validate fellowship chain URL is provided
-  if (!mainRefId && !options.fellowshipChainUrl) {
+  if (!hasMain && !options.fellowshipChainUrl) {
     throw new Error('--fellowship-chain-url is required when testing a fellowship referendum');
   }
 
   // If testing with both refs, validate governance chain URL is provided
-  if (mainRefId && !options.governanceChainUrl) {
+  if (hasMain && !options.governanceChainUrl) {
     throw new Error('--governance-chain-url is required when testing both governance and fellowship referenda');
   }
 
@@ -277,17 +325,22 @@ async function testWithFellowship(
   });
 
   if (mainRefId) {
-    logger.info(`Fellowship Referendum: #${fellowshipRefId}`);
+    logger.info(
+      `Fellowship Referendum: ${fellowshipRefId !== undefined ? `#${fellowshipRefId}` : '(creating...)'}`
+    );
     logger.info(`Main Referendum: #${mainRefId}\n`);
   } else {
-    logger.info(`Fellowship Referendum: #${fellowshipRefId}\n`);
+    logger.info(
+      `Fellowship Referendum: ${fellowshipRefId !== undefined ? `#${fellowshipRefId}` : '(creating...)'}\n`
+    );
   }
 
   await coordinator.testWithFellowship(
     mainRefId,
     fellowshipRefId,
     parseInt(options.port),
-    cleanupEnabled
+    cleanupEnabled,
+    options // Pass the full options object
   );
 
   if (cleanupEnabled) {
