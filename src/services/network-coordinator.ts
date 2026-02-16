@@ -585,6 +585,97 @@ export class NetworkCoordinator {
 
       this.logger.success('\n✓ Both referenda executed successfully!');
 
+      // Process XCM messages from governance to fellowship chain
+      this.logger.section('Post-Execution XCM Events');
+      this.logger.info('Advancing blocks to process XCM messages...\n');
+
+      await governanceChopsticks.newBlock();
+      await fellowshipChopsticks.newBlock();
+
+      // Display governance chain events (in case fellowship sent XCM back)
+      const governanceBlockNumber = await governanceApi.query.System.Number.getValue();
+      const governanceEventsPost = await governanceApi.query.System.Events.getValue();
+
+      this.logger.info(`📡 ${this.governanceChain.label} (Block #${governanceBlockNumber})`);
+
+      if (governanceEventsPost && Array.isArray(governanceEventsPost)) {
+        governanceEventsPost.forEach((event: any) => {
+          let section = 'Unknown';
+          let method = 'Unknown';
+          let eventData: any = null;
+
+          if (event.event) {
+            if (typeof event.event.type === 'string') {
+              section = event.event.type;
+            }
+            if (event.event.value && typeof event.event.value.type === 'string') {
+              method = event.event.value.type;
+              eventData = event.event.value.value;
+            }
+          }
+
+          if (section === 'Unknown' && event.section) {
+            section = typeof event.section === 'string' ? event.section : event.section.toString();
+          }
+          if (method === 'Unknown' && event.method) {
+            method = typeof event.method === 'string' ? event.method : event.method.toString();
+          }
+
+          this.logger.info(`  • ${section}.${method}`);
+
+          if (this.logger.isVerbose() && eventData) {
+            const serialized = this.serializeEventData(eventData);
+            this.logger.debug(`    Data: ${JSON.stringify(serialized, null, 2)}`);
+          }
+        });
+      } else {
+        this.logger.info(`  No events found`);
+      }
+
+      this.logger.info('');
+
+      // Display fellowship chain events (to see XCM from governance)
+      const fellowshipBlockNumber = await fellowshipApi.query.System.Number.getValue();
+      const fellowshipEvents = await fellowshipApi.query.System.Events.getValue();
+
+      this.logger.info(`📡 ${this.fellowshipChain.label} (Block #${fellowshipBlockNumber})`);
+
+      if (fellowshipEvents && Array.isArray(fellowshipEvents)) {
+        fellowshipEvents.forEach((event: any) => {
+          let section = 'Unknown';
+          let method = 'Unknown';
+          let eventData: any = null;
+
+          if (event.event) {
+            if (typeof event.event.type === 'string') {
+              section = event.event.type;
+            }
+            if (event.event.value && typeof event.event.value.type === 'string') {
+              method = event.event.value.type;
+              eventData = event.event.value.value;
+            }
+          }
+
+          if (section === 'Unknown' && event.section) {
+            section = typeof event.section === 'string' ? event.section : event.section.toString();
+          }
+          if (method === 'Unknown' && event.method) {
+            method = typeof event.method === 'string' ? event.method : event.method.toString();
+          }
+
+          this.logger.info(`  • ${section}.${method}`);
+
+          if (this.logger.isVerbose() && eventData) {
+            const serialized = this.serializeEventData(eventData);
+            this.logger.debug(`    Data: ${JSON.stringify(serialized, null, 2)}`);
+          }
+        });
+      } else {
+        this.logger.info(`  No events found`);
+      }
+
+      this.logger.info('');
+
       // Collect events from additional chains
       await this.collectAdditionalChainEvents(additionalManagers);
     } finally {
@@ -775,19 +866,44 @@ export class NetworkCoordinator {
     const chainToNetworkKey = new Map<string, string>();
 
     // Add additional chains to the network (skip duplicates)
+    // Track used relay keys to avoid conflicts when multiple relay chains are added
+    const usedRelayKeys = new Set<string>();
+    // Collect relay keys already used by governance/fellowship
+    if (governanceIsRelay) {
+      usedRelayKeys.add(this.getRelayKey(this.governanceChain.network));
+    }
+    if (fellowshipIsRelay) {
+      usedRelayKeys.add(this.getRelayKey(this.fellowshipChain.network));
+    }
+
     this.additionalChains.forEach((chain, index) => {
       if (usedEndpoints.has(chain.endpoint)) {
         this.logger.debug(`Skipping duplicate endpoint for ${chain.label}: ${chain.endpoint}`);
         return;
       }
 
-      const key = `additional_${index}`;
+      let key: string;
+      if (chain.kind === 'relay') {
+        // Relay chains must use their network-specific key for chopsticks to recognize them
+        const relayKey = this.getRelayKey(chain.network);
+        if (usedRelayKeys.has(relayKey)) {
+          this.logger.warn(
+            `Skipping relay chain ${chain.label}: relay key '${relayKey}' is already in use`
+          );
+          return;
+        }
+        key = relayKey;
+        usedRelayKeys.add(relayKey);
+      } else {
+        key = `additional_${index}`;
+      }
+
       const block = this.additionalChainBlocks[index];
       networkConfig[key] = this.buildConfig(chain.endpoint, block);
       usedEndpoints.add(chain.endpoint);
       chainToNetworkKey.set(chain.label, key);
       this.logger.debug(
-        `Adding ${chain.label} to network config with key: ${key}${block ? ` at block ${block}` : ''}`
+        `Adding ${chain.label} (${chain.kind}) to network config with key: ${key}${block ? ` at block ${block}` : ''}`
       );
     });
 
