@@ -9,19 +9,19 @@ Run directly from GitHub without installing:
 ```bash
 # Single-chain execution
 npx github:karolk91/polkadot-referenda-tester test \
-  --governance-chain-url wss://polkadot-rpc.dwellir.com \
+  --governance-chain-url wss://asset-hub-polkadot-rpc.n.dwellir.com \
   --referendum 1777
 
 # With fellowship companion
 npx github:karolk91/polkadot-referenda-tester test \
-  --governance-chain-url wss://polkadot-rpc.dwellir.com \
+  --governance-chain-url wss://asset-hub-polkadot-rpc.n.dwellir.com \
   --fellowship-chain-url wss://polkadot-collectives-rpc.polkadot.io \
   --referendum 1777 \
   --fellowship 425
 
 # With fellowship companion using state at specific blocks
 npx github:karolk91/polkadot-referenda-tester test \
-  --governance-chain-url wss://polkadot-rpc.dwellir.com \
+  --governance-chain-url wss://asset-hub-polkadot-rpc.n.dwellir.com \
   --fellowship-chain-url wss://polkadot-collectives-rpc.polkadot.io \
   --referendum 1777 \
   --fellowship 425
@@ -38,12 +38,12 @@ npx github:karolk91/polkadot-referenda-tester test \
 
 # Create and test a governance referendum from call data
 npx github:karolk91/polkadot-referenda-tester test \
-  --governance-chain-url wss://polkadot-rpc.dwellir.com \
+  --governance-chain-url wss://asset-hub-polkadot-rpc.n.dwellir.com \
   --call-to-create-governance-referendum 0x1503...
 
 # Create and test a governance referendum with a preimage
 npx github:karolk91/polkadot-referenda-tester test \
-  --governance-chain-url wss://polkadot-rpc.dwellir.com \
+  --governance-chain-url wss://asset-hub-polkadot-rpc.n.dwellir.com \
   --call-to-note-preimage-for-governance-referendum 0x1e00... \
   --call-to-create-governance-referendum 0x1503...
 
@@ -60,7 +60,7 @@ npx github:karolk91/polkadot-referenda-tester test \
 
 # Create both governance and fellowship referenda from call data
 npx github:karolk91/polkadot-referenda-tester test \
-  --governance-chain-url wss://polkadot-rpc.dwellir.com \
+  --governance-chain-url wss://asset-hub-polkadot-rpc.n.dwellir.com \
   --fellowship-chain-url wss://polkadot-collectives-rpc.polkadot.io \
   --call-to-create-governance-referendum 0x1503... \
   --call-to-create-fellowship-referendum 0x1703...
@@ -74,7 +74,7 @@ yarn build
 
 # Run locally
 yarn cli test \
-  --governance-chain-url wss://polkadot-rpc.dwellir.com \
+  --governance-chain-url wss://asset-hub-polkadot-rpc.n.dwellir.com \
   --referendum 1777
 ```
 
