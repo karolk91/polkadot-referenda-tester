@@ -1,9 +1,16 @@
 import { setupNetworks } from '@acala-network/chopsticks-testing';
 import type { Config } from '@acala-network/chopsticks/dist/esm/schema/index.js';
 import { BuildBlockMode } from '@acala-network/chopsticks-core';
+import { createClient } from 'polkadot-api';
+import { getWsProvider } from 'polkadot-api/ws-provider/node';
+import { withPolkadotSdkCompat } from 'polkadot-api/polkadot-sdk-compat';
 import { ChopsticksConfig } from '../types';
 import { Logger } from '../utils/logger';
+import { getChainInfo, createApiForChain, ChainInfo } from './chain-registry';
 import * as path from 'path';
+
+const CHAIN_READY_MAX_ATTEMPTS = 10;
+const CHAIN_READY_DELAY_MS = 500;
 
 export class ChopsticksManager {
   private logger: Logger;
@@ -34,7 +41,7 @@ export class ChopsticksManager {
         buildBlockMode = BuildBlockMode.Manual;
       }
 
-      const chopsticsConfig: Config = {
+      const chopsticksConfig: Config = {
         endpoint: config.endpoint,
         db: config.db || path.join(process.cwd(), '.chopsticks-db'),
         'build-block-mode': buildBlockMode,
@@ -45,14 +52,14 @@ export class ChopsticksManager {
         ...(config.block && { block: config.block }),
       } as Config;
 
-      this.logger.debug(`Chopsticks config: ${JSON.stringify(chopsticsConfig, null, 2)}`);
+      this.logger.debug(`Chopsticks config: ${JSON.stringify(chopsticksConfig, null, 2)}`);
 
-      // Setup the network using setupNetworks
+      // Setup the network using setupNetworks with a generic key
       const networks = await setupNetworks({
-        polkadot: chopsticsConfig,
+        chain: chopsticksConfig,
       });
 
-      this.context = networks.polkadot;
+      this.context = networks.chain;
 
       const endpoint = this.context.ws.endpoint;
       this.logger.succeedSpinner(`Chopsticks started at ${endpoint}`);
@@ -69,13 +76,39 @@ export class ChopsticksManager {
     }
   }
 
-  async newBlock(): Promise<void> {
+  async newBlock(params?: { transactions?: string[] }): Promise<void> {
     if (!this.context) {
       throw new Error('Chopsticks context not initialized');
     }
 
-    this.logger.debug('Creating new block...');
-    await this.context.dev.newBlock();
+    if (params?.transactions) {
+      this.logger.debug(`Creating new block with ${params.transactions.length} transaction(s)...`);
+    } else {
+      this.logger.debug('Creating new block...');
+    }
+
+    // dev.newBlock() can resolve before the block is fully finalized in newer
+    // Chopsticks versions. We record the head before, call newBlock, then poll
+    // until the head actually advances — guaranteeing subsequent storage reads
+    // see the new block's state.
+    const chain = this.context.chain ?? this.context;
+    const headBefore = chain.head?.number;
+
+    await this.context.dev.newBlock(params);
+
+    // If we can read the chain head, wait until it actually advances
+    if (headBefore !== undefined) {
+      const maxWait = 10_000; // 10s safety cap
+      const pollInterval = 100;
+      const start = Date.now();
+      while (Date.now() - start < maxWait) {
+        const headNow = chain.head?.number;
+        if (headNow !== undefined && headNow > headBefore) {
+          break;
+        }
+        await new Promise((r) => setTimeout(r, pollInterval));
+      }
+    }
   }
 
   async setStorage(module: string, item: string, key: any, value: any): Promise<void> {
@@ -109,7 +142,43 @@ export class ChopsticksManager {
     await this.context.dev.timeTravel(timestamp);
   }
 
-  async waitForChainReady(api: any, maxAttempts = 10, delayMs = 500): Promise<void> {
+  /**
+   * Create a fully connected Chopsticks instance with client, API, and chain info.
+   * Encapsulates the common setup pattern: create → connect → wait for ready → detect chain.
+   */
+  static async createConnected(
+    logger: Logger,
+    config: ChopsticksConfig,
+    originalEndpoint: string
+  ): Promise<{
+    chopsticks: ChopsticksManager;
+    client: any;
+    api: any;
+    chainInfo: ChainInfo;
+  }> {
+    const chopsticks = new ChopsticksManager(logger);
+    const context = await chopsticks.setup(config);
+
+    const endpoint = context.ws.endpoint;
+    const wsProvider = getWsProvider(endpoint);
+    const client = createClient(withPolkadotSdkCompat(wsProvider));
+    const api = createApiForChain(client);
+
+    logger.startSpinner('Waiting for chain to be ready...');
+    await chopsticks.waitForChainReady(api);
+    logger.succeedSpinner('Chain is ready');
+
+    const chainInfo = await getChainInfo(api, originalEndpoint);
+    logger.info(`Detected chain: ${chainInfo.label} (${chainInfo.specName})`);
+
+    return { chopsticks, client, api, chainInfo };
+  }
+
+  async waitForChainReady(
+    api: any,
+    maxAttempts = CHAIN_READY_MAX_ATTEMPTS,
+    delayMs = CHAIN_READY_DELAY_MS
+  ): Promise<void> {
     this.logger.debug('Waiting for chain to be ready...');
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {

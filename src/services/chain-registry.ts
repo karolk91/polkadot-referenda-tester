@@ -37,7 +37,7 @@ export async function getChainInfo(api: any, endpoint: string): Promise<ChainInf
 /**
  * Build ChainInfo from specName
  */
-function buildChainInfoFromSpecName(specName: string, endpoint: string): ChainInfo {
+export function buildChainInfoFromSpecName(specName: string, endpoint: string): ChainInfo {
   const lower = specName.toLowerCase();
 
   // Determine network from specName

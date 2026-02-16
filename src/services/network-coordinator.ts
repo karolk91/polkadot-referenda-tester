@@ -2,6 +2,7 @@ import { Logger } from '../utils/logger';
 import { ChopsticksManager } from './chopsticks-manager';
 import { ReferendumSimulator } from './referendum-simulator';
 import { ReferendaFetcher } from './referenda-fetcher';
+import { ReferendumCreator } from './referendum-creator';
 import { createClient } from 'polkadot-api';
 import { getWsProvider } from 'polkadot-api/ws-provider/node';
 import { withPolkadotSdkCompat } from 'polkadot-api/polkadot-sdk-compat';
@@ -9,6 +10,8 @@ import { setupNetworks } from '@acala-network/chopsticks-testing';
 import { BuildBlockMode } from '@acala-network/chopsticks-core';
 import * as path from 'path';
 import { ChainInfo, ChainNetwork, getChainInfo, createApiForChain } from './chain-registry';
+import { TestOptions } from '../types';
+import { displayChainEvents } from '../utils/event-serializer';
 
 interface CoordinatorConfig {
   governance?: string;
@@ -76,25 +79,30 @@ export class NetworkCoordinator {
   async testWithFellowship(
     mainRefId: number | undefined,
     fellowshipRefId: number | undefined,
-    _basePort: number,
-    cleanup: boolean = true
+    cleanup: boolean = true,
+    options?: TestOptions
   ): Promise<void> {
+    // Determine if we're actually dealing with fellowship and/or main referendums
+    const hasFellowship =
+      fellowshipRefId !== undefined || !!options?.callToCreateFellowshipReferendum;
+    const hasMain = mainRefId !== undefined || !!options?.callToCreateGovernanceReferendum;
+
     // Fellowship-only mode (no main referendum)
-    if (!mainRefId && fellowshipRefId) {
+    if (!hasMain && hasFellowship) {
       if (!this.fellowshipEndpoint) {
         throw new Error('Fellowship chain URL must be provided when testing fellowship referendum');
       }
-      return this.testFellowshipOnly(fellowshipRefId, _basePort, cleanup);
+      return this.testFellowshipOnly(fellowshipRefId, cleanup, options);
     }
 
     // Main referendum only (no fellowship)
-    if (mainRefId && !fellowshipRefId) {
-      return this.testSingleReferendum(mainRefId, _basePort);
+    if (hasMain && !hasFellowship) {
+      return this.testSingleReferendum(mainRefId, options);
     }
 
-    // Both main and fellowship referenda
-    if (!fellowshipRefId || !mainRefId) {
-      throw new Error('Both referendum IDs must be provided for dual testing');
+    // Both main and fellowship referenda (either existing or being created)
+    if (!hasFellowship || !hasMain) {
+      throw new Error('Both referendum IDs must be provided or created for dual testing');
     }
 
     if (!this.fellowshipEndpoint) {
@@ -119,13 +127,16 @@ export class NetworkCoordinator {
       this.governanceChain!.label === this.fellowshipChain!.label;
 
     if (sameEndpoint) {
-      return this.testSameChainWithFellowship(mainRefId, fellowshipRefId);
+      return this.testSameChainWithFellowship(mainRefId, fellowshipRefId, options);
     }
 
-    return this.testMultiChain(mainRefId, fellowshipRefId, cleanup);
+    return this.testMultiChain(mainRefId, fellowshipRefId, cleanup, options);
   }
 
-  private async testSingleReferendum(refId: number, _port: number): Promise<void> {
+  private async testSingleReferendum(
+    refId: number | undefined,
+    options?: TestOptions
+  ): Promise<void> {
     if (!this.governanceEndpoint) {
       throw new Error('Governance endpoint must be set for single referendum testing');
     }
@@ -165,18 +176,37 @@ export class NetworkCoordinator {
         `Detected chain: ${this.governanceChain.label} (${this.governanceChain.specName})`
       );
 
+      // Create referendum if needed
+      let actualRefId = refId;
+      if (options?.callToCreateGovernanceReferendum) {
+        this.logger.section('Creating Governance Referendum');
+        const creator = new ReferendumCreator(this.logger, chopsticks);
+        const creationResult = await creator.createReferendum(
+          api,
+          options.callToCreateGovernanceReferendum,
+          options.callToNotePreimageForGovernanceReferendum,
+          false // not fellowship
+        );
+        actualRefId = creationResult.referendumId;
+        this.logger.success(`Governance referendum #${actualRefId} created successfully`);
+      }
+
+      if (!actualRefId) {
+        throw new Error('Referendum ID is required but was not provided or created');
+      }
+
       const fetcher = new ReferendaFetcher(this.logger);
-      const referendum = await fetcher.fetchReferendum(api, refId);
+      const referendum = await fetcher.fetchReferendum(api, actualRefId);
 
       if (!referendum) {
-        throw new Error(`Failed to fetch referendum ${refId}`);
+        throw new Error(`Failed to fetch referendum ${actualRefId}`);
       }
 
       const simulator = new ReferendumSimulator(this.logger, chopsticks, api, false); // Main governance
       const result = await simulator.simulate(referendum);
 
       if (!result.executionSucceeded) {
-        throw new Error(`Referendum #${refId} execution failed`);
+        throw new Error(`Referendum #${actualRefId} execution failed`);
       }
     } finally {
       if (client) {
@@ -186,7 +216,11 @@ export class NetworkCoordinator {
     }
   }
 
-  private async testFellowshipOnly(refId: number, _port: number, cleanup: boolean = true): Promise<void> {
+  private async testFellowshipOnly(
+    refId: number | undefined,
+    cleanup: boolean = true,
+    options?: TestOptions
+  ): Promise<void> {
     if (!this.fellowshipEndpoint) {
       throw new Error('Fellowship endpoint must be set for fellowship-only testing');
     }
@@ -204,6 +238,12 @@ export class NetworkCoordinator {
 
       if (this.fellowshipBlock !== undefined) {
         config.block = this.fellowshipBlock;
+      }
+
+      // If creating fellowship referendum, inject storage for Alice to be a ranked fellow
+      if (options?.callToCreateFellowshipReferendum) {
+        config['import-storage'] = ReferendumCreator.getFellowshipStorageInjection();
+        this.logger.debug('Injecting fellowship storage for Alice account');
       }
 
       const context = await chopsticks.setup(config);
@@ -226,11 +266,30 @@ export class NetworkCoordinator {
         `Detected chain: ${this.fellowshipChain.label} (${this.fellowshipChain.specName})`
       );
 
+      // Create referendum if needed
+      let fellowshipRefId = refId;
+      if (options?.callToCreateFellowshipReferendum) {
+        this.logger.section('Creating Fellowship Referendum');
+        const creator = new ReferendumCreator(this.logger, chopsticks);
+        const creationResult = await creator.createReferendum(
+          api,
+          options.callToCreateFellowshipReferendum,
+          options.callToNotePreimageForFellowshipReferendum,
+          true // isFellowship
+        );
+        fellowshipRefId = creationResult.referendumId;
+        this.logger.success(`Fellowship referendum #${fellowshipRefId} created successfully`);
+      }
+
+      if (!fellowshipRefId) {
+        throw new Error('Fellowship referendum ID is required but was not provided or created');
+      }
+
       const fetcher = new ReferendaFetcher(this.logger);
-      const referendum = await fetcher.fetchReferendum(api, refId, true); // true = isFellowship
+      const referendum = await fetcher.fetchReferendum(api, fellowshipRefId, true); // true = isFellowship
 
       if (!referendum) {
-        throw new Error(`Failed to fetch fellowship referendum ${refId}`);
+        throw new Error(`Failed to fetch fellowship referendum ${fellowshipRefId}`);
       }
 
       const simulator = new ReferendumSimulator(this.logger, chopsticks, api, true); // isFellowship = true
@@ -240,10 +299,10 @@ export class NetworkCoordinator {
         if (result.errors) {
           result.errors.forEach((err) => this.logger.error(`  ${err}`));
         }
-        throw new Error(`Fellowship referendum #${refId} execution failed`);
+        throw new Error(`Fellowship referendum #${fellowshipRefId} execution failed`);
       }
 
-      this.logger.success(`\n✓ Fellowship referendum #${refId} executed successfully!`);
+      this.logger.success(`\n✓ Fellowship referendum #${fellowshipRefId} executed successfully!`);
     } finally {
       if (client) {
         client.destroy();
@@ -259,8 +318,9 @@ export class NetworkCoordinator {
   }
 
   private async testSameChainWithFellowship(
-    mainRefId: number,
-    fellowshipRefId: number
+    mainRefId: number | undefined,
+    fellowshipRefId: number | undefined,
+    options?: TestOptions
   ): Promise<void> {
     this.logger.startSpinner('Starting shared chain...');
 
@@ -285,6 +345,12 @@ export class NetworkCoordinator {
         config.block = block;
       }
 
+      // If creating fellowship referendum on same chain, inject storage
+      if (options?.callToCreateFellowshipReferendum) {
+        config['import-storage'] = ReferendumCreator.getFellowshipStorageInjection();
+        this.logger.debug('Injecting fellowship storage for Alice account');
+      }
+
       const context = await chopsticks.setup(config);
 
       const endpoint = context.ws.endpoint;
@@ -306,28 +372,66 @@ export class NetworkCoordinator {
         `Detected chain: ${this.governanceChain.label} (${this.governanceChain.specName})`
       );
 
+      // Create fellowship referendum if needed
+      let actualFellowshipRefId = fellowshipRefId;
+      if (options?.callToCreateFellowshipReferendum) {
+        this.logger.section('Creating Fellowship Referendum');
+        const fellowshipCreator = new ReferendumCreator(this.logger, chopsticks);
+        const fellowshipCreationResult = await fellowshipCreator.createReferendum(
+          api,
+          options.callToCreateFellowshipReferendum,
+          options.callToNotePreimageForFellowshipReferendum,
+          true // isFellowship
+        );
+        actualFellowshipRefId = fellowshipCreationResult.referendumId;
+        this.logger.success(`Fellowship referendum #${actualFellowshipRefId} created successfully`);
+      }
+
+      // Create governance referendum if needed
+      let actualMainRefId = mainRefId;
+      if (options?.callToCreateGovernanceReferendum) {
+        this.logger.section('Creating Governance Referendum');
+        const governanceCreator = new ReferendumCreator(this.logger, chopsticks);
+        const governanceCreationResult = await governanceCreator.createReferendum(
+          api,
+          options.callToCreateGovernanceReferendum,
+          options.callToNotePreimageForGovernanceReferendum,
+          false // not fellowship
+        );
+        actualMainRefId = governanceCreationResult.referendumId;
+        this.logger.success(`Governance referendum #${actualMainRefId} created successfully`);
+      }
+
+      if (!actualFellowshipRefId) {
+        throw new Error('Fellowship referendum ID is required but was not provided or created');
+      }
+
+      if (!actualMainRefId) {
+        throw new Error('Main referendum ID is required but was not provided or created');
+      }
+
       const fetcher = new ReferendaFetcher(this.logger);
 
-      this.logger.section(`[1/2] Fellowship Referendum #${fellowshipRefId}`);
-      const fellowshipRef = await fetcher.fetchReferendum(api, fellowshipRefId, true);
+      this.logger.section(`[1/2] Fellowship Referendum #${actualFellowshipRefId}`);
+      const fellowshipRef = await fetcher.fetchReferendum(api, actualFellowshipRefId, true);
       if (!fellowshipRef) {
-        throw new Error(`Failed to fetch fellowship referendum ${fellowshipRefId}`);
+        throw new Error(`Failed to fetch fellowship referendum ${actualFellowshipRefId}`);
       }
       const fellowshipSimulator = new ReferendumSimulator(this.logger, chopsticks, api, true);
       const fellowshipResult = await fellowshipSimulator.simulate(fellowshipRef);
       if (!fellowshipResult.executionSucceeded) {
-        throw new Error(`Fellowship referendum #${fellowshipRefId} execution failed`);
+        throw new Error(`Fellowship referendum #${actualFellowshipRefId} execution failed`);
       }
 
-      this.logger.section(`[2/2] Main Governance Referendum #${mainRefId}`);
-      const mainRef = await fetcher.fetchReferendum(api, mainRefId);
+      this.logger.section(`[2/2] Main Governance Referendum #${actualMainRefId}`);
+      const mainRef = await fetcher.fetchReferendum(api, actualMainRefId);
       if (!mainRef) {
-        throw new Error(`Failed to fetch main referendum ${mainRefId}`);
+        throw new Error(`Failed to fetch main referendum ${actualMainRefId}`);
       }
       const mainSimulator = new ReferendumSimulator(this.logger, chopsticks, api, false);
       const mainResult = await mainSimulator.simulate(mainRef);
       if (!mainResult.executionSucceeded) {
-        throw new Error(`Main referendum #${mainRefId} execution failed`);
+        throw new Error(`Main referendum #${actualMainRefId} execution failed`);
       }
 
       this.logger.success('\n✓ Both referenda executed successfully!');
@@ -340,15 +444,16 @@ export class NetworkCoordinator {
   }
 
   private async testMultiChain(
-    mainRefId: number,
-    fellowshipRefId: number,
-    cleanup: boolean = true
+    mainRefId: number | undefined,
+    fellowshipRefId: number | undefined,
+    cleanup: boolean = true,
+    options?: TestOptions
   ): Promise<void> {
     // First, quickly detect chain types to set up topology
     await this.detectChainTypes();
 
     const { governanceManager, fellowshipManager, additionalManagers } =
-      await this.setupInterconnectedChains();
+      await this.setupInterconnectedChains(options);
 
     const governanceEndpoint = governanceManager.getContext().ws.endpoint;
     const fellowshipEndpoint = fellowshipManager.getContext().ws.endpoint;
@@ -375,7 +480,9 @@ export class NetworkCoordinator {
 
       // Validate endpoints are set (should be guaranteed by caller but TypeScript needs to know)
       if (!this.governanceEndpoint || !this.fellowshipEndpoint) {
-        throw new Error('Both governance and fellowship endpoints must be set for multi-chain testing');
+        throw new Error(
+          'Both governance and fellowship endpoints must be set for multi-chain testing'
+        );
       }
 
       // Detect chain info from runtimes
@@ -388,14 +495,56 @@ export class NetworkCoordinator {
         `Fellowship: ${this.fellowshipChain.label} (${this.fellowshipChain.specName})`
       );
 
+      // Create fellowship referendum if needed
+      let actualFellowshipRefId = fellowshipRefId;
+      if (options?.callToCreateFellowshipReferendum) {
+        this.logger.section('Creating Fellowship Referendum');
+        const fellowshipCreator = new ReferendumCreator(this.logger, fellowshipChopsticks);
+        const fellowshipCreationResult = await fellowshipCreator.createReferendum(
+          fellowshipApi,
+          options.callToCreateFellowshipReferendum,
+          options.callToNotePreimageForFellowshipReferendum,
+          true // isFellowship
+        );
+        actualFellowshipRefId = fellowshipCreationResult.referendumId;
+        this.logger.success(`Fellowship referendum #${actualFellowshipRefId} created successfully`);
+      }
+
+      // Create governance referendum if needed
+      let actualMainRefId = mainRefId;
+      if (options?.callToCreateGovernanceReferendum) {
+        this.logger.section('Creating Governance Referendum');
+        const governanceCreator = new ReferendumCreator(this.logger, governanceChopsticks);
+        const governanceCreationResult = await governanceCreator.createReferendum(
+          governanceApi,
+          options.callToCreateGovernanceReferendum,
+          options.callToNotePreimageForGovernanceReferendum,
+          false // not fellowship
+        );
+        actualMainRefId = governanceCreationResult.referendumId;
+        this.logger.success(`Governance referendum #${actualMainRefId} created successfully`);
+      }
+
+      if (!actualFellowshipRefId) {
+        throw new Error('Fellowship referendum ID is required but was not provided or created');
+      }
+
+      if (!actualMainRefId) {
+        throw new Error('Main referendum ID is required but was not provided or created');
+      }
+
       const fetcher = new ReferendaFetcher(this.logger);
 
       this.logger.section(
-        `[1/2] Fellowship Referendum #${fellowshipRefId} (${this.fellowshipChain!.label})`
+        `[1/2] Fellowship Referendum #${actualFellowshipRefId} (${this.fellowshipChain!.label})`
       );
-      const fellowshipRef = await fetcher.fetchReferendum(fellowshipApi, fellowshipRefId, true);
+      const fellowshipRef = await fetcher.fetchReferendum(
+        fellowshipApi,
+        actualFellowshipRefId,
+        true
+      );
       if (!fellowshipRef) {
-        throw new Error(`Failed to fetch fellowship referendum ${fellowshipRefId}`);
+        throw new Error(`Failed to fetch fellowship referendum ${actualFellowshipRefId}`);
       }
       const fellowshipSimulator = new ReferendumSimulator(
         this.logger,
@@ -419,11 +568,11 @@ export class NetworkCoordinator {
       this.logger.succeedSpinner('XCM messages propagated');
 
       this.logger.section(
-        `[2/2] Main Governance Referendum #${mainRefId} (${this.governanceChain.label})`
+        `[2/2] Main Governance Referendum #${actualMainRefId} (${this.governanceChain.label})`
       );
-      const mainRef = await fetcher.fetchReferendum(governanceApi, mainRefId);
+      const mainRef = await fetcher.fetchReferendum(governanceApi, actualMainRefId);
       if (!mainRef) {
-        throw new Error(`Failed to fetch main referendum ${mainRefId}`);
+        throw new Error(`Failed to fetch main referendum ${actualMainRefId}`);
       }
       const governanceSimulator = new ReferendumSimulator(
         this.logger,
@@ -440,6 +589,37 @@ export class NetworkCoordinator {
       }
 
       this.logger.success('\n✓ Both referenda executed successfully!');
+
+      // Process XCM messages from governance to fellowship chain
+      this.logger.section('Post-Execution XCM Events');
+      this.logger.info('Advancing blocks to process XCM messages...\n');
+
+      await governanceChopsticks.newBlock();
+      await fellowshipChopsticks.newBlock();
+
+      // Display governance chain events (in case fellowship sent XCM back)
+      const governanceBlockNumber = await governanceApi.query.System.Number.getValue();
+      const governanceEventsPost = await governanceApi.query.System.Events.getValue();
+
+      displayChainEvents(
+        this.governanceChain.label,
+        governanceBlockNumber,
+        governanceEventsPost,
+        this.logger
+      );
+      this.logger.info('');
+
+      // Display fellowship chain events (to see XCM from governance)
+      const fellowshipBlockNumber = await fellowshipApi.query.System.Number.getValue();
+      const fellowshipEvents = await fellowshipApi.query.System.Events.getValue();
+
+      displayChainEvents(
+        this.fellowshipChain.label,
+        fellowshipBlockNumber,
+        fellowshipEvents,
+        this.logger
+      );
+      this.logger.info('');
 
       // Collect events from additional chains
       await this.collectAdditionalChainEvents(additionalManagers);
@@ -521,7 +701,9 @@ export class NetworkCoordinator {
     try {
       // Detect governance chain if provided
       if (this.governanceEndpoint) {
-        const govClient = createClient(withPolkadotSdkCompat(getWsProvider(this.governanceEndpoint)));
+        const govClient = createClient(
+          withPolkadotSdkCompat(getWsProvider(this.governanceEndpoint))
+        );
         clients.push(govClient);
         const govApi = createApiForChain(govClient);
         this.governanceChain = await getChainInfo(govApi, this.governanceEndpoint);
@@ -548,7 +730,9 @@ export class NetworkCoordinator {
 
       this.logger.succeedSpinner('Chain types detected');
       if (this.governanceChain) {
-        this.logger.info(`Governance: ${this.governanceChain.label} (${this.governanceChain.kind})`);
+        this.logger.info(
+          `Governance: ${this.governanceChain.label} (${this.governanceChain.kind})`
+        );
       }
       if (this.fellowshipChain) {
         this.logger.info(
@@ -561,7 +745,7 @@ export class NetworkCoordinator {
     }
   }
 
-  private async setupInterconnectedChains(): Promise<{
+  private async setupInterconnectedChains(options?: TestOptions): Promise<{
     governanceManager: ChopsticksManager;
     fellowshipManager: ChopsticksManager;
     additionalManagers: Map<string, ChopsticksManager>;
@@ -579,13 +763,29 @@ export class NetworkCoordinator {
     let governanceKey: string;
     let fellowshipKey: string;
 
+    // Determine what storage injections are needed
+    const fellowshipInjection = options?.callToCreateFellowshipReferendum
+      ? 'fellowship' as const
+      : undefined;
+    const governanceInjection = options?.callToCreateGovernanceReferendum
+      ? 'alice-account' as const
+      : undefined;
+
     // Handle different chain configurations
     if (!governanceIsRelay && !fellowshipIsRelay) {
       // Both are parachains - set them up independently without a relay chain
       governanceKey = 'governance';
       fellowshipKey = 'fellowship';
-      networkConfig[governanceKey] = this.buildConfig(this.governanceChain.endpoint, this.governanceBlock);
-      networkConfig[fellowshipKey] = this.buildConfig(this.fellowshipChain.endpoint, this.fellowshipBlock);
+      networkConfig[governanceKey] = this.buildConfig(
+        this.governanceChain.endpoint,
+        this.governanceBlock,
+        governanceInjection
+      );
+      networkConfig[fellowshipKey] = this.buildConfig(
+        this.fellowshipChain.endpoint,
+        this.fellowshipBlock,
+        fellowshipInjection
+      );
     } else {
       // At least one is a relay chain - use traditional relay/parachain setup
       const relayChain = governanceIsRelay ? this.governanceChain : this.fellowshipChain;
@@ -601,8 +801,16 @@ export class NetworkCoordinator {
       governanceKey = governanceIsRelay ? relayKey : parachainKey;
       fellowshipKey = fellowshipIsRelay ? relayKey : parachainKey;
 
-      networkConfig[relayKey] = this.buildConfig(relayChain.endpoint, relayBlock);
-      networkConfig[parachainKey] = this.buildConfig(parachain.endpoint, parachainBlock);
+      // Determine storage injection for each chain in the relay/parachain pair
+      const relayInjection = governanceIsRelay ? governanceInjection : fellowshipInjection;
+      const parachainInjection = governanceIsRelay ? fellowshipInjection : governanceInjection;
+
+      networkConfig[relayKey] = this.buildConfig(relayChain.endpoint, relayBlock, relayInjection);
+      networkConfig[parachainKey] = this.buildConfig(
+        parachain.endpoint,
+        parachainBlock,
+        parachainInjection
+      );
     }
 
     // Track which endpoints are already in the network and map chains to their network keys
@@ -610,19 +818,44 @@ export class NetworkCoordinator {
     const chainToNetworkKey = new Map<string, string>();
 
     // Add additional chains to the network (skip duplicates)
+    // Track used relay keys to avoid conflicts when multiple relay chains are added
+    const usedRelayKeys = new Set<string>();
+    // Collect relay keys already used by governance/fellowship
+    if (governanceIsRelay) {
+      usedRelayKeys.add(this.getRelayKey(this.governanceChain.network));
+    }
+    if (fellowshipIsRelay) {
+      usedRelayKeys.add(this.getRelayKey(this.fellowshipChain.network));
+    }
+
     this.additionalChains.forEach((chain, index) => {
       if (usedEndpoints.has(chain.endpoint)) {
         this.logger.debug(`Skipping duplicate endpoint for ${chain.label}: ${chain.endpoint}`);
         return;
       }
 
-      const key = `additional_${index}`;
+      let key: string;
+      if (chain.kind === 'relay') {
+        // Relay chains must use their network-specific key for chopsticks to recognize them
+        const relayKey = this.getRelayKey(chain.network);
+        if (usedRelayKeys.has(relayKey)) {
+          this.logger.warn(
+            `Skipping relay chain ${chain.label}: relay key '${relayKey}' is already in use`
+          );
+          return;
+        }
+        key = relayKey;
+        usedRelayKeys.add(relayKey);
+      } else {
+        key = `additional_${index}`;
+      }
+
       const block = this.additionalChainBlocks[index];
       networkConfig[key] = this.buildConfig(chain.endpoint, block);
       usedEndpoints.add(chain.endpoint);
       chainToNetworkKey.set(chain.label, key);
       this.logger.debug(
-        `Adding ${chain.label} to network config with key: ${key}${block ? ` at block ${block}` : ''}`
+        `Adding ${chain.label} (${chain.kind}) to network config with key: ${key}${block ? ` at block ${block}` : ''}`
       );
     });
 
@@ -668,7 +901,11 @@ export class NetworkCoordinator {
     };
   }
 
-  private buildConfig(endpoint: string, block?: number) {
+  private buildConfig(
+    endpoint: string,
+    block?: number,
+    storageInjection?: 'fellowship' | 'alice-account'
+  ) {
     const config: any = {
       endpoint,
       db: path.join(process.cwd(), '.chopsticks-db'),
@@ -681,6 +918,15 @@ export class NetworkCoordinator {
     // Add block parameter if specified
     if (block !== undefined) {
       config.block = block;
+    }
+
+    // Inject storage if needed
+    if (storageInjection === 'fellowship') {
+      config['import-storage'] = ReferendumCreator.getFellowshipStorageInjection();
+      this.logger.debug('Injecting fellowship storage for Alice account');
+    } else if (storageInjection === 'alice-account') {
+      config['import-storage'] = ReferendumCreator.getAliceAccountInjection();
+      this.logger.debug('Injecting Alice account with funds');
     }
 
     return config;
@@ -714,77 +960,17 @@ export class NetworkCoordinator {
         const wsProvider = getWsProvider(endpoint);
         const client = createClient(withPolkadotSdkCompat(wsProvider));
 
-        const api = createApiForChain(client);
+        try {
+          const api = createApiForChain(client);
 
-        // Get current block number
-        const blockNumber = await api.query.System.Number.getValue();
+          const blockNumber = await api.query.System.Number.getValue();
+          const events = await api.query.System.Events.getValue();
 
-        // Get events from the latest block
-        const eventsQuery = api.query.System.Events.getValue();
-        const events = await eventsQuery;
-
-        this.logger.info(`📡 ${chainLabel} (Block #${blockNumber})`);
-
-        if (events && Array.isArray(events)) {
-          events.forEach((event: any, index: number) => {
-            const resolved =
-              typeof event.event === 'function'
-                ? event.event()
-                : (event.event?.value ??
-                  (typeof event.event === 'object' && event.event !== null ? event.event : null) ??
-                  event);
-
-            const sectionSource = resolved?.section ?? event.section;
-            const methodSource = resolved?.method ?? event.method;
-            const dataSource = resolved?.data ?? resolved?.args ?? event.data ?? event.args;
-
-            const section =
-              typeof sectionSource === 'string'
-                ? sectionSource
-                : typeof sectionSource?.toString === 'function'
-                  ? sectionSource.toString()
-                  : undefined;
-
-            const method =
-              typeof methodSource === 'string'
-                ? methodSource
-                : typeof methodSource?.toString === 'function'
-                  ? methodSource.toString()
-                  : undefined;
-
-            const sectionStr = section ?? 'Unknown';
-            const methodStr = method ?? 'Unknown';
-
-            this.logger.info(`  • [${index}] ${sectionStr}.${methodStr}`);
-
-            if (sectionStr === 'Unknown' || methodStr === 'Unknown') {
-              this.logger.debug(
-                `Raw event [${index}]: ${JSON.stringify(event, (_, value) =>
-                  typeof value === 'bigint' ? value.toString() : value
-                )}`
-              );
-            }
-
-            if (this.logger.isVerbose() && dataSource !== undefined) {
-              const serialized =
-                typeof dataSource?.toHuman === 'function'
-                  ? dataSource.toHuman()
-                  : typeof dataSource?.toJSON === 'function'
-                    ? dataSource.toJSON()
-                    : dataSource;
-
-              this.logger.debug(
-                `Event payload [${index}]: ${JSON.stringify(serialized, (_, value) =>
-                  typeof value === 'bigint' ? value.toString() : value
-                )}`
-              );
-            }
-          });
-        } else {
-          this.logger.info(`  No events found`);
+          displayChainEvents(chainLabel, blockNumber, events, this.logger);
+        } finally {
+          client.destroy();
         }
 
-        client.destroy();
         this.logger.info('');
       } catch (error) {
         const err = error as Error;

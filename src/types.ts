@@ -9,6 +9,11 @@ export interface TestOptions {
   cleanup: boolean;
   verbose: boolean;
   additionalChains?: string; // Comma-separated list of additional chain URLs
+  // Referendum creation options
+  callToCreateGovernanceReferendum?: string; // Hex string of call to create governance referendum
+  callToNotePreimageForGovernanceReferendum?: string; // Hex string of call to note preimage for governance referendum
+  callToCreateFellowshipReferendum?: string; // Hex string of call to create fellowship referendum
+  callToNotePreimageForFellowshipReferendum?: string; // Hex string of call to note preimage for fellowship referendum
 }
 
 export interface ReferendumInfo {
@@ -61,7 +66,7 @@ export interface ChopsticksConfig {
   block?: number;
   db?: string;
   'build-block-mode'?: 'batch' | 'manual' | 'instant';
-  'import-storage'?: string;
+  'import-storage'?: Record<string, any>;
   'mock-signature-host'?: boolean;
   'allow-unresolved-imports'?: boolean;
   'runtime-log-level'?: number;

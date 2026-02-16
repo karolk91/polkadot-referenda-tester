@@ -4,10 +4,6 @@ import { Command } from 'commander';
 import { testReferendum } from './commands/test-referendum';
 import { listReferendums } from './commands/list-referendums';
 import { version } from '../package.json';
-import { enableBigIntSerialization } from './utils/json';
-
-// Enable global BigInt serialization
-enableBigIntSerialization();
 
 const program = new Command();
 
@@ -44,6 +40,22 @@ program
   .option(
     '--additional-chains <urls>',
     'Comma-separated list of additional chain URLs to monitor for XCM events. Format: url or url,block (e.g., wss://chain1.io,11111,wss://chain2.io)'
+  )
+  .option(
+    '--call-to-create-governance-referendum <hex>',
+    'Call data to create a governance referendum (hex). Mutually exclusive with --referendum'
+  )
+  .option(
+    '--call-to-note-preimage-for-governance-referendum <hex>',
+    'Call data to note preimage for governance referendum (hex, optional)'
+  )
+  .option(
+    '--call-to-create-fellowship-referendum <hex>',
+    'Call data to create a fellowship referendum (hex). Mutually exclusive with --fellowship'
+  )
+  .option(
+    '--call-to-note-preimage-for-fellowship-referendum <hex>',
+    'Call data to note preimage for fellowship referendum (hex, optional)'
   )
   .action(testReferendum);
 

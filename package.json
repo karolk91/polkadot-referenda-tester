@@ -15,7 +15,7 @@
     "tsconfig.json"
   ],
   "dependencies": {
-    "@acala-network/chopsticks-testing": "^1.2.1",
+    "@acala-network/chopsticks-testing": "^1.2.7",
     "@polkadot-labs/hdkd": "^0.0.25",
     "@polkadot-labs/hdkd-helpers": "^0.0.26",
     "chalk": "^4.1.2",
@@ -48,7 +48,9 @@
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "format": "prettier --write \"src/**/*.{ts,js,json}\"",
-    "format:check": "prettier --check \"src/**/*.{ts,js,json}\""
+    "format:check": "prettier --check \"src/**/*.{ts,js,json}\"",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "packageManager": "yarn@4.10.3"
 }
