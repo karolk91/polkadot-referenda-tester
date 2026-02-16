@@ -66,7 +66,7 @@ export interface ChopsticksConfig {
   block?: number;
   db?: string;
   'build-block-mode'?: 'batch' | 'manual' | 'instant';
-  'import-storage'?: string;
+  'import-storage'?: Record<string, any>;
   'mock-signature-host'?: boolean;
   'allow-unresolved-imports'?: boolean;
   'runtime-log-level'?: number;

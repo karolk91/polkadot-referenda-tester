@@ -1,5 +1,6 @@
 import { ReferendumInfo } from '../types';
 import { Logger } from '../utils/logger';
+import { stringify } from '../utils/json';
 
 export class ReferendaFetcher {
   private logger: Logger;
@@ -35,7 +36,7 @@ export class ReferendaFetcher {
       }
 
       this.logger.debug(
-        `Raw referendum info: ${JSON.stringify(refInfo, (_, v) => (typeof v === 'bigint' ? v.toString() : v), 2)}`
+        `Raw referendum info: ${stringify(refInfo, 2)}`
       );
 
       // Parse the referendum status
@@ -76,7 +77,7 @@ export class ReferendaFetcher {
       } else if (refType === 'Killed' || 'Killed' in refInfo) {
         status = 'killed';
       } else {
-        throw new Error(`Unknown referendum status: ${JSON.stringify(refInfo)}`);
+        throw new Error(`Unknown referendum status: ${stringify(refInfo)}`);
       }
 
       const ongoing = (refType === 'Ongoing' && refValue) || refInfo.Ongoing || null;
@@ -151,13 +152,13 @@ export class ReferendaFetcher {
         preimage = proposalCall;
       }
 
-      // Determine the track
+      // Determine the track name from on-chain data
       const trackId = ongoing.track;
       const tracks = useFellowship
         ? await api.constants.FellowshipReferenda.Tracks()
         : await api.constants.Referenda.Tracks();
       const track = tracks.find((t: any) => t[0] === trackId);
-      const trackName = track ? this.getTrackName(track[0]) : `Unknown (${trackId})`;
+      const trackName = track ? track[1]?.name || `track_${trackId}` : `track_${trackId}`;
 
       const hashValue = proposalHashHex ?? 'inline';
 
@@ -190,7 +191,7 @@ export class ReferendaFetcher {
       };
 
       this.logger.debug(
-        `Parsed referendum info: ${JSON.stringify(referendumInfo, (_, v) => (typeof v === 'bigint' ? v.toString() : v), 2)}`
+        `Parsed referendum info: ${stringify(referendumInfo, 2)}`
       );
 
       return referendumInfo;
@@ -202,29 +203,6 @@ export class ReferendaFetcher {
       );
       return null;
     }
-  }
-
-  private getTrackName(trackId: number): string {
-    // Common Polkadot governance tracks
-    const trackNames: Record<number, string> = {
-      0: 'root',
-      1: 'whitelisted_caller',
-      10: 'staking_admin',
-      11: 'treasurer',
-      12: 'lease_admin',
-      13: 'fellowship_admin',
-      14: 'general_admin',
-      15: 'auction_admin',
-      20: 'referendum_canceller',
-      21: 'referendum_killer',
-      30: 'small_tipper',
-      31: 'big_tipper',
-      32: 'small_spender',
-      33: 'medium_spender',
-      34: 'big_spender',
-    };
-
-    return trackNames[trackId] || `track_${trackId}`;
   }
 
   async getLatestBlock(api: any): Promise<number> {

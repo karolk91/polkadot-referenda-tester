@@ -11,6 +11,7 @@ import { BuildBlockMode } from '@acala-network/chopsticks-core';
 import * as path from 'path';
 import { ChainInfo, ChainNetwork, getChainInfo, createApiForChain } from './chain-registry';
 import { TestOptions } from '../types';
+import { displayChainEvents } from '../utils/event-serializer';
 
 interface CoordinatorConfig {
   governance?: string;
@@ -78,12 +79,12 @@ export class NetworkCoordinator {
   async testWithFellowship(
     mainRefId: number | undefined,
     fellowshipRefId: number | undefined,
-    _basePort: number,
     cleanup: boolean = true,
     options?: TestOptions
   ): Promise<void> {
     // Determine if we're actually dealing with fellowship and/or main referendums
-    const hasFellowship = fellowshipRefId !== undefined || !!options?.callToCreateFellowshipReferendum;
+    const hasFellowship =
+      fellowshipRefId !== undefined || !!options?.callToCreateFellowshipReferendum;
     const hasMain = mainRefId !== undefined || !!options?.callToCreateGovernanceReferendum;
 
     // Fellowship-only mode (no main referendum)
@@ -91,12 +92,12 @@ export class NetworkCoordinator {
       if (!this.fellowshipEndpoint) {
         throw new Error('Fellowship chain URL must be provided when testing fellowship referendum');
       }
-      return this.testFellowshipOnly(fellowshipRefId, _basePort, cleanup, options);
+      return this.testFellowshipOnly(fellowshipRefId, cleanup, options);
     }
 
     // Main referendum only (no fellowship)
     if (hasMain && !hasFellowship) {
-      return this.testSingleReferendum(mainRefId, _basePort, options);
+      return this.testSingleReferendum(mainRefId, options);
     }
 
     // Both main and fellowship referenda (either existing or being created)
@@ -134,7 +135,6 @@ export class NetworkCoordinator {
 
   private async testSingleReferendum(
     refId: number | undefined,
-    _port: number,
     options?: TestOptions
   ): Promise<void> {
     if (!this.governanceEndpoint) {
@@ -218,7 +218,6 @@ export class NetworkCoordinator {
 
   private async testFellowshipOnly(
     refId: number | undefined,
-    _port: number,
     cleanup: boolean = true,
     options?: TestOptions
   ): Promise<void> {
@@ -481,7 +480,9 @@ export class NetworkCoordinator {
 
       // Validate endpoints are set (should be guaranteed by caller but TypeScript needs to know)
       if (!this.governanceEndpoint || !this.fellowshipEndpoint) {
-        throw new Error('Both governance and fellowship endpoints must be set for multi-chain testing');
+        throw new Error(
+          'Both governance and fellowship endpoints must be set for multi-chain testing'
+        );
       }
 
       // Detect chain info from runtimes
@@ -537,7 +538,11 @@ export class NetworkCoordinator {
       this.logger.section(
         `[1/2] Fellowship Referendum #${actualFellowshipRefId} (${this.fellowshipChain!.label})`
       );
-      const fellowshipRef = await fetcher.fetchReferendum(fellowshipApi, actualFellowshipRefId, true);
+      const fellowshipRef = await fetcher.fetchReferendum(
+        fellowshipApi,
+        actualFellowshipRefId,
+        true
+      );
       if (!fellowshipRef) {
         throw new Error(`Failed to fetch fellowship referendum ${actualFellowshipRefId}`);
       }
@@ -596,84 +601,24 @@ export class NetworkCoordinator {
       const governanceBlockNumber = await governanceApi.query.System.Number.getValue();
       const governanceEventsPost = await governanceApi.query.System.Events.getValue();
 
-      this.logger.info(`📡 ${this.governanceChain.label} (Block #${governanceBlockNumber})`);
-
-      if (governanceEventsPost && Array.isArray(governanceEventsPost)) {
-        governanceEventsPost.forEach((event: any) => {
-          let section = 'Unknown';
-          let method = 'Unknown';
-          let eventData: any = null;
-
-          if (event.event) {
-            if (typeof event.event.type === 'string') {
-              section = event.event.type;
-            }
-            if (event.event.value && typeof event.event.value.type === 'string') {
-              method = event.event.value.type;
-              eventData = event.event.value.value;
-            }
-          }
-
-          if (section === 'Unknown' && event.section) {
-            section = typeof event.section === 'string' ? event.section : event.section.toString();
-          }
-          if (method === 'Unknown' && event.method) {
-            method = typeof event.method === 'string' ? event.method : event.method.toString();
-          }
-
-          this.logger.info(`  • ${section}.${method}`);
-
-          if (this.logger.isVerbose() && eventData) {
-            const serialized = this.serializeEventData(eventData);
-            this.logger.debug(`    Data: ${JSON.stringify(serialized, null, 2)}`);
-          }
-        });
-      } else {
-        this.logger.info(`  No events found`);
-      }
-
+      displayChainEvents(
+        this.governanceChain.label,
+        governanceBlockNumber,
+        governanceEventsPost,
+        this.logger
+      );
       this.logger.info('');
 
       // Display fellowship chain events (to see XCM from governance)
       const fellowshipBlockNumber = await fellowshipApi.query.System.Number.getValue();
       const fellowshipEvents = await fellowshipApi.query.System.Events.getValue();
 
-      this.logger.info(`📡 ${this.fellowshipChain.label} (Block #${fellowshipBlockNumber})`);
-
-      if (fellowshipEvents && Array.isArray(fellowshipEvents)) {
-        fellowshipEvents.forEach((event: any) => {
-          let section = 'Unknown';
-          let method = 'Unknown';
-          let eventData: any = null;
-
-          if (event.event) {
-            if (typeof event.event.type === 'string') {
-              section = event.event.type;
-            }
-            if (event.event.value && typeof event.event.value.type === 'string') {
-              method = event.event.value.type;
-              eventData = event.event.value.value;
-            }
-          }
-
-          if (section === 'Unknown' && event.section) {
-            section = typeof event.section === 'string' ? event.section : event.section.toString();
-          }
-          if (method === 'Unknown' && event.method) {
-            method = typeof event.method === 'string' ? event.method : event.method.toString();
-          }
-
-          this.logger.info(`  • ${section}.${method}`);
-
-          if (this.logger.isVerbose() && eventData) {
-            const serialized = this.serializeEventData(eventData);
-            this.logger.debug(`    Data: ${JSON.stringify(serialized, null, 2)}`);
-          }
-        });
-      } else {
-        this.logger.info(`  No events found`);
-      }
-
+      displayChainEvents(
+        this.fellowshipChain.label,
+        fellowshipBlockNumber,
+        fellowshipEvents,
+        this.logger
+      );
       this.logger.info('');
 
       // Collect events from additional chains
@@ -756,7 +701,9 @@ export class NetworkCoordinator {
     try {
       // Detect governance chain if provided
       if (this.governanceEndpoint) {
-        const govClient = createClient(withPolkadotSdkCompat(getWsProvider(this.governanceEndpoint)));
+        const govClient = createClient(
+          withPolkadotSdkCompat(getWsProvider(this.governanceEndpoint))
+        );
         clients.push(govClient);
         const govApi = createApiForChain(govClient);
         this.governanceChain = await getChainInfo(govApi, this.governanceEndpoint);
@@ -783,7 +730,9 @@ export class NetworkCoordinator {
 
       this.logger.succeedSpinner('Chain types detected');
       if (this.governanceChain) {
-        this.logger.info(`Governance: ${this.governanceChain.label} (${this.governanceChain.kind})`);
+        this.logger.info(
+          `Governance: ${this.governanceChain.label} (${this.governanceChain.kind})`
+        );
       }
       if (this.fellowshipChain) {
         this.logger.info(
@@ -796,9 +745,7 @@ export class NetworkCoordinator {
     }
   }
 
-  private async setupInterconnectedChains(
-    options?: TestOptions
-  ): Promise<{
+  private async setupInterconnectedChains(options?: TestOptions): Promise<{
     governanceManager: ChopsticksManager;
     fellowshipManager: ChopsticksManager;
     additionalManagers: Map<string, ChopsticksManager>;
@@ -816,8 +763,13 @@ export class NetworkCoordinator {
     let governanceKey: string;
     let fellowshipKey: string;
 
-    // Determine if we need to inject fellowship storage
-    const shouldInjectFellowshipStorage = !!options?.callToCreateFellowshipReferendum;
+    // Determine what storage injections are needed
+    const fellowshipInjection = options?.callToCreateFellowshipReferendum
+      ? 'fellowship' as const
+      : undefined;
+    const governanceInjection = options?.callToCreateGovernanceReferendum
+      ? 'alice-account' as const
+      : undefined;
 
     // Handle different chain configurations
     if (!governanceIsRelay && !fellowshipIsRelay) {
@@ -827,12 +779,12 @@ export class NetworkCoordinator {
       networkConfig[governanceKey] = this.buildConfig(
         this.governanceChain.endpoint,
         this.governanceBlock,
-        false
+        governanceInjection
       );
       networkConfig[fellowshipKey] = this.buildConfig(
         this.fellowshipChain.endpoint,
         this.fellowshipBlock,
-        shouldInjectFellowshipStorage
+        fellowshipInjection
       );
     } else {
       // At least one is a relay chain - use traditional relay/parachain setup
@@ -849,15 +801,15 @@ export class NetworkCoordinator {
       governanceKey = governanceIsRelay ? relayKey : parachainKey;
       fellowshipKey = fellowshipIsRelay ? relayKey : parachainKey;
 
-      // Inject fellowship storage to the appropriate chain
-      const injectToRelay = fellowshipIsRelay && shouldInjectFellowshipStorage;
-      const injectToParachain = governanceIsRelay && shouldInjectFellowshipStorage;
+      // Determine storage injection for each chain in the relay/parachain pair
+      const relayInjection = governanceIsRelay ? governanceInjection : fellowshipInjection;
+      const parachainInjection = governanceIsRelay ? fellowshipInjection : governanceInjection;
 
-      networkConfig[relayKey] = this.buildConfig(relayChain.endpoint, relayBlock, injectToRelay);
+      networkConfig[relayKey] = this.buildConfig(relayChain.endpoint, relayBlock, relayInjection);
       networkConfig[parachainKey] = this.buildConfig(
         parachain.endpoint,
         parachainBlock,
-        injectToParachain
+        parachainInjection
       );
     }
 
@@ -952,7 +904,7 @@ export class NetworkCoordinator {
   private buildConfig(
     endpoint: string,
     block?: number,
-    injectFellowshipStorage?: boolean
+    storageInjection?: 'fellowship' | 'alice-account'
   ) {
     const config: any = {
       endpoint,
@@ -968,10 +920,13 @@ export class NetworkCoordinator {
       config.block = block;
     }
 
-    // Inject fellowship storage if needed
-    if (injectFellowshipStorage) {
+    // Inject storage if needed
+    if (storageInjection === 'fellowship') {
       config['import-storage'] = ReferendumCreator.getFellowshipStorageInjection();
       this.logger.debug('Injecting fellowship storage for Alice account');
+    } else if (storageInjection === 'alice-account') {
+      config['import-storage'] = ReferendumCreator.getAliceAccountInjection();
+      this.logger.debug('Injecting Alice account with funds');
     }
 
     return config;
@@ -1005,58 +960,17 @@ export class NetworkCoordinator {
         const wsProvider = getWsProvider(endpoint);
         const client = createClient(withPolkadotSdkCompat(wsProvider));
 
-        const api = createApiForChain(client);
+        try {
+          const api = createApiForChain(client);
 
-        // Get current block number
-        const blockNumber = await api.query.System.Number.getValue();
+          const blockNumber = await api.query.System.Number.getValue();
+          const events = await api.query.System.Events.getValue();
 
-        // Get events from the latest block
-        const eventsQuery = api.query.System.Events.getValue();
-        const events = await eventsQuery;
-
-        this.logger.info(`📡 ${chainLabel} (Block #${blockNumber})`);
-
-        if (events && Array.isArray(events)) {
-          events.forEach((event: any, index: number) => {
-            // Extract section and method from the event structure
-            let section = 'Unknown';
-            let method = 'Unknown';
-            let eventData: any = null;
-
-            // Try to get event info from different possible structures
-            if (event.event) {
-              // Structure: { event: { type: "Section", value: { type: "Method", value: {...} } } }
-              if (typeof event.event.type === 'string') {
-                section = event.event.type;
-              }
-              if (event.event.value && typeof event.event.value.type === 'string') {
-                method = event.event.value.type;
-                eventData = event.event.value.value;
-              }
-            }
-
-            // Fallback: try legacy structure
-            if (section === 'Unknown' && event.section) {
-              section = typeof event.section === 'string' ? event.section : event.section.toString();
-            }
-            if (method === 'Unknown' && event.method) {
-              method = typeof event.method === 'string' ? event.method : event.method.toString();
-            }
-
-            // Format and display the event
-            this.logger.info(`  • ${section}.${method}`);
-
-            // Show event data if available (convert binary data to hex)
-            if (this.logger.isVerbose() && eventData) {
-              const serialized = this.serializeEventData(eventData);
-              this.logger.debug(`    Data: ${JSON.stringify(serialized, null, 2)}`);
-            }
-          });
-        } else {
-          this.logger.info(`  No events found`);
+          displayChainEvents(chainLabel, blockNumber, events, this.logger);
+        } finally {
+          client.destroy();
         }
 
-        client.destroy();
         this.logger.info('');
       } catch (error) {
         const err = error as Error;
@@ -1074,105 +988,5 @@ export class NetworkCoordinator {
       return 'kusama';
     }
     return 'relay';
-  }
-
-  /**
-   * Serialize event data, converting Uint8Arrays and other binary data to hex strings
-   */
-  private serializeEventData(data: any): any {
-    if (data === null || data === undefined) {
-      return data;
-    }
-
-    // Handle Uint8Array
-    if (data instanceof Uint8Array) {
-      return '0x' + Buffer.from(data).toString('hex');
-    }
-
-    // Handle Buffer
-    if (Buffer.isBuffer(data)) {
-      return '0x' + data.toString('hex');
-    }
-
-    // Handle polkadot-api FixedSizeBinary and similar types (check for asHex property)
-    if (typeof data === 'object' && 'asHex' in data) {
-      try {
-        // asHex might be a function or a getter
-        const hex = typeof data.asHex === 'function' ? data.asHex() : data.asHex;
-        if (hex !== undefined && hex !== null) {
-          return hex;
-        }
-        // Fallback to asBytes if asHex doesn't work
-        if ('asBytes' in data) {
-          const bytes = typeof data.asBytes === 'function' ? data.asBytes() : data.asBytes;
-          if (bytes instanceof Uint8Array) {
-            return '0x' + Buffer.from(bytes).toString('hex');
-          }
-        }
-      } catch (e) {
-        this.logger.debug(`[DEBUG] Error accessing asHex/asBytes: ${e}`);
-      }
-    }
-
-    // Handle objects with toHex method
-    if (typeof data === 'object' && typeof data.toHex === 'function') {
-      return data.toHex();
-    }
-
-    // Handle objects with toU8a method (convert to Uint8Array then to hex)
-    if (typeof data === 'object' && typeof data.toU8a === 'function') {
-      const u8a = data.toU8a();
-      return '0x' + Buffer.from(u8a).toString('hex');
-    }
-
-    // Handle objects with toString that might give us useful info
-    if (typeof data === 'object' && typeof data.toString === 'function') {
-      const str = data.toString();
-      // If toString gives us a hex string, use it
-      if (str.startsWith('0x')) {
-        return str;
-      }
-    }
-
-    // Handle arrays
-    if (Array.isArray(data)) {
-      return data.map((item) => this.serializeEventData(item));
-    }
-
-    // Handle array-like objects (objects with numeric keys)
-    if (typeof data === 'object' && !Array.isArray(data)) {
-      // Check if it's an array-like object (has numeric keys like 0, 1, 2...)
-      const keys = Object.keys(data);
-      const isArrayLike = keys.length > 0 && keys.every((k) => !isNaN(Number(k)));
-
-      if (isArrayLike) {
-        // Convert to array and serialize as bytes
-        const bytes: number[] = [];
-        for (let i = 0; i < keys.length; i++) {
-          if (data[i] !== undefined) {
-            bytes.push(data[i]);
-          }
-        }
-        if (bytes.length > 0) {
-          return '0x' + Buffer.from(bytes).toString('hex');
-        }
-      }
-    }
-
-    // Handle plain objects
-    if (typeof data === 'object') {
-      const result: any = {};
-      for (const [key, value] of Object.entries(data)) {
-        result[key] = this.serializeEventData(value);
-      }
-      return result;
-    }
-
-    // Handle bigint
-    if (typeof data === 'bigint') {
-      return data.toString();
-    }
-
-    return data;
   }
 }

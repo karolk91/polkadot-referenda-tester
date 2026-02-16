@@ -4,10 +4,6 @@ import { Command } from 'commander';
 import { testReferendum } from './commands/test-referendum';
 import { listReferendums } from './commands/list-referendums';
 import { version } from '../package.json';
-import { enableBigIntSerialization } from './utils/json';
-
-// Enable global BigInt serialization
-enableBigIntSerialization();
 
 const program = new Command();
 

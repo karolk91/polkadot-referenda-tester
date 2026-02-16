@@ -113,7 +113,7 @@ export async function testReferendum(options: TestOptions): Promise<void> {
 
     logger.section('Setting Up Test Environment');
     const chopsticks = new ChopsticksManager(logger);
-    const chopsticsConfig: ChopsticksConfig = {
+    const chopsticksConfig: ChopsticksConfig = {
       endpoint: governanceUrl,
       port: parseInt(options.port),
       block: forkBlock,
@@ -122,7 +122,7 @@ export async function testReferendum(options: TestOptions): Promise<void> {
       'allow-unresolved-imports': true,
     };
 
-    await chopsticks.setup(chopsticsConfig);
+    await chopsticks.setup(chopsticksConfig);
 
     logger.startSpinner('Connecting to Chopsticks instance...');
     const localClient = createClient(
@@ -167,10 +167,9 @@ export async function testReferendum(options: TestOptions): Promise<void> {
     const referendum = await fetcher.fetchReferendum(localApi, referendumId);
 
     if (!referendum) {
-      logger.error('Failed to fetch referendum or referendum not found');
       localClient.destroy();
       await chopsticks.cleanup();
-      process.exit(1);
+      throw new Error('Failed to fetch referendum or referendum not found');
     }
 
     logger.success('Referendum data fetched successfully');
@@ -246,6 +245,8 @@ export async function testReferendum(options: TestOptions): Promise<void> {
     }
   } catch (error) {
     logger.error('Test execution failed', error as Error);
+    // Force exit - cleanup already happened in finally blocks,
+    // but dangling WebSocket handles can keep the process alive
     process.exit(1);
   }
 }
@@ -275,7 +276,6 @@ async function testWithFellowship(
   }
 
   // Determine if we're testing fellowship only (no main referendum)
-  const hasFellowship = fellowshipRefId !== undefined || !!options.callToCreateFellowshipReferendum;
   const hasMain = mainRefId !== undefined || !!options.callToCreateGovernanceReferendum;
 
   // If only testing fellowship (no main ref), validate fellowship chain URL is provided
@@ -285,7 +285,9 @@ async function testWithFellowship(
 
   // If testing with both refs, validate governance chain URL is provided
   if (hasMain && !options.governanceChainUrl) {
-    throw new Error('--governance-chain-url is required when testing both governance and fellowship referenda');
+    throw new Error(
+      '--governance-chain-url is required when testing both governance and fellowship referenda'
+    );
   }
 
   // Parse governance endpoint and optional block (if provided)
@@ -335,16 +337,10 @@ async function testWithFellowship(
     );
   }
 
-  await coordinator.testWithFellowship(
-    mainRefId,
-    fellowshipRefId,
-    parseInt(options.port),
-    cleanupEnabled,
-    options // Pass the full options object
-  );
+  await coordinator.testWithFellowship(mainRefId, fellowshipRefId, cleanupEnabled, options);
 
   if (cleanupEnabled) {
-    logger.success('\n✓ Fellowship workflow completed');
+    logger.success('\n\u2713 Fellowship workflow completed');
     process.exit(0);
   }
 }

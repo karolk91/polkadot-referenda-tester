@@ -24,9 +24,6 @@ export const FELLOWSHIP_STORAGE_INJECTION = {
       ],
     ],
   },
-  ParasDisputes: {
-    $removePrefix: ['disputes'], // those can make block building super slow
-  },
   FellowshipCollective: {
     $removePrefix: ['IdToIndex', 'IndexToId', 'MemberCount', 'Members'],
     IdToIndex: [
@@ -64,6 +61,25 @@ export const FELLOWSHIP_STORAGE_INJECTION = {
   },
 };
 
+/**
+ * Minimal storage injection to fund Alice on any chain (for paying submission deposits, etc.)
+ */
+export const ALICE_ACCOUNT_INJECTION = {
+  System: {
+    Account: [
+      [
+        [ALICE_ADDRESS],
+        {
+          providers: 1,
+          data: {
+            free: '10000000000000000000',
+          },
+        },
+      ],
+    ],
+  },
+};
+
 export interface ReferendumCreationResult {
   referendumId: number;
   preimageNoted: boolean;
@@ -86,12 +102,23 @@ export class ReferendumCreator {
    * @param isFellowship - Whether this is a fellowship referendum
    * @returns The created referendum ID and preimage status
    */
+  private static validateHex(input: string, paramName: string): string {
+    const hex = input.startsWith('0x') ? input : `0x${input}`;
+    if (!/^0x[0-9a-fA-F]*$/.test(hex)) {
+      throw new Error(`Invalid hex string for ${paramName}: ${input}`);
+    }
+    return hex;
+  }
+
   async createReferendum(
     api: any,
     submitCallHex: string,
     preimageCallHex?: string,
     isFellowship: boolean = false
   ): Promise<ReferendumCreationResult> {
+    // Validate hex inputs
+    const validatedSubmitHex = ReferendumCreator.validateHex(submitCallHex, 'submitCall');
+
     // Create Alice account from keyring
     const keyring = new Keyring({ type: 'sr25519' });
     const alice = keyring.addFromUri('//Alice');
@@ -104,16 +131,27 @@ export class ReferendumCreator {
     // Note preimage if provided
     let preimageNoted = false;
     if (preimageCallHex) {
+      const validatedPreimageHex = ReferendumCreator.validateHex(preimageCallHex, 'preimageCall');
       this.logger.startSpinner('Noting preimage...');
-      const preimageCall = await api.txFromCallData(Binary.fromHex(preimageCallHex));
+      let preimageCall;
+      try {
+        preimageCall = await api.txFromCallData(Binary.fromHex(validatedPreimageHex));
+      } catch (e) {
+        this.logger.failSpinner('Failed to decode preimage call data');
+        throw new Error(
+          `Invalid preimage call data for this chain's runtime. The hex may have been generated for a different runtime version or chain. Original error: ${(e as Error).message}`
+        );
+      }
 
-      // Submit to transaction pool (don't await - manual block mode)
-      preimageCall.signAndSubmit(signer);
+      // Sign the transaction and pass it directly to newBlock to avoid race conditions.
+      // Using signAndSubmit in fire-and-forget mode can cause the extrinsic to not be in the
+      // tx pool when newBlock() is called, because the async validation/broadcast pipeline
+      // may not have completed yet.
+      const signedPreimageTx = await preimageCall.sign(signer);
+      this.logger.debug('Preimage transaction signed');
 
-      this.logger.debug('Preimage transaction submitted to pool');
-
-      // Create blocks to include the transaction
-      await this.chopsticks.newBlock();
+      // Create block with the signed transaction included directly
+      await this.chopsticks.newBlock({ transactions: [signedPreimageTx] });
       await this.chopsticks.newBlock();
 
       this.logger.succeedSpinner('Preimage noted successfully');
@@ -122,38 +160,51 @@ export class ReferendumCreator {
 
     // Submit referendum
     this.logger.startSpinner('Submitting referendum...');
-    const submitCall = await api.txFromCallData(Binary.fromHex(submitCallHex));
+    let submitCall;
+    try {
+      submitCall = await api.txFromCallData(Binary.fromHex(validatedSubmitHex));
+    } catch (e) {
+      this.logger.failSpinner('Failed to decode referendum submit call data');
+      throw new Error(
+        `Invalid referendum submit call data for this chain's runtime. The hex may have been generated for a different runtime version or chain. Original error: ${(e as Error).message}`
+      );
+    }
 
-    // Submit to transaction pool (don't await - manual block mode)
-    submitCall.signAndSubmit(signer);
+    // Read referendum count BEFORE submitting so we can determine the new ID
+    const palletQuery = isFellowship ? api.query.FellowshipReferenda : api.query.Referenda;
+    const countBefore = Number(await palletQuery.ReferendumCount.getValue());
+    this.logger.debug(`Referendum count before submit: ${countBefore}`);
 
-    this.logger.debug('Referendum transaction submitted to pool');
+    // Sign the transaction and pass it directly to newBlock to avoid race conditions.
+    const signedSubmitTx = await submitCall.sign(signer);
+    this.logger.debug('Referendum transaction signed');
 
-    // Create blocks to include the transaction
-    await this.chopsticks.newBlock();
+    // Create block with the signed transaction included directly
+    await this.chopsticks.newBlock({ transactions: [signedSubmitTx] });
     await this.chopsticks.newBlock();
 
     this.logger.succeedSpinner('Referendum submitted successfully');
 
-    // Pull events to get referendum ID
-    this.logger.startSpinner('Retrieving referendum ID from events...');
-    let events;
-    if (isFellowship) {
-      events = await api.event.FellowshipReferenda.Submitted.pull();
-    } else {
-      events = await api.event.Referenda.Submitted.pull();
+    // Retrieve referendum ID from ReferendumCount (most reliable method)
+    this.logger.startSpinner('Retrieving referendum ID...');
+
+    const countAfter = Number(await palletQuery.ReferendumCount.getValue());
+    this.logger.debug(`Referendum count after submit: ${countAfter}`);
+
+    let referendumId: number | undefined;
+    if (countAfter > countBefore) {
+      // The new referendum ID is countAfter - 1 (0-indexed)
+      referendumId = countAfter - 1;
+      this.logger.debug(`Referendum ID determined from count: #${referendumId}`);
     }
 
-    if (!events || events.length === 0) {
-      this.logger.failSpinner('No referendum submission event found');
-      throw new Error('No referendum submission event found');
+    if (referendumId === undefined) {
+      this.logger.failSpinner('Referendum count did not increase — submission may have failed');
+      throw new Error(
+        'No new referendum detected after submission. The call data may be invalid or the origin may lack permissions.'
+      );
     }
 
-    if (events.length > 1) {
-      this.logger.warn(`Found ${events.length} referendum events, using the first one`);
-    }
-
-    const referendumId = events[0].payload.index;
     this.logger.succeedSpinner(`Referendum #${referendumId} created successfully`);
 
     return {
@@ -167,5 +218,12 @@ export class ReferendumCreator {
    */
   static getFellowshipStorageInjection(): any {
     return FELLOWSHIP_STORAGE_INJECTION;
+  }
+
+  /**
+   * Gets a minimal storage injection to fund Alice on any chain
+   */
+  static getAliceAccountInjection(): any {
+    return ALICE_ACCOUNT_INJECTION;
   }
 }

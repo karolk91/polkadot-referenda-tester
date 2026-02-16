@@ -58,7 +58,7 @@ export async function listReferendums(options: ListOptions): Promise<void> {
 
     // Start Chopsticks
     chopsticks = new ChopsticksManager(logger);
-    const chopsticsConfig: ChopsticksConfig = {
+    const chopsticksConfig: ChopsticksConfig = {
       endpoint: chainUrl,
       port: 8000,
       block: forkBlock,
@@ -67,11 +67,11 @@ export async function listReferendums(options: ListOptions): Promise<void> {
       'allow-unresolved-imports': true,
     };
 
-    const context = await chopsticks.setup(chopsticsConfig);
+    const context = await chopsticks.setup(chopsticksConfig);
 
     logger.startSpinner('Connecting to Chopsticks...');
-    const chopsticsEndpoint = context.ws.endpoint;
-    client = createClient(withPolkadotSdkCompat(getWsProvider(chopsticsEndpoint)));
+    const chopsticksEndpoint = context.ws.endpoint;
+    client = createClient(withPolkadotSdkCompat(getWsProvider(chopsticksEndpoint)));
     const api = createApiForChain(client);
     logger.succeedSpinner('Connected');
 
@@ -179,8 +179,7 @@ export async function listReferendums(options: ListOptions): Promise<void> {
       console.log(parts.join(','));
     }
 
-    // Force exit
-    process.exit(0);
+    process.exitCode = 0;
   } catch (error) {
     logger.error('Failed to list referendums', error as Error);
 
@@ -188,14 +187,18 @@ export async function listReferendums(options: ListOptions): Promise<void> {
     if (client) {
       try {
         client.destroy();
-      } catch {}
+      } catch (cleanupError) {
+        logger.debug(`Error destroying client: ${cleanupError}`);
+      }
     }
     if (chopsticks) {
       try {
         await chopsticks.cleanup();
-      } catch {}
+      } catch (cleanupError) {
+        logger.debug(`Error cleaning up chopsticks: ${cleanupError}`);
+      }
     }
 
-    process.exit(1);
+    process.exitCode = 1;
   }
 }

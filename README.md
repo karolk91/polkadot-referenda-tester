@@ -35,6 +35,35 @@ npx github:karolk91/polkadot-referenda-tester list \
 npx github:karolk91/polkadot-referenda-tester test \
   --fellowship-chain-url wss://polkadot-collectives-rpc.polkadot.io \
   --fellowship 425
+
+# Create and test a governance referendum from call data
+npx github:karolk91/polkadot-referenda-tester test \
+  --governance-chain-url wss://polkadot-rpc.dwellir.com \
+  --call-to-create-governance-referendum 0x1503...
+
+# Create and test a governance referendum with a preimage
+npx github:karolk91/polkadot-referenda-tester test \
+  --governance-chain-url wss://polkadot-rpc.dwellir.com \
+  --call-to-note-preimage-for-governance-referendum 0x1e00... \
+  --call-to-create-governance-referendum 0x1503...
+
+# Create and test a fellowship referendum from call data
+npx github:karolk91/polkadot-referenda-tester test \
+  --fellowship-chain-url wss://polkadot-collectives-rpc.polkadot.io \
+  --call-to-create-fellowship-referendum 0x1703...
+
+# Create and test a fellowship referendum with a preimage
+npx github:karolk91/polkadot-referenda-tester test \
+  --fellowship-chain-url wss://polkadot-collectives-rpc.polkadot.io \
+  --call-to-note-preimage-for-fellowship-referendum 0x1e00... \
+  --call-to-create-fellowship-referendum 0x1703...
+
+# Create both governance and fellowship referenda from call data
+npx github:karolk91/polkadot-referenda-tester test \
+  --governance-chain-url wss://polkadot-rpc.dwellir.com \
+  --fellowship-chain-url wss://polkadot-collectives-rpc.polkadot.io \
+  --call-to-create-governance-referendum 0x1503... \
+  --call-to-create-fellowship-referendum 0x1703...
 ```
 
 ## Local Development
@@ -61,6 +90,10 @@ yarn cli test \
 | `--pre-call <hex>` | Hex string of call to execute before the main referendum (via Scheduler.Inline) |
 | `--pre-origin <origin>` | Origin for pre-execution call (e.g., `"Root"`, `"WhitelistedCaller"`, `"Origins.Treasurer"`) |
 | `--additional-chains <urls>` | Comma-separated list of additional chain URLs to monitor for XCM events. Format: `url` or `url,block` |
+| `--call-to-create-governance-referendum <hex>` | Call data to create a governance referendum (hex). Mutually exclusive with `--referendum` |
+| `--call-to-note-preimage-for-governance-referendum <hex>` | Call data to note preimage for governance referendum (hex, optional) |
+| `--call-to-create-fellowship-referendum <hex>` | Call data to create a fellowship referendum (hex). Mutually exclusive with `--fellowship` |
+| `--call-to-note-preimage-for-fellowship-referendum <hex>` | Call data to note preimage for fellowship referendum (hex, optional) |
 | `-v, --verbose` | Enable verbose logging |
 | `--no-cleanup` | Keep Chopsticks instance running after test |
 | `-h, --help` | Display help for command |
