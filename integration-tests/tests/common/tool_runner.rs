@@ -32,52 +32,6 @@ pub struct ToolOutput {
 }
 
 impl ToolOutput {
-    // === Panicking assertions (for standalone tests) ===
-
-    /// Assert the tool exited successfully (code 0).
-    pub fn assert_success(&self) {
-        assert_eq!(
-            self.exit_code, 0,
-            "Tool exited with code {}.\n--- stdout ---\n{}\n--- stderr ---\n{}",
-            self.exit_code, self.stdout, self.stderr
-        );
-    }
-
-    /// Assert the tool exited with failure (non-zero code).
-    pub fn assert_failure(&self) {
-        assert_ne!(
-            self.exit_code, 0,
-            "Expected tool to fail but it exited with code 0.\n--- stdout ---\n{}\n--- stderr ---\n{}",
-            self.stdout, self.stderr
-        );
-    }
-
-    /// Assert stdout contains a substring (case-insensitive).
-    pub fn assert_stdout_contains(&self, pattern: &str) {
-        let lower_stdout = self.stdout.to_lowercase();
-        let lower_pattern = pattern.to_lowercase();
-        assert!(
-            lower_stdout.contains(&lower_pattern),
-            "Expected stdout to contain '{}', but it didn't.\n--- stdout ---\n{}",
-            pattern,
-            self.stdout,
-        );
-    }
-
-    /// Assert stdout contains a blockchain event like "Section.Method".
-    pub fn assert_event_present(&self, section: &str, method: &str) {
-        let pattern = format!("{}.{}", section, method);
-        assert!(
-            self.stdout.contains(&pattern),
-            "Expected event '{}.{}' in stdout, but not found.\n--- stdout ---\n{}",
-            section,
-            method,
-            self.stdout,
-        );
-    }
-
-    // === Fallible checks (for test suites — return Result instead of panicking) ===
-
     /// Check the tool exited successfully (code 0).
     pub fn check_success(&self) -> Result<()> {
         anyhow::ensure!(
@@ -140,9 +94,9 @@ pub fn report_results(results: &[SubTestResult]) {
     let mut failures = Vec::new();
     for (name, result) in results {
         match result {
-            Ok(()) => log::info!("  PASS: {}", name),
+            Ok(()) => log::info!("  PASS: {name}"),
             Err(e) => {
-                log::error!("  FAIL: {} -- {:#}", name, e);
+                log::error!("  FAIL: {name} -- {e:#}");
                 failures.push(*name);
             }
         }
@@ -155,11 +109,7 @@ pub fn report_results(results: &[SubTestResult]) {
             failures
         );
     }
-    log::info!(
-        "All {}/{} sub-tests passed!",
-        results.len(),
-        results.len()
-    );
+    log::info!("All {}/{} sub-tests passed!", results.len(), results.len());
 }
 
 /// Runs the polkadot-referenda-tester CLI tool as a child process.
@@ -183,9 +133,7 @@ impl ToolRunner {
     /// Run `yarn cli test` with the given arguments.
     pub async fn run_test_referendum(&self, args: ToolArgs) -> Result<ToolOutput> {
         let mut cmd = tokio::process::Command::new("yarn");
-        cmd.current_dir(&self.project_dir)
-            .arg("cli")
-            .arg("test");
+        cmd.current_dir(&self.project_dir).arg("cli").arg("test");
 
         if let Some(ref url) = args.governance_chain_url {
             cmd.arg("--governance-chain-url").arg(url);
@@ -231,7 +179,7 @@ impl ToolRunner {
 
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-        log::info!("Running tool: {:?}", cmd);
+        log::info!("Running tool: {cmd:?}");
 
         let child = cmd.spawn().context("Failed to spawn yarn cli process")?;
 

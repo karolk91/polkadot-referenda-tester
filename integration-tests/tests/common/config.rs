@@ -111,14 +111,14 @@ pub fn build_polkadot_with_asset_hub() -> anyhow::Result<NetworkConfig> {
     let relay_binary = get_polkadot_binary_path();
     let para_binary = get_parachain_binary_path();
 
-    log::info!("Relay binary: {}", relay_binary);
-    log::info!("Parachain binary: {}", para_binary);
+    log::info!("Relay binary: {relay_binary}");
+    log::info!("Parachain binary: {para_binary}");
 
     let relay_runtime_url = polkadot_runtime_url();
     let ah_runtime_url = asset_hub_runtime_url();
 
-    log::info!("Relay runtime: {}", relay_runtime_url);
-    log::info!("Asset Hub runtime: {}", ah_runtime_url);
+    log::info!("Relay runtime: {relay_runtime_url}");
+    log::info!("Asset Hub runtime: {ah_runtime_url}");
 
     NetworkConfigBuilder::new()
         .with_relaychain(|relaychain| {
@@ -141,10 +141,7 @@ pub fn build_polkadot_with_asset_hub() -> anyhow::Result<NetworkConfig> {
                 .with_collator(|c| {
                     c.with_name("asset-hub-collator")
                         .with_command(para_binary.as_str())
-                        .with_args(vec![Arg::Option(
-                            "--authoring".into(),
-                            "slot-based".into(),
-                        )])
+                        .with_args(vec![Arg::Option("--authoring".into(), "slot-based".into())])
                 })
         })
         .build()
@@ -166,16 +163,16 @@ pub fn build_polkadot_with_system_parachains() -> anyhow::Result<NetworkConfig> 
     let relay_binary = get_polkadot_binary_path();
     let para_binary = get_parachain_binary_path();
 
-    log::info!("Relay binary: {}", relay_binary);
-    log::info!("Parachain binary: {}", para_binary);
+    log::info!("Relay binary: {relay_binary}");
+    log::info!("Parachain binary: {para_binary}");
 
     let relay_runtime_url = polkadot_runtime_url();
     let ah_runtime_url = asset_hub_runtime_url();
     let coll_runtime_url = collectives_runtime_url();
 
-    log::info!("Relay runtime: {}", relay_runtime_url);
-    log::info!("Asset Hub runtime: {}", ah_runtime_url);
-    log::info!("Collectives runtime: {}", coll_runtime_url);
+    log::info!("Relay runtime: {relay_runtime_url}");
+    log::info!("Asset Hub runtime: {ah_runtime_url}");
+    log::info!("Collectives runtime: {coll_runtime_url}");
 
     NetworkConfigBuilder::new()
         .with_relaychain(|relaychain| {
@@ -198,10 +195,7 @@ pub fn build_polkadot_with_system_parachains() -> anyhow::Result<NetworkConfig> 
                 .with_collator(|c| {
                     c.with_name("asset-hub-collator")
                         .with_command(para_binary.as_str())
-                        .with_args(vec![Arg::Option(
-                            "--authoring".into(),
-                            "slot-based".into(),
-                        )])
+                        .with_args(vec![Arg::Option("--authoring".into(), "slot-based".into())])
                 })
         })
         .with_parachain(|parachain| {
@@ -215,10 +209,7 @@ pub fn build_polkadot_with_system_parachains() -> anyhow::Result<NetworkConfig> 
                 .with_collator(|c| {
                     c.with_name("collectives-collator")
                         .with_command(para_binary.as_str())
-                        .with_args(vec![Arg::Option(
-                            "--authoring".into(),
-                            "slot-based".into(),
-                        )])
+                        .with_args(vec![Arg::Option("--authoring".into(), "slot-based".into())])
                 })
         })
         .build()
@@ -240,14 +231,14 @@ pub fn build_kusama_with_asset_hub() -> anyhow::Result<NetworkConfig> {
     let relay_binary = get_polkadot_binary_path();
     let para_binary = get_parachain_binary_path();
 
-    log::info!("Relay binary: {}", relay_binary);
-    log::info!("Parachain binary: {}", para_binary);
+    log::info!("Relay binary: {relay_binary}");
+    log::info!("Parachain binary: {para_binary}");
 
     let relay_runtime_url = kusama_runtime_url();
     let ah_runtime_url = kusama_asset_hub_runtime_url();
 
-    log::info!("Kusama relay runtime: {}", relay_runtime_url);
-    log::info!("Kusama Asset Hub runtime: {}", ah_runtime_url);
+    log::info!("Kusama relay runtime: {relay_runtime_url}");
+    log::info!("Kusama Asset Hub runtime: {ah_runtime_url}");
 
     NetworkConfigBuilder::new()
         .with_relaychain(|relaychain| {
@@ -271,10 +262,7 @@ pub fn build_kusama_with_asset_hub() -> anyhow::Result<NetworkConfig> {
                 .with_collator(|c| {
                     c.with_name("asset-hub-collator")
                         .with_command(para_binary.as_str())
-                        .with_args(vec![Arg::Option(
-                            "--authoring".into(),
-                            "slot-based".into(),
-                        )])
+                        .with_args(vec![Arg::Option("--authoring".into(), "slot-based".into())])
                 })
         })
         .build()

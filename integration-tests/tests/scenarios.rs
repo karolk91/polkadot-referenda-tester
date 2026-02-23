@@ -123,10 +123,7 @@ async fn run_missing_governance_url() -> Result<()> {
         })
         .await?;
 
-    log::info!(
-        "[missing_governance_url] exit code: {}",
-        output.exit_code
-    );
+    log::info!("[missing_governance_url] exit code: {}", output.exit_code);
     output.check_failure()?;
     output.check_any_output_contains("governance-chain-url is required")?;
     log::info!("[missing_governance_url] PASSED");
@@ -145,10 +142,7 @@ async fn run_missing_fellowship_url() -> Result<()> {
         })
         .await?;
 
-    log::info!(
-        "[missing_fellowship_url] exit code: {}",
-        output.exit_code
-    );
+    log::info!("[missing_fellowship_url] exit code: {}", output.exit_code);
     output.check_failure()?;
     output.check_any_output_contains("fellowship-chain-url is required")?;
     log::info!("[missing_fellowship_url] PASSED");
@@ -168,10 +162,7 @@ async fn run_invalid_referendum_id() -> Result<()> {
         })
         .await?;
 
-    log::info!(
-        "[invalid_referendum_id] exit code: {}",
-        output.exit_code
-    );
+    log::info!("[invalid_referendum_id] exit code: {}", output.exit_code);
     output.check_failure()?;
     output.check_any_output_contains("invalid referendum id")?;
     log::info!("[invalid_referendum_id] PASSED");
@@ -191,10 +182,7 @@ async fn run_invalid_fellowship_id() -> Result<()> {
         })
         .await?;
 
-    log::info!(
-        "[invalid_fellowship_id] exit code: {}",
-        output.exit_code
-    );
+    log::info!("[invalid_fellowship_id] exit code: {}", output.exit_code);
     output.check_failure()?;
     output.check_any_output_contains("invalid fellowship referendum id")?;
     log::info!("[invalid_fellowship_id] PASSED");

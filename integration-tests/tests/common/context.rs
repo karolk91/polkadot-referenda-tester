@@ -11,6 +11,7 @@ use super::config::BEST_BLOCK_METRIC;
 
 /// Shared context for governance-only test suites (relay + Asset Hub).
 pub struct GovernanceTestContext {
+    #[allow(dead_code)]
     pub relay_ws_uri: String,
     pub asset_hub_ws_uri: String,
     pub ah_client: OnlineClient<PolkadotConfig>,
@@ -43,7 +44,7 @@ impl GovernanceTestContext {
             .map_err(|e| anyhow::anyhow!("subxt connect to Asset Hub failed: {e}"))?;
 
         let ah_fork_block = ah_client.blocks().at_latest().await?.number();
-        log::info!("Asset Hub fork block: #{}", ah_fork_block);
+        log::info!("Asset Hub fork block: #{ah_fork_block}");
 
         Ok(Self {
             relay_ws_uri: alice.ws_uri().to_string(),
@@ -124,10 +125,7 @@ impl MultiChainTestContext {
         let relay_fork_block = relay_client.blocks().at_latest().await?.number();
 
         log::info!(
-            "Fork blocks: AH=#{}, Coll=#{}, Relay=#{}",
-            ah_fork_block,
-            coll_fork_block,
-            relay_fork_block
+            "Fork blocks: AH=#{ah_fork_block}, Coll=#{coll_fork_block}, Relay=#{relay_fork_block}"
         );
 
         Ok(Self {
@@ -217,11 +215,7 @@ impl KusamaTestContext {
         let relay_fork_block = relay_client.blocks().at_latest().await?.number();
         let ah_fork_block = ah_client.blocks().at_latest().await?.number();
 
-        log::info!(
-            "Kusama fork blocks: Relay=#{}, AH=#{}",
-            relay_fork_block,
-            ah_fork_block
-        );
+        log::info!("Kusama fork blocks: Relay=#{relay_fork_block}, AH=#{ah_fork_block}");
 
         Ok(Self {
             relay_ws_uri: alice.ws_uri().to_string(),

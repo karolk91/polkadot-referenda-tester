@@ -8,13 +8,12 @@
 //! referenda directly to live zombienet nodes.
 
 use serde_json::{json, Value};
-use sp_crypto_hashing::{twox_64, twox_128};
+use sp_crypto_hashing::{twox_128, twox_64};
 
 /// Alice's raw AccountId (Sr25519 public key bytes).
 const ALICE_ACCOUNT_ID: [u8; 32] = [
-    0xd4, 0x35, 0x93, 0xc7, 0x15, 0xfd, 0xd3, 0x1c, 0x61, 0x14, 0x1a, 0xbd, 0x04, 0xa9, 0x9f,
-    0xd6, 0x82, 0x2c, 0x85, 0x58, 0x85, 0x4c, 0xcd, 0xe3, 0x9a, 0x56, 0x84, 0xe7, 0xa5, 0x6d,
-    0xa2, 0x7d,
+    0xd4, 0x35, 0x93, 0xc7, 0x15, 0xfd, 0xd3, 0x1c, 0x61, 0x14, 0x1a, 0xbd, 0x04, 0xa9, 0x9f, 0xd6,
+    0x82, 0x2c, 0x85, 0x58, 0x85, 0x4c, 0xcd, 0xe3, 0x9a, 0x56, 0x84, 0xe7, 0xa5, 0x6d, 0xa2, 0x7d,
 ];
 
 /// The rank to assign Alice in FellowshipCollective (covers all tracks up to Fellowship9Dan).
@@ -110,12 +109,8 @@ pub fn fellowship_collective_override() -> Value {
         let rank_encoded = rank.to_le_bytes(); // u16 LE
 
         // MemberCount[rank] = 1u32
-        let count_key =
-            storage_map_key("FellowshipCollective", "MemberCount", &rank_encoded);
-        top.insert(
-            count_key,
-            Value::String(to_hex(&1u32.to_le_bytes())),
-        );
+        let count_key = storage_map_key("FellowshipCollective", "MemberCount", &rank_encoded);
+        top.insert(count_key, Value::String(to_hex(&1u32.to_le_bytes())));
 
         // IdToIndex[rank, Alice] = 0u32
         let id_to_idx_key = storage_double_map_key(
@@ -124,10 +119,7 @@ pub fn fellowship_collective_override() -> Value {
             &rank_encoded,
             &ALICE_ACCOUNT_ID,
         );
-        top.insert(
-            id_to_idx_key,
-            Value::String(to_hex(&0u32.to_le_bytes())),
-        );
+        top.insert(id_to_idx_key, Value::String(to_hex(&0u32.to_le_bytes())));
 
         // IndexToId[rank, 0] = Alice
         let idx_to_id_key = storage_double_map_key(
@@ -136,10 +128,7 @@ pub fn fellowship_collective_override() -> Value {
             &rank_encoded,
             &0u32.to_le_bytes(),
         );
-        top.insert(
-            idx_to_id_key,
-            Value::String(to_hex(&ALICE_ACCOUNT_ID)),
-        );
+        top.insert(idx_to_id_key, Value::String(to_hex(&ALICE_ACCOUNT_ID)));
     }
 
     build_raw_override(top)

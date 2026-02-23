@@ -75,17 +75,43 @@ async fn polkadot_governance_all_tracks() {
 
     // Refresh fork blocks — after running per-track tests the zombienet nodes
     // may have pruned state for the original fork blocks.
-    ctx.refresh_fork_blocks().await.expect("failed to refresh fork blocks");
+    ctx.refresh_fork_blocks()
+        .await
+        .expect("failed to refresh fork blocks");
 
     let scenarios: Vec<(&str, _)> = vec![
-        ("gov_happy_path", run_governance_happy_path(&ctx, &runner).await),
-        ("gov_dispatch_failure", run_governance_dispatch_failure(&ctx, &runner).await),
-        ("gov_pre_call_remark", run_governance_with_pre_call(&ctx, &runner).await),
-        ("gov_remark_proposal", run_governance_remark_proposal(&ctx, &runner).await),
-        ("gov_invalid_hex", run_governance_invalid_hex(&ctx, &runner).await),
-        ("gov_pre_call_non_root_origin", run_governance_pre_call_non_root_origin(&ctx, &runner).await),
-        ("gov_pre_call_invalid_origin", run_governance_pre_call_invalid_origin(&ctx, &runner).await),
-        ("gov_create_no_preimage", run_governance_create_no_preimage(&ctx, &runner).await),
+        (
+            "gov_happy_path",
+            run_governance_happy_path(&ctx, &runner).await,
+        ),
+        (
+            "gov_dispatch_failure",
+            run_governance_dispatch_failure(&ctx, &runner).await,
+        ),
+        (
+            "gov_pre_call_remark",
+            run_governance_with_pre_call(&ctx, &runner).await,
+        ),
+        (
+            "gov_remark_proposal",
+            run_governance_remark_proposal(&ctx, &runner).await,
+        ),
+        (
+            "gov_invalid_hex",
+            run_governance_invalid_hex(&ctx, &runner).await,
+        ),
+        (
+            "gov_pre_call_non_root_origin",
+            run_governance_pre_call_non_root_origin(&ctx, &runner).await,
+        ),
+        (
+            "gov_pre_call_invalid_origin",
+            run_governance_pre_call_invalid_origin(&ctx, &runner).await,
+        ),
+        (
+            "gov_create_no_preimage",
+            run_governance_create_no_preimage(&ctx, &runner).await,
+        ),
     ];
 
     for (name, result) in scenarios {
@@ -120,8 +146,7 @@ async fn polkadot_fellowship_tracks_part1() {
     verify_binaries().expect("binary verification failed");
 
     let network_config =
-        config::build_polkadot_with_system_parachains()
-            .expect("failed to build network config");
+        config::build_polkadot_with_system_parachains().expect("failed to build network config");
     let network = initialize_network(network_config)
         .await
         .expect("failed to spawn zombienet");
@@ -153,8 +178,7 @@ async fn polkadot_fellowship_tracks_part2() {
     verify_binaries().expect("binary verification failed");
 
     let network_config =
-        config::build_polkadot_with_system_parachains()
-            .expect("failed to build network config");
+        config::build_polkadot_with_system_parachains().expect("failed to build network config");
     let network = initialize_network(network_config)
         .await
         .expect("failed to spawn zombienet");
@@ -171,13 +195,24 @@ async fn polkadot_fellowship_tracks_part2() {
 
     // ── Multi-chain scenario tests ───────────────────────────────────────
 
-    ctx.refresh_fork_blocks().await.expect("failed to refresh fork blocks");
+    ctx.refresh_fork_blocks()
+        .await
+        .expect("failed to refresh fork blocks");
 
     let scenarios: Vec<(&str, _)> = vec![
-        ("multichain_happy_path", run_multichain_happy_path(&ctx, &runner).await),
+        (
+            "multichain_happy_path",
+            run_multichain_happy_path(&ctx, &runner).await,
+        ),
         ("fellowship_only", run_fellowship_only(&ctx, &runner).await),
-        ("nonexistent_referendum", run_nonexistent_referendum(&ctx, &runner).await),
-        ("fellowship_create_no_preimage", run_fellowship_create_no_preimage(&ctx, &runner).await),
+        (
+            "nonexistent_referendum",
+            run_nonexistent_referendum(&ctx, &runner).await,
+        ),
+        (
+            "fellowship_create_no_preimage",
+            run_fellowship_create_no_preimage(&ctx, &runner).await,
+        ),
     ];
 
     for (name, result) in scenarios {
@@ -272,7 +307,9 @@ async fn kusama_governance_all_tracks() {
 
     // ── Scenario test ────────────────────────────────────────────────────
 
-    ctx.refresh_fork_blocks().await.expect("failed to refresh fork blocks");
+    ctx.refresh_fork_blocks()
+        .await
+        .expect("failed to refresh fork blocks");
 
     match run_kusama_governance_happy_path(&ctx, &runner).await {
         Ok(()) => log::info!("PASS: ksm_gov_happy_path"),
@@ -302,8 +339,7 @@ async fn kusama_fellowship_all_tracks() {
     verify_binaries().expect("binary verification failed");
 
     let network_config =
-        config::build_kusama_with_asset_hub()
-            .expect("failed to build network config");
+        config::build_kusama_with_asset_hub().expect("failed to build network config");
     let network = initialize_network(network_config)
         .await
         .expect("failed to spawn zombienet");
@@ -339,11 +375,19 @@ async fn kusama_fellowship_all_tracks() {
 
     // ── Scenario tests ───────────────────────────────────────────────────
 
-    ctx.refresh_fork_blocks().await.expect("failed to refresh fork blocks");
+    ctx.refresh_fork_blocks()
+        .await
+        .expect("failed to refresh fork blocks");
 
     let scenarios: Vec<(&str, _)> = vec![
-        ("ksm_multichain_happy_path", run_kusama_multichain_happy_path(&ctx, &runner).await),
-        ("ksm_fellowship_on_relay", run_kusama_fellowship_on_relay(&ctx, &runner).await),
+        (
+            "ksm_multichain_happy_path",
+            run_kusama_multichain_happy_path(&ctx, &runner).await,
+        ),
+        (
+            "ksm_fellowship_on_relay",
+            run_kusama_fellowship_on_relay(&ctx, &runner).await,
+        ),
     ];
 
     for (name, result) in scenarios {
@@ -375,11 +419,7 @@ async fn run_gov_create_test(
     runner: &ToolRunner,
     track: &tracks::GovernanceTrack,
 ) -> Result<()> {
-    log::info!(
-        ">>> gov_create_{} (track_id={})",
-        track.name,
-        track.id
-    );
+    log::info!(">>> gov_create_{} (track_id={})", track.name, track.id);
 
     let (preimage_hex, submit_hex) =
         call_data::generate_governance_track_call_data(&ctx.ah_client, track, "Origins").await?;
@@ -411,16 +451,10 @@ async fn run_gov_bynum_test(
     runner: &ToolRunner,
     track: &tracks::GovernanceTrack,
 ) -> Result<()> {
-    log::info!(
-        ">>> gov_bynum_{} (track_id={})",
-        track.name,
-        track.id
-    );
+    log::info!(">>> gov_bynum_{} (track_id={})", track.name, track.id);
 
-    let submitted = extrinsic_submitter::submit_governance_referendum(
-        &ctx.ah_client, track, "Origins",
-    )
-    .await?;
+    let submitted =
+        extrinsic_submitter::submit_governance_referendum(&ctx.ah_client, track, "Origins").await?;
 
     let fork_url = format!("{},{}", ctx.asset_hub_ws_uri, submitted.block_number);
 
@@ -664,19 +698,14 @@ async fn run_polkadot_fellowship_create_test(
     runner: &ToolRunner,
     track: &tracks::FellowshipTrack,
 ) -> Result<()> {
-    log::info!(
-        ">>> fell_create_{} (track_id={})",
-        track.name,
-        track.id
-    );
+    log::info!(">>> fell_create_{} (track_id={})", track.name, track.id);
 
-    let (preimage_hex, submit_hex) =
-        call_data::generate_fellowship_track_call_data(
-            &ctx.coll_client,
-            track,
-            "FellowshipOrigins",
-        )
-        .await?;
+    let (preimage_hex, submit_hex) = call_data::generate_fellowship_track_call_data(
+        &ctx.coll_client,
+        track,
+        "FellowshipOrigins",
+    )
+    .await?;
 
     let port = port_allocator::next_port();
     let output = runner
@@ -706,20 +735,16 @@ async fn run_polkadot_fellowship_bynum_test(
     runner: &ToolRunner,
     track: &tracks::FellowshipTrack,
 ) -> Result<()> {
-    log::info!(
-        ">>> fell_bynum_{} (track_id={})",
-        track.name,
-        track.id
-    );
+    log::info!(">>> fell_bynum_{} (track_id={})", track.name, track.id);
 
     let submitted = extrinsic_submitter::submit_fellowship_referendum(
-        &ctx.coll_client, track, "FellowshipOrigins",
+        &ctx.coll_client,
+        track,
+        "FellowshipOrigins",
     )
     .await?;
 
-    let fellowship_fork_url = format!(
-        "{},{}", ctx.collectives_ws_uri, submitted.block_number
-    );
+    let fellowship_fork_url = format!("{},{}", ctx.collectives_ws_uri, submitted.block_number);
 
     let port = port_allocator::next_port();
     let output = runner
@@ -859,11 +884,7 @@ async fn run_kusama_gov_create_test(
     runner: &ToolRunner,
     track: &tracks::GovernanceTrack,
 ) -> Result<()> {
-    log::info!(
-        ">>> ksm_gov_create_{} (track_id={})",
-        track.name,
-        track.id
-    );
+    log::info!(">>> ksm_gov_create_{} (track_id={})", track.name, track.id);
 
     let (preimage_hex, submit_hex) =
         call_data::generate_governance_track_call_data(&ctx.ah_client, track, "Origins").await?;
@@ -895,16 +916,10 @@ async fn run_kusama_gov_bynum_test(
     runner: &ToolRunner,
     track: &tracks::GovernanceTrack,
 ) -> Result<()> {
-    log::info!(
-        ">>> ksm_gov_bynum_{} (track_id={})",
-        track.name,
-        track.id
-    );
+    log::info!(">>> ksm_gov_bynum_{} (track_id={})", track.name, track.id);
 
-    let submitted = extrinsic_submitter::submit_governance_referendum(
-        &ctx.ah_client, track, "Origins",
-    )
-    .await?;
+    let submitted =
+        extrinsic_submitter::submit_governance_referendum(&ctx.ah_client, track, "Origins").await?;
 
     let fork_url = format!("{},{}", ctx.asset_hub_ws_uri, submitted.block_number);
 
@@ -964,20 +979,11 @@ async fn run_kusama_fellowship_create_test(
     runner: &ToolRunner,
     track: &tracks::FellowshipTrack,
 ) -> Result<()> {
-    log::info!(
-        ">>> ksm_fell_create_{} (track_id={})",
-        track.name,
-        track.id
-    );
+    log::info!(">>> ksm_fell_create_{} (track_id={})", track.name, track.id);
 
     // On Kusama, fellowship is on the relay chain; origin variant is "Origins"
     let (preimage_hex, submit_hex) =
-        call_data::generate_fellowship_track_call_data(
-            &ctx.relay_client,
-            track,
-            "Origins",
-        )
-        .await?;
+        call_data::generate_fellowship_track_call_data(&ctx.relay_client, track, "Origins").await?;
 
     let port = port_allocator::next_port();
     let output = runner
@@ -1007,21 +1013,14 @@ async fn run_kusama_fellowship_bynum_test(
     runner: &ToolRunner,
     track: &tracks::FellowshipTrack,
 ) -> Result<()> {
-    log::info!(
-        ">>> ksm_fell_bynum_{} (track_id={})",
-        track.name,
-        track.id
-    );
+    log::info!(">>> ksm_fell_bynum_{} (track_id={})", track.name, track.id);
 
     // On Kusama, fellowship is on the relay chain; origin variant is "Origins"
-    let submitted = extrinsic_submitter::submit_fellowship_referendum(
-        &ctx.relay_client, track, "Origins",
-    )
-    .await?;
+    let submitted =
+        extrinsic_submitter::submit_fellowship_referendum(&ctx.relay_client, track, "Origins")
+            .await?;
 
-    let fellowship_fork_url = format!(
-        "{},{}", ctx.relay_ws_uri, submitted.block_number
-    );
+    let fellowship_fork_url = format!("{},{}", ctx.relay_ws_uri, submitted.block_number);
 
     let port = port_allocator::next_port();
     let output = runner
@@ -1052,12 +1051,8 @@ async fn run_kusama_multichain_happy_path(
 ) -> Result<()> {
     log::info!("[ksm_multichain_happy_path] Starting...");
     let (gov_preimage_hex, gov_submit_hex, fellowship_preimage_hex, fellowship_submit_hex) =
-        call_data::generate_relay_upgrade_call_data(
-            &ctx.ah_client,
-            &ctx.relay_client,
-            "Origins",
-        )
-        .await?;
+        call_data::generate_relay_upgrade_call_data(&ctx.ah_client, &ctx.relay_client, "Origins")
+            .await?;
 
     let port = port_allocator::next_port();
     let output = runner

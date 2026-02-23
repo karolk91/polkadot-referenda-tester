@@ -55,10 +55,7 @@ pub async fn generate_governance_call_data(
         "Referenda",
         "submit",
         vec![
-            Value::unnamed_variant(
-                "system",
-                vec![Value::unnamed_variant("Root", vec![])],
-            ),
+            Value::unnamed_variant("system", vec![Value::unnamed_variant("Root", vec![])]),
             Value::unnamed_variant(
                 "Lookup",
                 vec![
@@ -133,10 +130,7 @@ pub async fn generate_relay_upgrade_call_data(
         "Referenda",
         "submit",
         vec![
-            Value::unnamed_variant(
-                "system",
-                vec![Value::unnamed_variant("Root", vec![])],
-            ),
+            Value::unnamed_variant("system", vec![Value::unnamed_variant("Root", vec![])]),
             Value::unnamed_variant(
                 "Lookup",
                 vec![
@@ -158,7 +152,7 @@ pub async fn generate_relay_upgrade_call_data(
     let remark_call = dynamic::tx(
         "System",
         "remark",
-        vec![Value::from_bytes(b"integration-test".to_vec())],
+        vec![Value::from_bytes(b"integration-test")],
     );
     let remark_bytes = coll_client
         .tx()
@@ -259,10 +253,7 @@ pub async fn generate_governance_call_data_with_wrong_preimage(
         "Referenda",
         "submit",
         vec![
-            Value::unnamed_variant(
-                "system",
-                vec![Value::unnamed_variant("Root", vec![])],
-            ),
+            Value::unnamed_variant("system", vec![Value::unnamed_variant("Root", vec![])]),
             Value::unnamed_variant(
                 "Lookup",
                 vec![
@@ -291,7 +282,7 @@ pub async fn generate_remark_referendum_call_data(
     let remark_call = dynamic::tx(
         "System",
         "remark",
-        vec![Value::from_bytes(b"integration-test-remark".to_vec())],
+        vec![Value::from_bytes(b"integration-test-remark")],
     );
     let remark_bytes = ah_client
         .tx()
@@ -321,10 +312,7 @@ pub async fn generate_remark_referendum_call_data(
         "Referenda",
         "submit",
         vec![
-            Value::unnamed_variant(
-                "system",
-                vec![Value::unnamed_variant("Root", vec![])],
-            ),
+            Value::unnamed_variant("system", vec![Value::unnamed_variant("Root", vec![])]),
             Value::unnamed_variant(
                 "Lookup",
                 vec![
@@ -348,7 +336,7 @@ pub async fn generate_pre_call_remark_hex(
     let remark_call = dynamic::tx(
         "System",
         "remark",
-        vec![Value::from_bytes(b"pre-call-test".to_vec())],
+        vec![Value::from_bytes(b"pre-call-test")],
     );
     let bytes = ah_client
         .tx()
@@ -374,7 +362,7 @@ pub async fn generate_fellowship_only_call_data(
     let remark_call = dynamic::tx(
         "System",
         "remark",
-        vec![Value::from_bytes(b"fellowship-only-test".to_vec())],
+        vec![Value::from_bytes(b"fellowship-only-test")],
     );
     let remark_bytes = coll_client
         .tx()

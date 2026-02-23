@@ -59,14 +59,12 @@ pub fn verify_binaries() -> Result<()> {
 
     let polkadot = get_polkadot_binary_path();
     verify_binary(&polkadot).context(format!(
-        "Polkadot binary '{}' (set {} to override)",
-        polkadot, POLKADOT_BINARY_ENV
+        "Polkadot binary '{polkadot}' (set {POLKADOT_BINARY_ENV} to override)"
     ))?;
 
     let parachain = get_parachain_binary_path();
     verify_binary(&parachain).context(format!(
-        "Parachain binary '{}' (set {} to override)",
-        parachain, PARACHAIN_BINARY_ENV
+        "Parachain binary '{parachain}' (set {PARACHAIN_BINARY_ENV} to override)"
     ))?;
 
     Ok(())
