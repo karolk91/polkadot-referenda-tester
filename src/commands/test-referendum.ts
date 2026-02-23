@@ -122,6 +122,12 @@ export async function testReferendum(options: TestOptions): Promise<void> {
       'allow-unresolved-imports': true,
     };
 
+    // If creating a new referendum, inject Alice's account with funds for submission deposit
+    if (options.callToCreateGovernanceReferendum) {
+      chopsticksConfig['import-storage'] = ReferendumCreator.getAliceAccountInjection();
+      logger.debug('Injecting Alice account with funds for referendum creation');
+    }
+
     await chopsticks.setup(chopsticksConfig);
 
     logger.startSpinner('Connecting to Chopsticks instance...');
@@ -158,7 +164,7 @@ export async function testReferendum(options: TestOptions): Promise<void> {
       logger.success(`Referendum #${referendumId} created successfully`);
     }
 
-    if (!referendumId) {
+    if (referendumId === undefined) {
       throw new Error('Referendum ID is required but was not provided or created');
     }
 
@@ -206,7 +212,7 @@ export async function testReferendum(options: TestOptions): Promise<void> {
         result.events.forEach((event, i) => {
           console.log(`  ${i + 1}. ${event.section}.${event.method}`);
           if (event.data) {
-            console.log(`     Data: ${JSON.stringify(event.data, null, 2)}`);
+            console.log(`     Data: ${JSON.stringify(event.data, (_, v) => typeof v === 'bigint' ? v.toString() : v, 2)}`);
           }
         });
       }
@@ -326,7 +332,7 @@ async function testWithFellowship(
     additionalChainBlocks: additionalChainsParsed.map((c) => c.block),
   });
 
-  if (mainRefId) {
+  if (mainRefId !== undefined) {
     logger.info(
       `Fellowship Referendum: ${fellowshipRefId !== undefined ? `#${fellowshipRefId}` : '(creating...)'}`
     );

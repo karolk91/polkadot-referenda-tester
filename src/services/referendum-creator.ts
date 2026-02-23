@@ -3,6 +3,8 @@ import { Binary } from '@polkadot-api/substrate-bindings';
 import { Keyring } from '@polkadot/keyring';
 import { Logger } from '../utils/logger';
 import { ChopsticksManager } from './chopsticks-manager';
+import { parseBlockEvent } from '../utils/event-serializer';
+import { formatDispatchError } from '../utils/dispatch-result';
 
 // Alice's address on Substrate-based chains
 export const ALICE_ADDRESS = '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY';
@@ -35,6 +37,8 @@ export const FELLOWSHIP_STORAGE_INJECTION = {
       [[5, ALICE_ADDRESS], 0],
       [[6, ALICE_ADDRESS], 0],
       [[7, ALICE_ADDRESS], 0],
+      [[8, ALICE_ADDRESS], 0],
+      [[9, ALICE_ADDRESS], 0],
     ],
     IndexToId: [
       [[0, 0], ALICE_ADDRESS],
@@ -45,6 +49,8 @@ export const FELLOWSHIP_STORAGE_INJECTION = {
       [[5, 0], ALICE_ADDRESS],
       [[6, 0], ALICE_ADDRESS],
       [[7, 0], ALICE_ADDRESS],
+      [[8, 0], ALICE_ADDRESS],
+      [[9, 0], ALICE_ADDRESS],
     ],
     MemberCount: [
       [[0], 1],
@@ -55,8 +61,10 @@ export const FELLOWSHIP_STORAGE_INJECTION = {
       [[5], 1],
       [[6], 1],
       [[7], 1],
+      [[8], 1],
+      [[9], 1],
     ],
-    Members: [[[ALICE_ADDRESS], { rank: 7 }]],
+    Members: [[[ALICE_ADDRESS], { rank: 9 }]],
     Voting: [],
   },
 };
@@ -181,6 +189,26 @@ export class ReferendumCreator {
 
     // Create block with the signed transaction included directly
     await this.chopsticks.newBlock({ transactions: [signedSubmitTx] });
+
+    // Inspect events from the submit block to detect dispatch errors
+    try {
+      const events = await api.query.System.Events.getValue();
+      if (events && Array.isArray(events)) {
+        this.logger.debug(`Submit block events (${events.length} total):`);
+        for (const rawEvent of events) {
+          const parsed = parseBlockEvent(rawEvent);
+          this.logger.debug(`  ${parsed.section}.${parsed.method}`);
+          if (parsed.section === 'System' && parsed.method === 'ExtrinsicFailed') {
+            const errMsg = formatDispatchError(parsed.data);
+            this.logger.error(`Extrinsic dispatch failed: ${errMsg}`);
+            this.logger.error(`Full error data: ${JSON.stringify(parsed.data, (_, v) => typeof v === 'bigint' ? v.toString() : v, 2)}`);
+          }
+        }
+      }
+    } catch (eventErr) {
+      this.logger.debug(`Failed to read submit block events: ${eventErr}`);
+    }
+
     await this.chopsticks.newBlock();
 
     this.logger.succeedSpinner('Referendum submitted successfully');

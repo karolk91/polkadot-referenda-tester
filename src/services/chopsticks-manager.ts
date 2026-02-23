@@ -26,7 +26,7 @@ export class ChopsticksManager {
     return manager;
   }
 
-  async setup(config: ChopsticksConfig): Promise<any> {
+  async setup(config: ChopsticksConfig, networkKey?: string): Promise<any> {
     try {
       this.logger.startSpinner('Starting Chopsticks local environment...');
 
@@ -50,16 +50,20 @@ export class ChopsticksManager {
         'runtime-log-level': config['runtime-log-level'] ?? 0,
         ...(config.port && { port: config.port }),
         ...(config.block && { block: config.block }),
+        ...(config['import-storage'] && { 'import-storage': config['import-storage'] }),
       } as Config;
 
       this.logger.debug(`Chopsticks config: ${JSON.stringify(chopsticksConfig, null, 2)}`);
 
-      // Setup the network using setupNetworks with a generic key
+      // Use the provided networkKey or default to "chain".
+      // For relay chains, the key should match the network name (e.g. "kusama", "polkadot")
+      // so that setupNetworks correctly identifies it as a relay and skips connectParachains.
+      const key = networkKey || 'chain';
       const networks = await setupNetworks({
-        chain: chopsticksConfig,
+        [key]: chopsticksConfig,
       });
 
-      this.context = networks.chain;
+      this.context = networks[key];
 
       const endpoint = this.context.ws.endpoint;
       this.logger.succeedSpinner(`Chopsticks started at ${endpoint}`);

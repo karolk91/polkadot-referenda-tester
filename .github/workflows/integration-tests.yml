@@ -1,0 +1,156 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  POLKADOT_SDK_VERSION: polkadot-stable2512
+  BIN_DIR: ${{ github.workspace }}/.polkadot-bin
+
+jobs:
+  # --- Fast validation (no network, no binaries) ---
+  validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    name: validation
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.2.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: yarn
+
+      - name: Install JS dependencies
+        run: yarn install --immutable
+
+      - name: Build TypeScript CLI
+        run: yarn build
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+        with:
+          workspaces: integration-tests
+          shared-key: integration-tests
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Run validation tests
+        run: |
+          cd integration-tests
+          cargo test validation_test_suite -- --nocapture
+        env:
+          TOOL_PROJECT_DIR: ${{ github.workspace }}
+          RUST_LOG: info
+
+  # --- Network integration tests (parallel matrix) ---
+  integration-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - name: polkadot-governance
+            filter: polkadot_governance_all_tracks
+          - name: polkadot-fellowship-part1
+            filter: polkadot_fellowship_tracks_part1
+          - name: polkadot-fellowship-part2
+            filter: polkadot_fellowship_tracks_part2
+          - name: kusama-governance
+            filter: kusama_governance_all_tracks
+          - name: kusama-fellowship
+            filter: kusama_fellowship_all_tracks
+
+    name: ${{ matrix.suite.name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.2.2
+
+      - name: Free disk space
+        if: runner.environment == 'github-hosted'
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        with:
+          tool-cache: false
+
+      # --- Cache and download Polkadot SDK binaries ---
+      - name: Cache Polkadot SDK binaries
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.2.2
+        id: bin-cache
+        with:
+          path: ${{ env.BIN_DIR }}
+          key: polkadot-bin-${{ env.POLKADOT_SDK_VERSION }}-linux-x86_64
+
+      - name: Download Polkadot SDK binaries
+        if: steps.bin-cache.outputs.cache-hit != 'true'
+        run: ./scripts/download-binaries.sh
+
+      - name: Add binaries to PATH
+        run: |
+          chmod +x "${{ env.BIN_DIR }}"/*
+          echo "${{ env.BIN_DIR }}" >> "$GITHUB_PATH"
+          polkadot --version
+          polkadot-parachain --version
+
+      # --- Node.js setup ---
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: yarn
+
+      - name: Install JS dependencies
+        run: yarn install --immutable
+
+      - name: Build TypeScript CLI
+        run: yarn build
+
+      # --- Rust setup ---
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+        with:
+          workspaces: integration-tests
+          shared-key: integration-tests
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # --- Run tests ---
+      - name: Run ${{ matrix.suite.name }} tests
+        run: |
+          cd integration-tests
+          cargo test "${TEST_FILTER}" -- --nocapture
+        env:
+          TEST_FILTER: ${{ matrix.suite.filter }}
+          POLKADOT_BINARY_PATH: ${{ env.BIN_DIR }}/polkadot
+          POLKADOT_PARACHAIN_BINARY_PATH: ${{ env.BIN_DIR }}/polkadot-parachain
+          TOOL_PROJECT_DIR: ${{ github.workspace }}
+          RUST_LOG: info
+
+      # --- Collect logs on failure ---
+      - name: Upload zombienet logs on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: zombienet-logs-${{ matrix.suite.name }}-${{ github.run_id }}
+          path: /tmp/zombie-*/**/*.log
+          retention-days: 7

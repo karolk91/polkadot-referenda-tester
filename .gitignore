@@ -35,9 +35,12 @@ lerna-debug.log*
 .env.test.local
 .env.production.local
 
-# IDEs
+# IDEs and tools
 .idea/
 .vscode/
+
+# Claude Code (commit skills/rules/agents, ignore personal settings)
+.claude/settings.local.json
 *.swp
 *.swo
 *~
@@ -53,3 +56,11 @@ coverage/
 tmp/
 
 .chopsticks*
+
+# Integration tests
+bin/
+integration-tests/target/
+.polkadot-bin/
+
+# Build cache for fast-runtime WASMs (the WASMs themselves are committed)
+.cache/fellows-runtimes/
