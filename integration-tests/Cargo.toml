@@ -11,6 +11,10 @@ autotests = false
 name = "tests"
 path = "tests/tests.rs"
 
+[[test]]
+name = "generate_chain_specs"
+path = "tests/generate_chain_specs.rs"
+
 [dependencies]
 anyhow = "1"
 env_logger = "0.11"

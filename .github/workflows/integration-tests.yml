@@ -17,17 +17,137 @@ concurrency:
 env:
   POLKADOT_SDK_VERSION: polkadot-stable2512
   BIN_DIR: ${{ github.workspace }}/.polkadot-bin
+  CHAINSPEC_CACHE_KEY: chainspecs-${{ hashFiles('runtimes/fast/*.wasm', 'integration-tests/tests/generate_chain_specs.rs') }}
 
 jobs:
   # --- Fast validation (no network, no binaries) ---
   validation:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    needs: build
     name: validation
 
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.2.2
+
+      - name: Download dist
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dist
+          path: dist/
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: yarn
+
+      - name: Install JS dependencies
+        run: yarn install --immutable
+
+      - name: Download test binary
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: test-binary
+          path: integration-tests/
+
+      - name: Run validation tests
+        run: |
+          chmod +x integration-tests/test-binary
+          integration-tests/test-binary validation_test_suite --nocapture
+        env:
+          TOOL_PROJECT_DIR: ${{ github.workspace }}
+          RUST_LOG: info
+
+  # --- Generate chain specs (runs once, cached for all matrix jobs) ---
+  generate-specs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    name: generate-specs
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.2.2
+
+      - name: Restore chain specs cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.2.2
+        id: chainspec-cache
+        with:
+          path: chain-specs
+          key: ${{ env.CHAINSPEC_CACHE_KEY }}
+
+      # Everything below is skipped on cache hit
+      - name: Free disk space
+        if: steps.chainspec-cache.outputs.cache-hit != 'true' && runner.environment == 'github-hosted'
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        with:
+          tool-cache: false
+
+      - name: Cache Polkadot SDK binaries
+        if: steps.chainspec-cache.outputs.cache-hit != 'true'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.2.2
+        id: bin-cache
+        with:
+          path: ${{ env.BIN_DIR }}
+          key: polkadot-bin-${{ env.POLKADOT_SDK_VERSION }}-linux-x86_64
+
+      - name: Download Polkadot SDK binaries
+        if: steps.chainspec-cache.outputs.cache-hit != 'true' && steps.bin-cache.outputs.cache-hit != 'true'
+        run: ./scripts/download-binaries.sh
+
+      - name: Verify binaries
+        if: steps.chainspec-cache.outputs.cache-hit != 'true'
+        run: |
+          chmod +x "${BIN_DIR}"/*
+          "${BIN_DIR}/polkadot" --version
+          "${BIN_DIR}/polkadot-parachain" --version
+
+      - name: Install protoc
+        if: steps.chainspec-cache.outputs.cache-hit != 'true'
+        run: sudo apt-get install -y protobuf-compiler
+
+      - name: Install Rust toolchain
+        if: steps.chainspec-cache.outputs.cache-hit != 'true'
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+
+      - name: Rust cache
+        if: steps.chainspec-cache.outputs.cache-hit != 'true'
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+        with:
+          workspaces: integration-tests
+          shared-key: integration-tests
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Generate raw chain specs via zombienet
+        if: steps.chainspec-cache.outputs.cache-hit != 'true'
+        run: |
+          cd integration-tests
+          cargo test --test generate_chain_specs -- --nocapture
+        env:
+          CHAIN_SPECS_DIR: ${{ github.workspace }}/chain-specs
+          POLKADOT_BINARY_PATH: ${{ env.BIN_DIR }}/polkadot
+          POLKADOT_PARACHAIN_BINARY_PATH: ${{ env.BIN_DIR }}/polkadot-parachain
+          RUST_LOG: info
+
+      - name: Verify chain specs
+        run: ls -lh chain-specs/
+
+  # --- Build: compile Rust test binary + TS CLI (runs once, shared via artifact) ---
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    name: build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.2.2
+
+      - name: Free disk space
+        if: runner.environment == 'github-hosted'
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        with:
+          tool-cache: false
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -40,6 +160,13 @@ jobs:
 
       - name: Build TypeScript CLI
         run: yarn build
+
+      - name: Upload dist
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist
+          path: dist/
+          retention-days: 1
 
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
@@ -54,18 +181,34 @@ jobs:
           shared-key: integration-tests
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Run validation tests
+      - name: Compile integration test binary
         run: |
           cd integration-tests
-          cargo test validation_test_suite -- --nocapture
-        env:
-          TOOL_PROJECT_DIR: ${{ github.workspace }}
-          RUST_LOG: info
+          BINARY_PATH=$(cargo test --no-run --test tests --message-format=json 2>build.log | \
+            jq -r 'select(.reason == "compiler-artifact" and .target.name == "tests" and .executable != null) | .executable' | \
+            tail -1)
+          cat build.log
+          if [ -z "${BINARY_PATH}" ] || [ ! -f "${BINARY_PATH}" ]; then
+            echo "ERROR: Failed to find test binary"
+            exit 1
+          fi
+          echo "Test binary: ${BINARY_PATH}"
+          ls -lh "${BINARY_PATH}"
+          cp "${BINARY_PATH}" test-binary
 
-  # --- Network integration tests (parallel matrix) ---
+      - name: Upload test binary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: test-binary
+          path: integration-tests/test-binary
+          retention-days: 1
+          compression-level: 6
+
+  # --- Network integration tests (parallel matrix, after specs + build are ready) ---
   integration-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    needs: [generate-specs, build]
 
     strategy:
       fail-fast: false
@@ -94,6 +237,14 @@ jobs:
         with:
           tool-cache: false
 
+      # --- Restore cached chain specs (generated by generate-specs job) ---
+      - name: Restore chain specs cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.2.2
+        with:
+          path: chain-specs
+          key: ${{ env.CHAINSPEC_CACHE_KEY }}
+          fail-on-cache-miss: true
+
       # --- Cache and download Polkadot SDK binaries ---
       - name: Cache Polkadot SDK binaries
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.2.2
@@ -113,7 +264,13 @@ jobs:
           "${BIN_DIR}/polkadot" --version
           "${BIN_DIR}/polkadot-parachain" --version
 
-      # --- Node.js setup ---
+      # --- Download pre-built artifacts ---
+      - name: Download dist
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dist
+          path: dist/
+
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -123,33 +280,23 @@ jobs:
       - name: Install JS dependencies
         run: yarn install --immutable
 
-      - name: Build TypeScript CLI
-        run: yarn build
-
-      # --- Rust setup ---
-      - name: Install protoc
-        run: sudo apt-get install -y protobuf-compiler
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+      - name: Download test binary
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          workspaces: integration-tests
-          shared-key: integration-tests
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          name: test-binary
+          path: integration-tests/
 
-      # --- Run tests ---
+      # --- Run tests (using pre-compiled binary, no Rust needed) ---
       - name: Run ${{ matrix.suite.name }} tests
         run: |
-          cd integration-tests
-          cargo test "${TEST_FILTER}" -- --nocapture
+          chmod +x integration-tests/test-binary
+          integration-tests/test-binary "${TEST_FILTER}" --nocapture
         env:
           TEST_FILTER: ${{ matrix.suite.filter }}
           POLKADOT_BINARY_PATH: ${{ env.BIN_DIR }}/polkadot
           POLKADOT_PARACHAIN_BINARY_PATH: ${{ env.BIN_DIR }}/polkadot-parachain
           TOOL_PROJECT_DIR: ${{ github.workspace }}
+          CHAIN_SPECS_DIR: ${{ github.workspace }}/chain-specs
           RUST_LOG: info
 
       # --- Collect logs on failure ---

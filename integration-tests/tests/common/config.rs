@@ -8,6 +8,10 @@ pub const DEFAULT_PARACHAIN_BINARY: &str = "polkadot-parachain";
 // Default: ../runtimes/fast/ (relative to integration-tests crate root)
 pub const RUNTIMES_DIR_ENV: &str = "FAST_RUNTIMES_DIR";
 
+// Environment variable for pre-generated raw chain specs directory.
+// When set and the directory contains cached specs, zombienet skips spec generation.
+pub const CHAIN_SPECS_DIR_ENV: &str = "CHAIN_SPECS_DIR";
+
 // Timeouts (seconds).
 pub const TOOL_EXECUTION_TIMEOUT_SECS: u64 = 600; // 10 min for full referendum sim
 
@@ -48,6 +52,42 @@ fn relay_genesis_overrides() -> serde_json::Value {
             }
         }
     })
+}
+
+/// Resolve the directory containing pre-generated raw chain specs, if available.
+fn get_chain_specs_dir() -> Option<PathBuf> {
+    let dir = if let Ok(dir) = std::env::var(CHAIN_SPECS_DIR_ENV) {
+        PathBuf::from(dir)
+    } else {
+        let cwd = std::env::current_dir().expect("cannot get cwd");
+        let project_root = cwd.parent().unwrap_or(&cwd);
+        project_root.join("chain-specs")
+    };
+    if dir.is_dir() {
+        Some(dir)
+    } else {
+        None
+    }
+}
+
+/// Get the path to a pre-generated raw chain spec, if it exists.
+///
+/// Returns `Some(path)` when a cached `<name>-raw.json` file is found in the
+/// chain specs directory. When present, zombienet loads the raw spec directly
+/// and skips WASM execution + raw conversion (~3-5 min savings per chain).
+///
+/// **Important**: Cached relay specs must include parachain genesis data.
+/// Use `generate_chain_specs` test to generate specs via zombienet, which
+/// bakes parachain genesis (code + head) into the relay spec automatically.
+fn cached_chain_spec(name: &str) -> Option<String> {
+    let dir = get_chain_specs_dir()?;
+    let path = dir.join(format!("{name}-raw.json"));
+    if path.exists() {
+        let abs = path.canonicalize().unwrap_or(path);
+        Some(abs.to_string_lossy().to_string())
+    } else {
+        None
+    }
 }
 
 /// Resolve the directory containing fast-runtime WASM files.
@@ -114,29 +154,40 @@ pub fn build_polkadot_with_asset_hub() -> anyhow::Result<NetworkConfig> {
     log::info!("Relay binary: {relay_binary}");
     log::info!("Parachain binary: {para_binary}");
 
-    let relay_runtime_url = polkadot_runtime_url();
-    let ah_runtime_url = asset_hub_runtime_url();
-
-    log::info!("Relay runtime: {relay_runtime_url}");
-    log::info!("Asset Hub runtime: {ah_runtime_url}");
+    let cached_relay = cached_chain_spec("polkadot-local");
+    let cached_ah = cached_chain_spec("asset-hub-polkadot-local");
 
     NetworkConfigBuilder::new()
         .with_relaychain(|relaychain| {
-            relaychain
+            let r = relaychain
                 .with_chain("polkadot-local")
-                .with_default_command(relay_binary.as_str())
-                .with_chain_spec_runtime(relay_runtime_url.as_str(), None)
-                .with_genesis_overrides(relay_genesis_overrides())
-                .with_validator(|node| node.with_name("alice"))
+                .with_default_command(relay_binary.as_str());
+            let r = if let Some(ref spec) = cached_relay {
+                log::info!("Using cached relay chain spec: {spec}");
+                r.with_chain_spec_path(spec.as_str())
+            } else {
+                let url = polkadot_runtime_url();
+                log::info!("Generating relay chain spec from runtime: {url}");
+                r.with_chain_spec_runtime(url.as_str(), None)
+                    .with_genesis_overrides(relay_genesis_overrides())
+            };
+            r.with_validator(|node| node.with_name("alice"))
                 .with_validator(|node| node.with_name("bob"))
         })
         .with_parachain(|parachain| {
-            parachain
+            let p = parachain
                 .with_id(1000)
                 .with_chain("asset-hub-polkadot-local")
-                .with_default_command(para_binary.as_str())
-                .with_chain_spec_runtime(ah_runtime_url.as_str(), None)
-                .with_raw_spec_override(raw_storage::ah_migrator_override())
+                .with_default_command(para_binary.as_str());
+            let p = if let Some(ref spec) = cached_ah {
+                log::info!("Using cached Asset Hub chain spec: {spec}");
+                p.with_chain_spec_path(spec.as_str())
+            } else {
+                let url = asset_hub_runtime_url();
+                log::info!("Generating Asset Hub chain spec from runtime: {url}");
+                p.with_chain_spec_runtime(url.as_str(), None)
+            };
+            p.with_raw_spec_override(raw_storage::ah_migrator_override())
                 .cumulus_based(true)
                 .with_collator(|c| {
                     c.with_name("asset-hub-collator")
@@ -166,31 +217,41 @@ pub fn build_polkadot_with_system_parachains() -> anyhow::Result<NetworkConfig> 
     log::info!("Relay binary: {relay_binary}");
     log::info!("Parachain binary: {para_binary}");
 
-    let relay_runtime_url = polkadot_runtime_url();
-    let ah_runtime_url = asset_hub_runtime_url();
-    let coll_runtime_url = collectives_runtime_url();
-
-    log::info!("Relay runtime: {relay_runtime_url}");
-    log::info!("Asset Hub runtime: {ah_runtime_url}");
-    log::info!("Collectives runtime: {coll_runtime_url}");
+    let cached_relay = cached_chain_spec("polkadot-local");
+    let cached_ah = cached_chain_spec("asset-hub-polkadot-local");
+    let cached_coll = cached_chain_spec("collectives-polkadot-local");
 
     NetworkConfigBuilder::new()
         .with_relaychain(|relaychain| {
-            relaychain
+            let r = relaychain
                 .with_chain("polkadot-local")
-                .with_default_command(relay_binary.as_str())
-                .with_chain_spec_runtime(relay_runtime_url.as_str(), None)
-                .with_genesis_overrides(relay_genesis_overrides())
-                .with_validator(|node| node.with_name("alice"))
+                .with_default_command(relay_binary.as_str());
+            let r = if let Some(ref spec) = cached_relay {
+                log::info!("Using cached relay chain spec: {spec}");
+                r.with_chain_spec_path(spec.as_str())
+            } else {
+                let url = polkadot_runtime_url();
+                log::info!("Generating relay chain spec from runtime: {url}");
+                r.with_chain_spec_runtime(url.as_str(), None)
+                    .with_genesis_overrides(relay_genesis_overrides())
+            };
+            r.with_validator(|node| node.with_name("alice"))
                 .with_validator(|node| node.with_name("bob"))
         })
         .with_parachain(|parachain| {
-            parachain
+            let p = parachain
                 .with_id(1000)
                 .with_chain("asset-hub-polkadot-local")
-                .with_default_command(para_binary.as_str())
-                .with_chain_spec_runtime(ah_runtime_url.as_str(), None)
-                .with_raw_spec_override(raw_storage::ah_migrator_override())
+                .with_default_command(para_binary.as_str());
+            let p = if let Some(ref spec) = cached_ah {
+                log::info!("Using cached Asset Hub chain spec: {spec}");
+                p.with_chain_spec_path(spec.as_str())
+            } else {
+                let url = asset_hub_runtime_url();
+                log::info!("Generating Asset Hub chain spec from runtime: {url}");
+                p.with_chain_spec_runtime(url.as_str(), None)
+            };
+            p.with_raw_spec_override(raw_storage::ah_migrator_override())
                 .cumulus_based(true)
                 .with_collator(|c| {
                     c.with_name("asset-hub-collator")
@@ -199,12 +260,19 @@ pub fn build_polkadot_with_system_parachains() -> anyhow::Result<NetworkConfig> 
                 })
         })
         .with_parachain(|parachain| {
-            parachain
+            let p = parachain
                 .with_id(1001)
                 .with_chain("collectives-polkadot-local")
-                .with_default_command(para_binary.as_str())
-                .with_chain_spec_runtime(coll_runtime_url.as_str(), None)
-                .with_raw_spec_override(raw_storage::fellowship_collective_override())
+                .with_default_command(para_binary.as_str());
+            let p = if let Some(ref spec) = cached_coll {
+                log::info!("Using cached Collectives chain spec: {spec}");
+                p.with_chain_spec_path(spec.as_str())
+            } else {
+                let url = collectives_runtime_url();
+                log::info!("Generating Collectives chain spec from runtime: {url}");
+                p.with_chain_spec_runtime(url.as_str(), None)
+            };
+            p.with_raw_spec_override(raw_storage::fellowship_collective_override())
                 .cumulus_based(true)
                 .with_collator(|c| {
                     c.with_name("collectives-collator")
@@ -234,30 +302,41 @@ pub fn build_kusama_with_asset_hub() -> anyhow::Result<NetworkConfig> {
     log::info!("Relay binary: {relay_binary}");
     log::info!("Parachain binary: {para_binary}");
 
-    let relay_runtime_url = kusama_runtime_url();
-    let ah_runtime_url = kusama_asset_hub_runtime_url();
-
-    log::info!("Kusama relay runtime: {relay_runtime_url}");
-    log::info!("Kusama Asset Hub runtime: {ah_runtime_url}");
+    let cached_relay = cached_chain_spec("kusama-local");
+    let cached_ah = cached_chain_spec("asset-hub-kusama-local");
 
     NetworkConfigBuilder::new()
         .with_relaychain(|relaychain| {
-            relaychain
+            let r = relaychain
                 .with_chain("kusama-local")
-                .with_default_command(relay_binary.as_str())
-                .with_chain_spec_runtime(relay_runtime_url.as_str(), None)
-                .with_genesis_overrides(relay_genesis_overrides())
-                .with_raw_spec_override(raw_storage::fellowship_collective_override())
+                .with_default_command(relay_binary.as_str());
+            let r = if let Some(ref spec) = cached_relay {
+                log::info!("Using cached Kusama relay chain spec: {spec}");
+                r.with_chain_spec_path(spec.as_str())
+            } else {
+                let url = kusama_runtime_url();
+                log::info!("Generating Kusama relay chain spec from runtime: {url}");
+                r.with_chain_spec_runtime(url.as_str(), None)
+                    .with_genesis_overrides(relay_genesis_overrides())
+            };
+            r.with_raw_spec_override(raw_storage::fellowship_collective_override())
                 .with_validator(|node| node.with_name("alice"))
                 .with_validator(|node| node.with_name("bob"))
         })
         .with_parachain(|parachain| {
-            parachain
+            let p = parachain
                 .with_id(1000)
                 .with_chain("asset-hub-kusama-local")
-                .with_default_command(para_binary.as_str())
-                .with_chain_spec_runtime(ah_runtime_url.as_str(), None)
-                .with_raw_spec_override(raw_storage::ah_migrator_override())
+                .with_default_command(para_binary.as_str());
+            let p = if let Some(ref spec) = cached_ah {
+                log::info!("Using cached Kusama Asset Hub chain spec: {spec}");
+                p.with_chain_spec_path(spec.as_str())
+            } else {
+                let url = kusama_asset_hub_runtime_url();
+                log::info!("Generating Kusama Asset Hub chain spec from runtime: {url}");
+                p.with_chain_spec_runtime(url.as_str(), None)
+            };
+            p.with_raw_spec_override(raw_storage::ah_migrator_override())
                 .cumulus_based(true)
                 .with_collator(|c| {
                     c.with_name("asset-hub-collator")
