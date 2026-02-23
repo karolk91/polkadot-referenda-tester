@@ -41,6 +41,9 @@ jobs:
       - name: Build TypeScript CLI
         run: yarn build
 
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
 
@@ -103,12 +106,12 @@ jobs:
         if: steps.bin-cache.outputs.cache-hit != 'true'
         run: ./scripts/download-binaries.sh
 
-      - name: Add binaries to PATH
+      - name: Verify and add binaries to PATH
         run: |
-          chmod +x "${{ env.BIN_DIR }}"/*
-          echo "${{ env.BIN_DIR }}" >> "$GITHUB_PATH"
-          polkadot --version
-          polkadot-parachain --version
+          chmod +x "${BIN_DIR}"/*
+          echo "${BIN_DIR}" >> "$GITHUB_PATH"
+          "${BIN_DIR}/polkadot" --version
+          "${BIN_DIR}/polkadot-parachain" --version
 
       # --- Node.js setup ---
       - name: Setup Node.js
@@ -124,6 +127,9 @@ jobs:
         run: yarn build
 
       # --- Rust setup ---
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
 
