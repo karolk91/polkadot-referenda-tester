@@ -54,6 +54,19 @@ fn relay_genesis_overrides() -> serde_json::Value {
     })
 }
 
+/// Genesis overrides for Asset Hub parachains.
+///
+/// Disables `devStakers` which otherwise generates 27K+ test staker accounts
+/// during raw spec conversion, adding ~8 min and ~70 MB to the chain spec.
+/// Our governance tests don't need staking test data.
+fn parachain_genesis_overrides() -> serde_json::Value {
+    json!({
+        "staking": {
+            "devStakers": null
+        }
+    })
+}
+
 /// Resolve the directory containing pre-generated raw chain specs, if available.
 fn get_chain_specs_dir() -> Option<PathBuf> {
     let dir = if let Ok(dir) = std::env::var(CHAIN_SPECS_DIR_ENV) {
@@ -186,6 +199,7 @@ pub fn build_polkadot_with_asset_hub() -> anyhow::Result<NetworkConfig> {
                 let url = asset_hub_runtime_url();
                 log::info!("Generating Asset Hub chain spec from runtime: {url}");
                 p.with_chain_spec_runtime(url.as_str(), None)
+                    .with_genesis_overrides(parachain_genesis_overrides())
             };
             p.with_raw_spec_override(raw_storage::ah_migrator_override())
                 .cumulus_based(true)
@@ -250,6 +264,7 @@ pub fn build_polkadot_with_system_parachains() -> anyhow::Result<NetworkConfig> 
                 let url = asset_hub_runtime_url();
                 log::info!("Generating Asset Hub chain spec from runtime: {url}");
                 p.with_chain_spec_runtime(url.as_str(), None)
+                    .with_genesis_overrides(parachain_genesis_overrides())
             };
             p.with_raw_spec_override(raw_storage::ah_migrator_override())
                 .cumulus_based(true)
@@ -335,6 +350,7 @@ pub fn build_kusama_with_asset_hub() -> anyhow::Result<NetworkConfig> {
                 let url = kusama_asset_hub_runtime_url();
                 log::info!("Generating Kusama Asset Hub chain spec from runtime: {url}");
                 p.with_chain_spec_runtime(url.as_str(), None)
+                    .with_genesis_overrides(parachain_genesis_overrides())
             };
             p.with_raw_spec_override(raw_storage::ah_migrator_override())
                 .cumulus_based(true)
