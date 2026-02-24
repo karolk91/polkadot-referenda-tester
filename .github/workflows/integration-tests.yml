@@ -136,7 +136,8 @@ jobs:
           MONITOR_PID=$!
 
           chmod +x integration-tests/generate_chain_specs-binary
-          integration-tests/generate_chain_specs-binary generate_chain_specs --nocapture
+          cd integration-tests
+          ./generate_chain_specs-binary generate_chain_specs --nocapture
           EXIT_CODE=$?
 
           kill $MONITOR_PID 2>/dev/null || true
@@ -220,12 +221,14 @@ jobs:
             ls -lh "${BIN}"
             cp "${BIN}" "${name}-binary"
           done
+          # Rename to match expected artifact filename
+          mv tests-binary test-binary
 
       - name: Upload test binary
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: test-binary
-          path: integration-tests/tests-binary
+          path: integration-tests/test-binary
           retention-days: 1
           compression-level: 6
 
