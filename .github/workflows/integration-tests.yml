@@ -62,7 +62,8 @@ jobs:
   # --- Generate chain specs (runs once, cached for all matrix jobs) ---
   generate-specs:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 30
+    needs: build
     name: generate-specs
 
     steps:
@@ -74,7 +75,7 @@ jobs:
         id: chainspec-cache
         with:
           path: chain-specs
-          key: chainspecs-${{ hashFiles('runtimes/fast/*.wasm', 'integration-tests/tests/generate_chain_specs.rs') }}
+          key: chainspecs-${{ hashFiles('runtimes/fast/*.wasm', 'integration-tests/tests/generate_chain_specs.rs', 'integration-tests/tests/common/config.rs') }}
 
       # Everything below is skipped on cache hit
       - name: Free disk space
@@ -102,27 +103,44 @@ jobs:
           "${BIN_DIR}/polkadot" --version
           "${BIN_DIR}/polkadot-parachain" --version
 
-      - name: Install protoc
+      - name: Download generate-specs binary
         if: steps.chainspec-cache.outputs.cache-hit != 'true'
-        run: sudo apt-get install -y protobuf-compiler
-
-      - name: Install Rust toolchain
-        if: steps.chainspec-cache.outputs.cache-hit != 'true'
-        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
-
-      - name: Rust cache
-        if: steps.chainspec-cache.outputs.cache-hit != 'true'
-        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          workspaces: integration-tests
-          shared-key: integration-tests
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          name: generate-specs-binary
+          path: integration-tests/
 
       - name: Generate raw chain specs via zombienet
         if: steps.chainspec-cache.outputs.cache-hit != 'true'
         run: |
-          cd integration-tests
-          cargo test --test generate_chain_specs -- --nocapture
+          # Background monitor: log system state every 30s
+          (
+            while true; do
+              echo "=== MONITOR $(date -u +%H:%M:%S) ==="
+              echo "-- Memory --"
+              free -h
+              echo "-- Disk --"
+              df -h / | tail -1
+              echo "-- polkadot processes --"
+              ps aux | grep -E 'polkadot|build-spec' | grep -v grep || echo "(none)"
+              echo "-- zombienet temp files --"
+              find /tmp/zombie-* -name '*.json' -printf '%s %p\n' 2>/dev/null | sort -rn | head -5 || echo "(none)"
+              echo "-- chain-specs dir --"
+              ls -lh chain-specs/ 2>/dev/null || echo "(empty)"
+              echo "-- dmesg OOM (last 5) --"
+              dmesg -T 2>/dev/null | grep -i 'oom\|killed' | tail -5 || echo "(no oom)"
+              echo ""
+              sleep 30
+            done
+          ) &
+          MONITOR_PID=$!
+
+          chmod +x integration-tests/generate_chain_specs-binary
+          integration-tests/generate_chain_specs-binary generate_chain_specs --nocapture
+          EXIT_CODE=$?
+
+          kill $MONITOR_PID 2>/dev/null || true
+          exit $EXIT_CODE
         env:
           CHAIN_SPECS_DIR: ${{ github.workspace }}/chain-specs
           POLKADOT_BINARY_PATH: ${{ env.BIN_DIR }}/polkadot
@@ -180,26 +198,42 @@ jobs:
           shared-key: integration-tests
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Compile integration test binary
+      - name: Compile integration test binaries
         run: |
           cd integration-tests
-          BINARY_PATH=$(cargo test --no-run --test tests --message-format=json 2>build.log | \
-            jq -r 'select(.reason == "compiler-artifact" and .target.name == "tests" and .executable != null) | .executable' | \
-            tail -1)
+          # Compile both test targets in one cargo invocation
+          cargo test --no-run --test tests --test generate_chain_specs --message-format=json 2>build.log | \
+            jq -r 'select(.reason == "compiler-artifact" and .executable != null) | "\(.target.name) \(.executable)"' > binaries.txt
           cat build.log
-          if [ -z "${BINARY_PATH}" ] || [ ! -f "${BINARY_PATH}" ]; then
-            echo "ERROR: Failed to find test binary"
-            exit 1
-          fi
-          echo "Test binary: ${BINARY_PATH}"
-          ls -lh "${BINARY_PATH}"
-          cp "${BINARY_PATH}" test-binary
+
+          # Extract binary paths
+          TESTS_BIN=$(grep "^tests " binaries.txt | tail -1 | cut -d' ' -f2)
+          GENSPECS_BIN=$(grep "^generate_chain_specs " binaries.txt | tail -1 | cut -d' ' -f2)
+
+          for name in tests generate_chain_specs; do
+            BIN=$(grep "^${name} " binaries.txt | tail -1 | cut -d' ' -f2)
+            if [ -z "${BIN}" ] || [ ! -f "${BIN}" ]; then
+              echo "ERROR: Failed to find ${name} binary"
+              exit 1
+            fi
+            echo "${name}: ${BIN}"
+            ls -lh "${BIN}"
+            cp "${BIN}" "${name}-binary"
+          done
 
       - name: Upload test binary
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: test-binary
-          path: integration-tests/test-binary
+          path: integration-tests/tests-binary
+          retention-days: 1
+          compression-level: 6
+
+      - name: Upload generate-specs binary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: generate-specs-binary
+          path: integration-tests/generate_chain_specs-binary
           retention-days: 1
           compression-level: 6
 
@@ -241,7 +275,7 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.2.2
         with:
           path: chain-specs
-          key: chainspecs-${{ hashFiles('runtimes/fast/*.wasm', 'integration-tests/tests/generate_chain_specs.rs') }}
+          key: chainspecs-${{ hashFiles('runtimes/fast/*.wasm', 'integration-tests/tests/generate_chain_specs.rs', 'integration-tests/tests/common/config.rs') }}
           fail-on-cache-miss: true
 
       # --- Cache and download Polkadot SDK binaries ---
