@@ -184,8 +184,14 @@ pub fn build_polkadot_with_asset_hub() -> anyhow::Result<NetworkConfig> {
                 r.with_chain_spec_runtime(url.as_str(), None)
                     .with_genesis_overrides(relay_genesis_overrides())
             };
-            r.with_validator(|node| node.with_name("alice"))
-                .with_validator(|node| node.with_name("bob"))
+            r.with_validator(|node| {
+                    node.with_name("alice")
+                        .with_args(vec![Arg::Option("--state-pruning".into(), "archive".into())])
+                })
+                .with_validator(|node| {
+                    node.with_name("bob")
+                        .with_args(vec![Arg::Option("--state-pruning".into(), "archive".into())])
+                })
         })
         .with_parachain(|parachain| {
             let p = parachain
@@ -252,8 +258,14 @@ pub fn build_polkadot_with_system_parachains() -> anyhow::Result<NetworkConfig> 
                 r.with_chain_spec_runtime(url.as_str(), None)
                     .with_genesis_overrides(relay_genesis_overrides())
             };
-            r.with_validator(|node| node.with_name("alice"))
-                .with_validator(|node| node.with_name("bob"))
+            r.with_validator(|node| {
+                    node.with_name("alice")
+                        .with_args(vec![Arg::Option("--state-pruning".into(), "archive".into())])
+                })
+                .with_validator(|node| {
+                    node.with_name("bob")
+                        .with_args(vec![Arg::Option("--state-pruning".into(), "archive".into())])
+                })
         })
         .with_parachain(|parachain| {
             let p = parachain
@@ -344,8 +356,14 @@ pub fn build_kusama_with_asset_hub() -> anyhow::Result<NetworkConfig> {
                     .with_genesis_overrides(relay_genesis_overrides())
             };
             r.with_raw_spec_override(raw_storage::fellowship_collective_override())
-                .with_validator(|node| node.with_name("alice"))
-                .with_validator(|node| node.with_name("bob"))
+                .with_validator(|node| {
+                    node.with_name("alice")
+                        .with_args(vec![Arg::Option("--state-pruning".into(), "archive".into())])
+                })
+                .with_validator(|node| {
+                    node.with_name("bob")
+                        .with_args(vec![Arg::Option("--state-pruning".into(), "archive".into())])
+                })
         })
         .with_parachain(|parachain| {
             let p = parachain
