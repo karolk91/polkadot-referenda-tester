@@ -206,7 +206,10 @@ pub fn build_polkadot_with_asset_hub() -> anyhow::Result<NetworkConfig> {
                 .with_collator(|c| {
                     c.with_name("asset-hub-collator")
                         .with_command(para_binary.as_str())
-                        .with_args(vec![Arg::Option("--authoring".into(), "slot-based".into())])
+                        .with_args(vec![
+                            Arg::Option("--authoring".into(), "slot-based".into()),
+                            Arg::Option("--state-pruning".into(), "archive".into()),
+                        ])
                 })
         })
         .build()
@@ -271,7 +274,10 @@ pub fn build_polkadot_with_system_parachains() -> anyhow::Result<NetworkConfig> 
                 .with_collator(|c| {
                     c.with_name("asset-hub-collator")
                         .with_command(para_binary.as_str())
-                        .with_args(vec![Arg::Option("--authoring".into(), "slot-based".into())])
+                        .with_args(vec![
+                            Arg::Option("--authoring".into(), "slot-based".into()),
+                            Arg::Option("--state-pruning".into(), "archive".into()),
+                        ])
                 })
         })
         .with_parachain(|parachain| {
@@ -292,7 +298,10 @@ pub fn build_polkadot_with_system_parachains() -> anyhow::Result<NetworkConfig> 
                 .with_collator(|c| {
                     c.with_name("collectives-collator")
                         .with_command(para_binary.as_str())
-                        .with_args(vec![Arg::Option("--authoring".into(), "slot-based".into())])
+                        .with_args(vec![
+                            Arg::Option("--authoring".into(), "slot-based".into()),
+                            Arg::Option("--state-pruning".into(), "archive".into()),
+                        ])
                 })
         })
         .build()
@@ -357,7 +366,10 @@ pub fn build_kusama_with_asset_hub() -> anyhow::Result<NetworkConfig> {
                 .with_collator(|c| {
                     c.with_name("asset-hub-collator")
                         .with_command(para_binary.as_str())
-                        .with_args(vec![Arg::Option("--authoring".into(), "slot-based".into())])
+                        .with_args(vec![
+                            Arg::Option("--authoring".into(), "slot-based".into()),
+                            Arg::Option("--state-pruning".into(), "archive".into()),
+                        ])
                 })
         })
         .build()
