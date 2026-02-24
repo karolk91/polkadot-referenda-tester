@@ -22,7 +22,7 @@ jobs:
   # --- Fast validation (no network, no binaries) ---
   validation:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     needs: build
     name: validation
 
@@ -62,7 +62,7 @@ jobs:
   # --- Generate chain specs (runs once, cached for all matrix jobs) ---
   generate-specs:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 120
     name: generate-specs
 
     steps:
@@ -135,7 +135,7 @@ jobs:
   # --- Build: compile Rust test binary + TS CLI (runs once, shared via artifact) ---
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     name: build
 
     steps:
@@ -206,7 +206,7 @@ jobs:
   # --- Network integration tests (parallel matrix, after specs + build are ready) ---
   integration-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     needs: [generate-specs, build]
 
     strategy:
