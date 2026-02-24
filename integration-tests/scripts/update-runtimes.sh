@@ -9,12 +9,12 @@ set -euo pipefail
 #   3. Regenerate raw chain specs via zombienet
 #
 # Usage:
-#   ./scripts/update-runtimes.sh                                          # rebuild current defaults
-#   ./scripts/update-runtimes.sh --fellows v2.1.0                         # new fellows version
-#   ./scripts/update-runtimes.sh --fellows v2.1.0 --sdk polkadot-stable2601  # both
+#   ./integration-tests/scripts/update-runtimes.sh                                          # rebuild current defaults
+#   ./integration-tests/scripts/update-runtimes.sh --fellows v2.1.0                         # new fellows version
+#   ./integration-tests/scripts/update-runtimes.sh --fellows v2.1.0 --sdk polkadot-stable2601  # both
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 FELLOWS_VERSION=""
 SDK_VERSION=""

@@ -9,7 +9,7 @@ set -euo pipefail
 # parachains need a session change before they start producing blocks.
 #
 # Usage:
-#   ./scripts/build-fast-runtimes.sh
+#   ./integration-tests/scripts/build-fast-runtimes.sh
 #
 # Environment variables:
 #   FELLOWS_VERSION   - Git tag to build (default: v2.0.7)

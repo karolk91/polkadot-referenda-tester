@@ -124,7 +124,7 @@ fn runtime_file_path(filename: &str) -> String {
     if !wasm_path.exists() {
         panic!(
             "Fast-runtime WASM not found: {}\n\
-             Run ./scripts/build-fast-runtimes.sh to build them, or set {} to point to the directory.",
+             Run ./integration-tests/scripts/build-fast-runtimes.sh to build them, or set {} to point to the directory.",
             wasm_path.display(),
             RUNTIMES_DIR_ENV
         );

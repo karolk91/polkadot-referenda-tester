@@ -1,3 +1,9 @@
+// Shared test infrastructure used across multiple test binaries (tests.rs,
+// all_tracks.rs, scenarios.rs, generate_chain_specs.rs). Each binary only
+// uses a subset, so Rust reports false "dead_code" warnings for items that
+// are used by other binaries.
+#![allow(dead_code)]
+
 pub mod call_data;
 pub mod config;
 pub mod context;

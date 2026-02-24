@@ -5,7 +5,7 @@ set -euo pipefail
 # Works on Linux x86_64 and macOS ARM64 (aarch64).
 #
 # Usage:
-#   ./scripts/download-binaries.sh
+#   ./integration-tests/scripts/download-binaries.sh
 #
 # Environment variables:
 #   POLKADOT_SDK_VERSION  - Release tag (default: polkadot-stable2512)

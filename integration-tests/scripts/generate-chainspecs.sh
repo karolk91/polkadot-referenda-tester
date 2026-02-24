@@ -9,14 +9,14 @@ set -euo pipefail
 # (~3-5 min per chain).
 #
 # Usage:
-#   ./scripts/generate-chainspecs.sh
+#   ./integration-tests/scripts/generate-chainspecs.sh
 #
 # Environment variables:
 #   CHAIN_SPECS_DIR   - Output directory (default: ./integration-tests/chain-specs)
 #   BIN_DIR           - Directory containing polkadot/polkadot-parachain binaries (default: ./bin)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 CHAIN_SPECS_DIR="${CHAIN_SPECS_DIR:-${PROJECT_DIR}/integration-tests/chain-specs}"
 BIN_DIR="${BIN_DIR:-${PROJECT_DIR}/bin}"
@@ -29,7 +29,7 @@ echo ""
 # Verify prerequisites
 if [ ! -x "${BIN_DIR}/polkadot" ]; then
   echo "Error: polkadot not found at ${BIN_DIR}/polkadot" >&2
-  echo "Run ./scripts/download-binaries.sh first." >&2
+  echo "Run ./integration-tests/scripts/download-binaries.sh first." >&2
   exit 1
 fi
 if [ ! -x "${BIN_DIR}/polkadot-parachain" ]; then

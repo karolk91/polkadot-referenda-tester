@@ -174,7 +174,7 @@ jobs:
 
       - name: Download Polkadot SDK binaries
         if: steps.bin-cache.outputs.cache-hit != 'true'
-        run: ./scripts/download-binaries.sh
+        run: ./integration-tests/scripts/download-binaries.sh
 
       - name: Verify and add binaries to PATH
         run: |
