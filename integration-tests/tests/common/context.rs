@@ -212,8 +212,20 @@ impl KusamaTestContext {
             .await
             .map_err(|e| anyhow::anyhow!("subxt connect to Kusama Asset Hub failed: {e}"))?;
 
-        let relay_fork_block = relay_client.blocks().at_latest().await?.number();
+        let mut relay_fork_block = relay_client.blocks().at_latest().await?.number();
         let ah_fork_block = ah_client.blocks().at_latest().await?.number();
+
+        // Avoid forking at a session boundary block. Chopsticks has issues with
+        // preimage availability when the fork point is exactly on a session boundary
+        // (a multiple of the epoch length). Subtract 1 if we're on a boundary.
+        const FAST_RUNTIME_EPOCH: u32 = 20;
+        if relay_fork_block > 0 && relay_fork_block % FAST_RUNTIME_EPOCH == 0 {
+            relay_fork_block -= 1;
+            log::info!(
+                "Adjusted relay fork block to avoid session boundary: {}",
+                relay_fork_block
+            );
+        }
 
         log::info!("Kusama fork blocks: Relay=#{relay_fork_block}, AH=#{ah_fork_block}");
 
@@ -242,6 +254,17 @@ impl KusamaTestContext {
     pub async fn refresh_fork_blocks(&mut self) -> Result<()> {
         self.relay_fork_block = self.relay_client.blocks().at_latest().await?.number();
         self.ah_fork_block = self.ah_client.blocks().at_latest().await?.number();
+
+        // Avoid forking at a session boundary block (same as from_network)
+        const FAST_RUNTIME_EPOCH: u32 = 20;
+        if self.relay_fork_block > 0 && self.relay_fork_block % FAST_RUNTIME_EPOCH == 0 {
+            self.relay_fork_block -= 1;
+            log::info!(
+                "Adjusted relay fork block to avoid session boundary: {}",
+                self.relay_fork_block
+            );
+        }
+
         log::info!(
             "Refreshed Kusama fork blocks: Relay=#{}, AH=#{}",
             self.relay_fork_block,
