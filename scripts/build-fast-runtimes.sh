@@ -13,11 +13,11 @@ set -euo pipefail
 #
 # Environment variables:
 #   FELLOWS_VERSION   - Git tag to build (default: v2.0.7)
-#   RUNTIMES_DIR      - Output directory for WASM files (default: ./runtimes/fast)
+#   RUNTIMES_DIR      - Output directory for WASM files (default: ./integration-tests/runtimes/fast)
 #   CACHE_DIR         - Clone/build cache directory (default: ./.cache/fellows-runtimes)
 
 FELLOWS_VERSION="${FELLOWS_VERSION:-v2.0.7}"
-RUNTIMES_DIR="${RUNTIMES_DIR:-$(pwd)/runtimes/fast}"
+RUNTIMES_DIR="${RUNTIMES_DIR:-$(pwd)/integration-tests/runtimes/fast}"
 CACHE_DIR="${CACHE_DIR:-$(pwd)/.cache/fellows-runtimes}"
 REPO_URL="https://github.com/polkadot-fellows/runtimes.git"
 

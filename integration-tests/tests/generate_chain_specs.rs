@@ -2,14 +2,14 @@
 //!
 //! This test spawns zombienet networks just long enough to generate complete raw
 //! chain specs (with parachain genesis baked into the relay spec), then saves
-//! them to the `chain-specs/` directory. On subsequent runs, the integration
+//! them to the `integration-tests/chain-specs/` directory. On subsequent runs, the integration
 //! tests load these cached specs via `with_chain_spec_path()` and skip the
 //! expensive WASM execution + raw conversion (~3-5 min per chain).
 //!
 //! Usage:
 //!   POLKADOT_BINARY_PATH=../bin/polkadot \
 //!   POLKADOT_PARACHAIN_BINARY_PATH=../bin/polkadot-parachain \
-//!   CHAIN_SPECS_DIR=../chain-specs \
+//!   CHAIN_SPECS_DIR=./chain-specs \
 //!   cargo test --test generate_chain_specs -- --nocapture
 
 mod common;
@@ -26,8 +26,7 @@ fn output_dir() -> PathBuf {
         PathBuf::from(dir)
     } else {
         let cwd = std::env::current_dir().expect("cannot get cwd");
-        let project_root = cwd.parent().unwrap_or(&cwd);
-        project_root.join("chain-specs")
+        cwd.join("chain-specs")
     }
 }
 

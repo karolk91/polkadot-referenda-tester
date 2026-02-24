@@ -12,13 +12,13 @@ set -euo pipefail
 #   ./scripts/generate-chainspecs.sh
 #
 # Environment variables:
-#   CHAIN_SPECS_DIR   - Output directory (default: ./chain-specs)
+#   CHAIN_SPECS_DIR   - Output directory (default: ./integration-tests/chain-specs)
 #   BIN_DIR           - Directory containing polkadot/polkadot-parachain binaries (default: ./bin)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-CHAIN_SPECS_DIR="${CHAIN_SPECS_DIR:-${PROJECT_DIR}/chain-specs}"
+CHAIN_SPECS_DIR="${CHAIN_SPECS_DIR:-${PROJECT_DIR}/integration-tests/chain-specs}"
 BIN_DIR="${BIN_DIR:-${PROJECT_DIR}/bin}"
 
 echo "Chain Spec Generator (zombienet-based)"

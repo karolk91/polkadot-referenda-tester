@@ -64,7 +64,7 @@ echo ""
 echo "=== Step 1/3: Build fast-runtime WASMs ==="
 echo ""
 
-RUNTIMES_DIR="${PROJECT_DIR}/runtimes/fast"
+RUNTIMES_DIR="${PROJECT_DIR}/integration-tests/runtimes/fast"
 
 # Delete existing WASMs to force rebuild
 if ls "${RUNTIMES_DIR}"/*.wasm >/dev/null 2>&1; then
@@ -104,7 +104,7 @@ echo ""
 echo "=== Step 3/3: Regenerate chain specs ==="
 echo ""
 
-CHAIN_SPECS_DIR="${PROJECT_DIR}/chain-specs"
+CHAIN_SPECS_DIR="${PROJECT_DIR}/integration-tests/chain-specs"
 
 # Delete existing chain specs to force regeneration
 if ls "${CHAIN_SPECS_DIR}"/*.json >/dev/null 2>&1; then

@@ -215,7 +215,7 @@ jobs:
           POLKADOT_BINARY_PATH: ${{ env.BIN_DIR }}/polkadot
           POLKADOT_PARACHAIN_BINARY_PATH: ${{ env.BIN_DIR }}/polkadot-parachain
           TOOL_PROJECT_DIR: ${{ github.workspace }}
-          CHAIN_SPECS_DIR: ${{ github.workspace }}/chain-specs
+          CHAIN_SPECS_DIR: ${{ github.workspace }}/integration-tests/chain-specs
           RUST_LOG: info
 
       # --- Collect logs on failure ---

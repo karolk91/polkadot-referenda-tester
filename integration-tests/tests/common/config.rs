@@ -5,7 +5,7 @@ pub const PARACHAIN_BINARY_ENV: &str = "POLKADOT_PARACHAIN_BINARY_PATH";
 pub const DEFAULT_PARACHAIN_BINARY: &str = "polkadot-parachain";
 
 // Environment variable for fast-runtime WASM directory.
-// Default: ../runtimes/fast/ (relative to integration-tests crate root)
+// Default: ./runtimes/fast/ (relative to integration-tests crate root)
 pub const RUNTIMES_DIR_ENV: &str = "FAST_RUNTIMES_DIR";
 
 // Environment variable for pre-generated raw chain specs directory.
@@ -73,8 +73,7 @@ fn get_chain_specs_dir() -> Option<PathBuf> {
         PathBuf::from(dir)
     } else {
         let cwd = std::env::current_dir().expect("cannot get cwd");
-        let project_root = cwd.parent().unwrap_or(&cwd);
-        project_root.join("chain-specs")
+        cwd.join("chain-specs")
     };
     if dir.is_dir() {
         Some(dir)
@@ -108,10 +107,9 @@ fn get_runtimes_dir() -> PathBuf {
     if let Ok(dir) = std::env::var(RUNTIMES_DIR_ENV) {
         PathBuf::from(dir)
     } else {
-        // Default: <project_root>/runtimes/fast/
+        // Default: ./runtimes/fast/ (relative to integration-tests crate root)
         let cwd = std::env::current_dir().expect("cannot get cwd");
-        let project_root = cwd.parent().unwrap_or(&cwd);
-        project_root.join("runtimes").join("fast")
+        cwd.join("runtimes").join("fast")
     }
 }
 
