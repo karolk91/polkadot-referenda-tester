@@ -191,7 +191,7 @@ export class NetworkCoordinator {
         this.logger.success(`Governance referendum #${actualRefId} created successfully`);
       }
 
-      if (!actualRefId) {
+      if (actualRefId === undefined) {
         throw new Error('Referendum ID is required but was not provided or created');
       }
 
@@ -246,7 +246,25 @@ export class NetworkCoordinator {
         this.logger.debug('Injecting fellowship storage for Alice account');
       }
 
-      const context = await chopsticks.setup(config);
+      // Pre-detect chain type so we can pass the correct network key to setupNetworks.
+      // Relay chains (e.g. Kusama) need their network name as the key so that Chopsticks
+      // doesn't try to call connectParachains on them.
+      let networkKey: string | undefined;
+      try {
+        const tempWsProvider = getWsProvider(this.fellowshipEndpoint);
+        const tempClient = createClient(withPolkadotSdkCompat(tempWsProvider));
+        const tempApi = createApiForChain(tempClient);
+        const preChainInfo = await getChainInfo(tempApi, this.fellowshipEndpoint);
+        tempClient.destroy();
+        if (preChainInfo.kind === 'relay') {
+          networkKey = preChainInfo.network; // e.g. "kusama", "polkadot"
+          this.logger.debug(`Fellowship chain is a relay chain, using network key: ${networkKey}`);
+        }
+      } catch (e) {
+        this.logger.debug(`Pre-detection failed, using default network key: ${e}`);
+      }
+
+      const context = await chopsticks.setup(config, networkKey);
 
       const endpoint = context.ws.endpoint;
       const wsProvider = getWsProvider(endpoint);
@@ -281,7 +299,7 @@ export class NetworkCoordinator {
         this.logger.success(`Fellowship referendum #${fellowshipRefId} created successfully`);
       }
 
-      if (!fellowshipRefId) {
+      if (fellowshipRefId === undefined) {
         throw new Error('Fellowship referendum ID is required but was not provided or created');
       }
 
@@ -402,11 +420,11 @@ export class NetworkCoordinator {
         this.logger.success(`Governance referendum #${actualMainRefId} created successfully`);
       }
 
-      if (!actualFellowshipRefId) {
+      if (actualFellowshipRefId === undefined) {
         throw new Error('Fellowship referendum ID is required but was not provided or created');
       }
 
-      if (!actualMainRefId) {
+      if (actualMainRefId === undefined) {
         throw new Error('Main referendum ID is required but was not provided or created');
       }
 
@@ -525,11 +543,11 @@ export class NetworkCoordinator {
         this.logger.success(`Governance referendum #${actualMainRefId} created successfully`);
       }
 
-      if (!actualFellowshipRefId) {
+      if (actualFellowshipRefId === undefined) {
         throw new Error('Fellowship referendum ID is required but was not provided or created');
       }
 
-      if (!actualMainRefId) {
+      if (actualMainRefId === undefined) {
         throw new Error('Main referendum ID is required but was not provided or created');
       }
 
