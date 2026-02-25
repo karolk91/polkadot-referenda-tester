@@ -1,6 +1,6 @@
 # Integration Tests
 
-Rust integration tests using [zombienet-sdk](https://github.com/nicostocksbrueger/zombienet-sdk) to spawn real Polkadot/Kusama test networks and run the CLI tool against them.
+Rust integration tests using [zombienet-sdk](https://github.com/paritytech/zombienet-sdk) to spawn real Polkadot/Kusama test networks and run the CLI tool against them.
 
 ## Prerequisites
 
