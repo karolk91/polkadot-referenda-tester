@@ -221,9 +221,7 @@ impl KusamaTestContext {
         const FAST_RUNTIME_EPOCH: u32 = 20;
         if relay_fork_block > 0 && relay_fork_block % FAST_RUNTIME_EPOCH == 0 {
             relay_fork_block -= 1;
-            log::info!(
-                "Adjusted relay fork block to avoid session boundary: {relay_fork_block}"
-            );
+            log::info!("Adjusted relay fork block to avoid session boundary: {relay_fork_block}");
         }
 
         log::info!("Kusama fork blocks: Relay=#{relay_fork_block}, AH=#{ah_fork_block}");
