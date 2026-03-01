@@ -1,6 +1,16 @@
 import { ReferendumInfo } from '../types';
 import { Logger } from '../utils/logger';
 import { stringify } from '../utils/json';
+import { getReferendaPalletName, getReferendaPallet } from './chain-registry';
+
+const STATUS_MAP: Record<string, ReferendumInfo['status']> = {
+  Ongoing: 'ongoing',
+  Approved: 'approved',
+  Rejected: 'rejected',
+  Cancelled: 'cancelled',
+  TimedOut: 'timedout',
+  Killed: 'killed',
+};
 
 export class ReferendaFetcher {
   private logger: Logger;
@@ -15,20 +25,11 @@ export class ReferendaFetcher {
     useFellowship: boolean = false
   ): Promise<ReferendumInfo | null> {
     try {
-      const palletName = useFellowship ? 'FellowshipReferenda' : 'Referenda';
+      const palletName = getReferendaPalletName(useFellowship);
       this.logger.debug(`Fetching referendum #${referendumId} from ${palletName} pallet...`);
 
-      // Fetch referendum info from the appropriate pallet
-      let refInfo;
-      if (useFellowship) {
-        // Use FellowshipReferenda pallet
-        refInfo = await (api.query.FellowshipReferenda as any).ReferendumInfoFor.getValue(
-          referendumId
-        );
-      } else {
-        // Use regular Referenda pallet
-        refInfo = await (api.query.Referenda as any).ReferendumInfoFor.getValue(referendumId);
-      }
+      const pallet = getReferendaPallet(api, useFellowship);
+      const refInfo = await pallet.ReferendumInfoFor.getValue(referendumId);
 
       if (!refInfo) {
         this.logger.error(`Referendum #${referendumId} not found in ${palletName} pallet`);
@@ -39,17 +40,25 @@ export class ReferendaFetcher {
         `Raw referendum info: ${stringify(refInfo, 2)}`
       );
 
-      // Parse the referendum status
-      let status: ReferendumInfo['status'];
-      let tally;
-      let deciding;
-
       // Handle both enum formats: { Ongoing: ... } and { type: "Ongoing", value: ... }
       const refType = refInfo.type || Object.keys(refInfo)[0];
       const refValue = refInfo.value || refInfo[refType];
 
-      if (refType === 'Ongoing' || 'Ongoing' in refInfo) {
-        status = 'ongoing';
+      // Resolve status via lookup, falling back to key-based detection
+      const resolvedType = STATUS_MAP[refType]
+        ? refType
+        : Object.keys(STATUS_MAP).find((key) => key in refInfo);
+
+      if (!resolvedType) {
+        throw new Error(`Unknown referendum status: ${stringify(refInfo)}`);
+      }
+
+      const status = STATUS_MAP[resolvedType];
+
+      let tally;
+      let deciding;
+
+      if (status === 'ongoing') {
         const ongoing = refValue || refInfo.Ongoing;
 
         tally = ongoing.tally
@@ -66,18 +75,6 @@ export class ReferendaFetcher {
               confirming: ongoing.deciding.confirming,
             }
           : undefined;
-      } else if (refType === 'Approved' || 'Approved' in refInfo) {
-        status = 'approved';
-      } else if (refType === 'Rejected' || 'Rejected' in refInfo) {
-        status = 'rejected';
-      } else if (refType === 'Cancelled' || 'Cancelled' in refInfo) {
-        status = 'cancelled';
-      } else if (refType === 'TimedOut' || 'TimedOut' in refInfo) {
-        status = 'timedout';
-      } else if (refType === 'Killed' || 'Killed' in refInfo) {
-        status = 'killed';
-      } else {
-        throw new Error(`Unknown referendum status: ${stringify(refInfo)}`);
       }
 
       const ongoing = (refType === 'Ongoing' && refValue) || refInfo.Ongoing || null;
@@ -108,55 +105,17 @@ export class ReferendaFetcher {
         return null;
       }
 
-      // Get the proposal hash and preimage
-      // Handle both direct hash and Lookup format
-      let proposalHashHex: string | undefined;
-      let proposalLen: number;
-      let proposalType: 'Lookup' | 'Inline';
-      let proposalCall: any;
-
-      if (ongoing.proposal.type === 'Lookup') {
-        // For Lookup, call .asHex() on the hash object
-        proposalHashHex = ongoing.proposal.value.hash.asHex();
-        proposalLen = ongoing.proposal.value.len;
-        proposalType = 'Lookup';
-        proposalCall = undefined;
-      } else {
-        // For Inline, handle the hash conversion
-        const inlineValue = ongoing.proposal.value ?? ongoing.proposal;
-        const proposalHash = inlineValue?.hash ?? inlineValue;
-        proposalLen = inlineValue?.length || inlineValue?.len || 0;
-        proposalType = 'Inline';
-        proposalCall = inlineValue;
-
-        if (typeof proposalHash === 'string') {
-          proposalHashHex = proposalHash.startsWith('0x') ? proposalHash : '0x' + proposalHash;
-        } else if (proposalHash && typeof proposalHash.asHex === 'function') {
-          proposalHashHex = proposalHash.asHex();
-        } else if (proposalHash && typeof proposalHash.toString === 'function') {
-          proposalHashHex = proposalHash.toString();
-        } else {
-          proposalHashHex = undefined;
-        }
-      }
+      const { hash: proposalHashHex, call: preimage, type: proposalType, len: proposalLen } =
+        this.parseProposal(ongoing.proposal);
 
       this.logger.debug(
         `Proposal type: ${proposalType}, hash: ${proposalHashHex ?? 'unknown'}, preimage length: ${proposalLen}`
       );
 
-      // For Lookup proposals, the preimage must already be on-chain
-      // We don't fetch it - the Scheduler will look it up when executing
-      // For Inline proposals, the call data is embedded in the referendum
-      let preimage;
-      if (proposalType === 'Inline') {
-        preimage = proposalCall;
-      }
-
       // Determine the track name from on-chain data
       const trackId = ongoing.track;
-      const tracks = useFellowship
-        ? await api.constants.FellowshipReferenda.Tracks()
-        : await api.constants.Referenda.Tracks();
+      const referendaConstants = useFellowship ? api.constants.FellowshipReferenda : api.constants.Referenda;
+      const tracks = await referendaConstants.Tracks();
       const track = tracks.find((t: any) => t[0] === trackId);
       const trackName = track ? track[1]?.name || `track_${trackId}` : `track_${trackId}`;
 
@@ -196,13 +155,44 @@ export class ReferendaFetcher {
 
       return referendumInfo;
     } catch (error) {
-      const palletName = useFellowship ? 'FellowshipReferenda' : 'Referenda';
+      const palletName = getReferendaPalletName(useFellowship);
       this.logger.error(
         `Failed to fetch referendum #${referendumId} from ${palletName} pallet`,
         error as Error
       );
       return null;
     }
+  }
+
+  private parseProposal(proposal: any): {
+    hash: string | undefined;
+    call: any;
+    type: 'Lookup' | 'Inline';
+    len: number;
+  } {
+    if (proposal.type === 'Lookup') {
+      return {
+        hash: proposal.value.hash.asHex(),
+        call: undefined,
+        type: 'Lookup',
+        len: proposal.value.len,
+      };
+    }
+
+    const inlineValue = proposal.value ?? proposal;
+    const proposalHash = inlineValue?.hash ?? inlineValue;
+    const len = inlineValue?.length || inlineValue?.len || 0;
+
+    let hash: string | undefined;
+    if (typeof proposalHash === 'string') {
+      hash = proposalHash.startsWith('0x') ? proposalHash : '0x' + proposalHash;
+    } else if (proposalHash && typeof proposalHash.asHex === 'function') {
+      hash = proposalHash.asHex();
+    } else if (proposalHash && typeof proposalHash.toString === 'function') {
+      hash = proposalHash.toString();
+    }
+
+    return { hash, call: inlineValue, type: 'Inline', len };
   }
 
   async getLatestBlock(api: any): Promise<number> {

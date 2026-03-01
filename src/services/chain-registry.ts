@@ -1,3 +1,7 @@
+import { createClient } from 'polkadot-api';
+import { getWsProvider } from 'polkadot-api/ws-provider/node';
+import { withPolkadotSdkCompat } from 'polkadot-api/polkadot-sdk-compat';
+
 export type ChainNetwork = 'polkadot' | 'kusama' | 'paseo' | 'westend' | 'rococo' | 'unknown';
 export type ChainKind = 'relay' | 'parachain';
 
@@ -74,6 +78,13 @@ export function buildChainInfoFromSpecName(specName: string, endpoint: string): 
 }
 
 /**
+ * Create a polkadot-api client connected to the given WebSocket endpoint.
+ */
+export function createPolkadotClient(endpoint: string): any {
+  return createClient(withPolkadotSdkCompat(getWsProvider(endpoint)));
+}
+
+/**
  * Creates an API instance using unsafe API (always).
  * We don't use typed descriptors - unsafe API works for all chains.
  */
@@ -83,4 +94,18 @@ export function createApiForChain(client: any): any {
   }
 
   throw new Error('Unable to create unsafe API instance from client');
+}
+
+/**
+ * Returns the referenda pallet name based on fellowship flag.
+ */
+export function getReferendaPalletName(isFellowship: boolean): string {
+  return isFellowship ? 'FellowshipReferenda' : 'Referenda';
+}
+
+/**
+ * Get the referenda pallet query accessor from the API.
+ */
+export function getReferendaPallet(api: any, isFellowship: boolean): any {
+  return isFellowship ? api.query.FellowshipReferenda : api.query.Referenda;
 }

@@ -1,3 +1,5 @@
+import { stringify } from './json';
+
 /**
  * Interpret a dispatch result from Scheduler.Dispatched events.
  * Handles multiple polkadot-api result formats (Ok/Err, success/failure, boolean, etc.)
@@ -79,8 +81,6 @@ export function interpretDispatchResult(result: any): {
   return { outcome: 'unknown' };
 }
 
-const bigintReplacer = (_: string, v: any) => (typeof v === 'bigint' ? v.toString() : v);
-
 /**
  * Format a dispatch error into a human-readable string.
  * Handles nested error structures from polkadot-api (Module errors, Token errors, etc.)
@@ -107,17 +107,17 @@ export function formatDispatchError(error: any): string {
       const payload =
         (error as any).value ?? (error as any).error ?? (error as any).err ?? (error as any).data;
       if (payload !== undefined) {
-        return `${(error as any).type}: ${JSON.stringify(payload, bigintReplacer)}`;
+        return `${(error as any).type}: ${stringify(payload)}`;
       }
       return (error as any).type;
     }
 
     if ('Module' in error) {
-      return `Module error: ${JSON.stringify(error.Module, bigintReplacer)}`;
+      return `Module error: ${stringify(error.Module)}`;
     }
 
     if ('module' in error) {
-      return `Module error: ${JSON.stringify(error.module, bigintReplacer)}`;
+      return `Module error: ${stringify(error.module)}`;
     }
 
     if ('token' in error) {
@@ -125,10 +125,10 @@ export function formatDispatchError(error: any): string {
     }
 
     if ('value' in error) {
-      return JSON.stringify(error.value, bigintReplacer);
+      return stringify(error.value);
     }
 
-    return JSON.stringify(error, bigintReplacer);
+    return stringify(error);
   }
 
   return String(error);

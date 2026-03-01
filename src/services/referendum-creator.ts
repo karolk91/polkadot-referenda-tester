@@ -2,9 +2,11 @@ import { getPolkadotSigner } from 'polkadot-api/signer';
 import { Binary } from '@polkadot-api/substrate-bindings';
 import { Keyring } from '@polkadot/keyring';
 import { Logger } from '../utils/logger';
+import { stringify } from '../utils/json';
 import { ChopsticksManager } from './chopsticks-manager';
 import { parseBlockEvent } from '../utils/event-serializer';
 import { formatDispatchError } from '../utils/dispatch-result';
+import { getReferendaPallet } from './chain-registry';
 
 // Alice's address on Substrate-based chains
 export const ALICE_ADDRESS = '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY';
@@ -178,8 +180,7 @@ export class ReferendumCreator {
       );
     }
 
-    // Read referendum count BEFORE submitting so we can determine the new ID
-    const palletQuery = isFellowship ? api.query.FellowshipReferenda : api.query.Referenda;
+    const palletQuery = getReferendaPallet(api, isFellowship);
     const countBefore = Number(await palletQuery.ReferendumCount.getValue());
     this.logger.debug(`Referendum count before submit: ${countBefore}`);
 
@@ -201,7 +202,7 @@ export class ReferendumCreator {
           if (parsed.section === 'System' && parsed.method === 'ExtrinsicFailed') {
             const errMsg = formatDispatchError(parsed.data);
             this.logger.error(`Extrinsic dispatch failed: ${errMsg}`);
-            this.logger.error(`Full error data: ${JSON.stringify(parsed.data, (_, v) => typeof v === 'bigint' ? v.toString() : v, 2)}`);
+            this.logger.error(`Full error data: ${stringify(parsed.data, 2)}`);
           }
         }
       }

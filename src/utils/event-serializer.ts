@@ -1,4 +1,5 @@
 import { Logger } from './logger';
+import { toHexString } from './hex';
 
 export interface ParsedEvent {
   section: string;
@@ -15,43 +16,15 @@ export function serializeEventData(data: any): any {
     return data;
   }
 
-  // Handle Uint8Array
-  if (data instanceof Uint8Array) {
-    return '0x' + Buffer.from(data).toString('hex');
+  // Try direct hex conversion for binary-like values
+  const hex = toHexString(data);
+  if (hex !== undefined && (data instanceof Uint8Array || Buffer.isBuffer(data))) {
+    return hex;
   }
 
-  // Handle Buffer
-  if (Buffer.isBuffer(data)) {
-    return '0x' + data.toString('hex');
-  }
-
-  // Handle polkadot-api FixedSizeBinary and similar types (check for asHex property)
-  if (typeof data === 'object' && 'asHex' in data) {
-    try {
-      const hex = typeof data.asHex === 'function' ? data.asHex() : data.asHex;
-      if (hex !== undefined && hex !== null) {
-        return hex;
-      }
-      if ('asBytes' in data) {
-        const bytes = typeof data.asBytes === 'function' ? data.asBytes() : data.asBytes;
-        if (bytes instanceof Uint8Array) {
-          return '0x' + Buffer.from(bytes).toString('hex');
-        }
-      }
-    } catch {
-      // Fall through to other methods
-    }
-  }
-
-  // Handle objects with toHex method
-  if (typeof data === 'object' && typeof data.toHex === 'function') {
-    return data.toHex();
-  }
-
-  // Handle objects with toU8a method (convert to Uint8Array then to hex)
-  if (typeof data === 'object' && typeof data.toU8a === 'function') {
-    const u8a = data.toU8a();
-    return '0x' + Buffer.from(u8a).toString('hex');
+  // Handle polkadot-api Binary/FixedSizeBinary types (have asHex)
+  if (typeof data === 'object' && ('asHex' in data || 'toHex' in data || 'toU8a' in data)) {
+    if (hex !== undefined) return hex;
   }
 
   // Handle objects with toString that might give us useful info

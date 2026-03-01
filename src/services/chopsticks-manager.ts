@@ -1,12 +1,8 @@
 import { setupNetworks } from '@acala-network/chopsticks-testing';
 import type { Config } from '@acala-network/chopsticks/dist/esm/schema/index.js';
 import { BuildBlockMode } from '@acala-network/chopsticks-core';
-import { createClient } from 'polkadot-api';
-import { getWsProvider } from 'polkadot-api/ws-provider/node';
-import { withPolkadotSdkCompat } from 'polkadot-api/polkadot-sdk-compat';
 import { ChopsticksConfig } from '../types';
 import { Logger } from '../utils/logger';
-import { getChainInfo, createApiForChain, ChainInfo } from './chain-registry';
 import * as path from 'path';
 
 const CHAIN_READY_MAX_ATTEMPTS = 10;
@@ -144,38 +140,6 @@ export class ChopsticksManager {
 
     this.logger.debug(`Time traveling to timestamp: ${timestamp}`);
     await this.context.dev.timeTravel(timestamp);
-  }
-
-  /**
-   * Create a fully connected Chopsticks instance with client, API, and chain info.
-   * Encapsulates the common setup pattern: create → connect → wait for ready → detect chain.
-   */
-  static async createConnected(
-    logger: Logger,
-    config: ChopsticksConfig,
-    originalEndpoint: string
-  ): Promise<{
-    chopsticks: ChopsticksManager;
-    client: any;
-    api: any;
-    chainInfo: ChainInfo;
-  }> {
-    const chopsticks = new ChopsticksManager(logger);
-    const context = await chopsticks.setup(config);
-
-    const endpoint = context.ws.endpoint;
-    const wsProvider = getWsProvider(endpoint);
-    const client = createClient(withPolkadotSdkCompat(wsProvider));
-    const api = createApiForChain(client);
-
-    logger.startSpinner('Waiting for chain to be ready...');
-    await chopsticks.waitForChainReady(api);
-    logger.succeedSpinner('Chain is ready');
-
-    const chainInfo = await getChainInfo(api, originalEndpoint);
-    logger.info(`Detected chain: ${chainInfo.label} (${chainInfo.specName})`);
-
-    return { chopsticks, client, api, chainInfo };
   }
 
   async waitForChainReady(

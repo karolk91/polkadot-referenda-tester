@@ -1,3 +1,5 @@
+import { toHexString } from './hex';
+
 /**
  * Convert polkadot-api origin format to Chopsticks storage format (lowercase enum variant).
  *
@@ -41,25 +43,15 @@ export function convertProposalToStorageFormat(proposal: any): any {
     const proposalType = proposal.type.toLowerCase();
 
     if (proposalType === 'lookup') {
-      let hashValue = proposal.value.hash;
-      if (hashValue && typeof hashValue === 'object' && 'asHex' in hashValue) {
-        hashValue = hashValue.asHex();
-      }
-
       return {
         lookup: {
-          hash: hashValue,
+          hash: toHexString(proposal.value.hash) ?? proposal.value.hash,
           len: proposal.value.len,
         },
       };
     } else if (proposalType === 'inline') {
-      let inlineValue = proposal.value;
-      if (inlineValue && typeof inlineValue === 'object' && 'asHex' in inlineValue) {
-        inlineValue = inlineValue.asHex();
-      }
-
       return {
-        inline: inlineValue,
+        inline: toHexString(proposal.value) ?? proposal.value,
       };
     }
 
@@ -111,29 +103,13 @@ export function convertCallToStorageFormat(call: any): any {
     const callType = call.type.toLowerCase();
 
     if (callType === 'inline') {
-      let inlineValue = call.value;
-      if (inlineValue && typeof inlineValue === 'object') {
-        if ('asHex' in inlineValue && typeof inlineValue.asHex === 'function') {
-          inlineValue = inlineValue.asHex();
-        } else if ('toHex' in inlineValue && typeof inlineValue.toHex === 'function') {
-          inlineValue = inlineValue.toHex();
-        }
-      }
       return {
-        inline: inlineValue,
+        inline: toHexString(call.value) ?? call.value,
       };
     } else if (callType === 'lookup') {
-      let hashValue = call.value.hash;
-      if (hashValue && typeof hashValue === 'object') {
-        if ('asHex' in hashValue && typeof hashValue.asHex === 'function') {
-          hashValue = hashValue.asHex();
-        } else if ('toHex' in hashValue && typeof hashValue.toHex === 'function') {
-          hashValue = hashValue.toHex();
-        }
-      }
       return {
         lookup: {
-          hash: hashValue,
+          hash: toHexString(call.value.hash) ?? call.value.hash,
           len: call.value.len,
         },
       };
