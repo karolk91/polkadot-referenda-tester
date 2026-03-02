@@ -1,6 +1,8 @@
 import { Keyring } from '@polkadot/keyring';
 import { Binary } from '@polkadot-api/substrate-bindings';
+import type { PolkadotSigner } from 'polkadot-api';
 import { getPolkadotSigner } from 'polkadot-api/signer';
+import type { SubstrateApi } from '../types/substrate-api';
 import { formatDispatchError } from '../utils/dispatch-result';
 import { parseBlockEvent } from '../utils/event-serializer';
 import { stringify } from '../utils/json';
@@ -113,7 +115,7 @@ export class ReferendumCreator {
   }
 
   async createReferendum(
-    api: any,
+    api: SubstrateApi,
     submitCallHex: string,
     preimageCallHex?: string,
     isFellowship: boolean = false
@@ -142,19 +144,22 @@ export class ReferendumCreator {
     return { referendumId, preimageNoted };
   }
 
-  private async notePreimage(api: any, signer: any, preimageCallHex: string): Promise<boolean> {
+  private async notePreimage(
+    api: SubstrateApi,
+    signer: PolkadotSigner,
+    preimageCallHex: string
+  ): Promise<boolean> {
     const validatedHex = ReferendumCreator.validateHex(preimageCallHex, 'preimageCall');
     this.logger.startSpinner('Noting preimage...');
 
-    let preimageCall: any;
-    try {
-      preimageCall = await api.txFromCallData(Binary.fromHex(validatedHex));
-    } catch (e) {
-      this.logger.failSpinner('Failed to decode preimage call data');
-      throw new Error(
-        `Invalid preimage call data for this chain's runtime. The hex may have been generated for a different runtime version or chain. Original error: ${(e as Error).message}`
-      );
-    }
+    const preimageCall = await api
+      .txFromCallData(Binary.fromHex(validatedHex))
+      .catch((e: Error) => {
+        this.logger.failSpinner('Failed to decode preimage call data');
+        throw new Error(
+          `Invalid preimage call data for this chain's runtime. The hex may have been generated for a different runtime version or chain. Original error: ${e.message}`
+        );
+      });
 
     // Sign and pass directly to newBlock to avoid race conditions with async tx pool
     const signedPreimageTx = await preimageCall.sign(signer);
@@ -168,22 +173,21 @@ export class ReferendumCreator {
   }
 
   private async submitAndRetrieveId(
-    api: any,
-    signer: any,
+    api: SubstrateApi,
+    signer: PolkadotSigner,
     validatedSubmitHex: string,
     isFellowship: boolean
   ): Promise<number> {
     this.logger.startSpinner('Submitting referendum...');
 
-    let submitCall: any;
-    try {
-      submitCall = await api.txFromCallData(Binary.fromHex(validatedSubmitHex));
-    } catch (e) {
-      this.logger.failSpinner('Failed to decode referendum submit call data');
-      throw new Error(
-        `Invalid referendum submit call data for this chain's runtime. The hex may have been generated for a different runtime version or chain. Original error: ${(e as Error).message}`
-      );
-    }
+    const submitCall = await api
+      .txFromCallData(Binary.fromHex(validatedSubmitHex))
+      .catch((e: Error) => {
+        this.logger.failSpinner('Failed to decode referendum submit call data');
+        throw new Error(
+          `Invalid referendum submit call data for this chain's runtime. The hex may have been generated for a different runtime version or chain. Original error: ${e.message}`
+        );
+      });
 
     const palletQuery = getReferendaPallet(api, isFellowship);
     const countBefore = Number(await palletQuery.ReferendumCount.getValue());
@@ -237,14 +241,14 @@ export class ReferendumCreator {
   /**
    * Gets the fellowship storage injection object for Alice
    */
-  static getFellowshipStorageInjection(): any {
+  static getFellowshipStorageInjection(): Record<string, unknown> {
     return FELLOWSHIP_STORAGE_INJECTION;
   }
 
   /**
    * Gets a minimal storage injection to fund Alice on any chain
    */
-  static getAliceAccountInjection(): any {
+  static getAliceAccountInjection(): Record<string, unknown> {
     return ALICE_ACCOUNT_INJECTION;
   }
 }

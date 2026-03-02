@@ -1,3 +1,4 @@
+import type { PolkadotClient } from 'polkadot-api';
 import {
   createApiForChain,
   createPolkadotClient,
@@ -21,7 +22,7 @@ export async function listReferendums(options: ListOptions): Promise<void> {
   const logger = new Logger(options.verbose);
 
   let chopsticks: ChopsticksManager | null = null;
-  let client: any = null;
+  let client: PolkadotClient | null = null;
 
   try {
     // Determine which chain to use
@@ -104,6 +105,7 @@ export async function listReferendums(options: ListOptions): Promise<void> {
       }
 
       // Parse status
+      const refRecord = refInfo as unknown as Record<string, unknown>;
       const refType = refInfo.type || Object.keys(refInfo)[0];
       const status: string = refType.toLowerCase();
 
@@ -115,18 +117,21 @@ export async function listReferendums(options: ListOptions): Promise<void> {
       let bareAyes: string | undefined;
 
       if (status === 'ongoing') {
-        const refValue = refInfo.value || refInfo[refType];
+        const refValue = (refInfo.value || refRecord[refType]) as
+          | Record<string, unknown>
+          | undefined;
         const trackId = refValue?.track;
         if (trackId !== undefined) {
-          track = trackId.toString();
+          track = String(trackId);
         }
 
         // Extract tally information
-        if (refValue?.tally) {
-          ayes = refValue.tally.ayes?.toString();
-          nays = refValue.tally.nays?.toString();
-          support = refValue.tally.support?.toString();
-          bareAyes = refValue.tally.bare_ayes?.toString();
+        const tally = refValue?.tally as Record<string, unknown> | undefined;
+        if (tally) {
+          ayes = tally.ayes?.toString();
+          nays = tally.nays?.toString();
+          support = tally.support?.toString();
+          bareAyes = tally.bare_ayes?.toString();
         }
       }
 

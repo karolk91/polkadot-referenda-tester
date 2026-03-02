@@ -1,4 +1,12 @@
+import type { Binary } from '@polkadot-api/substrate-bindings';
 import type { ReferendumInfo, SimulationResult } from '../types';
+import type {
+  ReferendaPallet,
+  ReferendumOngoing,
+  ScheduledCall,
+  ScheduledEntry,
+  SubstrateApi,
+} from '../types/substrate-api';
 import { formatDispatchError, interpretDispatchResult } from '../utils/dispatch-result';
 import { type ParsedEvent, parseBlockEvent, serializeEventData } from '../utils/event-serializer';
 import { toHexString } from '../utils/hex';
@@ -38,13 +46,13 @@ const GOVERNANCE_ORIGINS = [
 export class ReferendumSimulator {
   private logger: Logger;
   private chopsticks: ChopsticksManager;
-  private api: any;
+  private api: SubstrateApi;
   private isFellowship: boolean;
 
   constructor(
     logger: Logger,
     chopsticks: ChopsticksManager,
-    api: any,
+    api: SubstrateApi,
     isFellowship: boolean = false
   ) {
     this.logger = logger;
@@ -55,6 +63,10 @@ export class ReferendumSimulator {
 
   private getReferendaPalletName(): string {
     return getReferendaPalletName(this.isFellowship);
+  }
+
+  private getReferendaPalletQuery(): ReferendaPallet {
+    return this.isFellowship ? this.api.query.FellowshipReferenda : this.api.query.Referenda;
   }
 
   async simulate(
@@ -111,7 +123,7 @@ export class ReferendumSimulator {
   ): Promise<{
     success: boolean;
     executionSucceeded: boolean;
-    events: any[];
+    events: ParsedEvent[];
     errors?: string[];
     blockExecuted: number;
   }> {
@@ -147,9 +159,8 @@ export class ReferendumSimulator {
     this.logger.startSpinner('Forcing referendum to passing state...');
 
     const palletName = this.getReferendaPalletName();
-    const refInfo = await (this.api.query as any)[palletName].ReferendumInfoFor.getValue(
-      referendum.id
-    );
+    const palletQuery = this.getReferendaPalletQuery();
+    const refInfo = await palletQuery.ReferendumInfoFor.getValue(referendum.id);
 
     if (!refInfo) {
       throw new Error(
@@ -180,7 +191,7 @@ export class ReferendumSimulator {
     const { currentBlock } = await this.getSchedulingBlocks();
 
     const modifiedRefInfo = this.buildPassingReferendumStorage(
-      refInfo.value,
+      refInfo.value as ReferendumOngoing,
       totalIssuance,
       currentBlock
     );
@@ -246,9 +257,8 @@ export class ReferendumSimulator {
 
     // Only main governance on parachains uses relay chain block numbers
     if (!this.isFellowship) {
-      const lastRelayBlockQuery = (this.api.query as any)?.ParachainSystem
-        ?.LastRelayChainBlockNumber;
-      if (typeof lastRelayBlockQuery?.getValue === 'function') {
+      const lastRelayBlockQuery = this.api.query.ParachainSystem?.LastRelayChainBlockNumber;
+      if (lastRelayBlockQuery && typeof lastRelayBlockQuery.getValue === 'function') {
         try {
           const relayBlock = await lastRelayBlockQuery.getValue();
           if (relayBlock !== undefined && relayBlock !== null) {
@@ -275,10 +285,10 @@ export class ReferendumSimulator {
    * with immediate enactment.
    */
   private buildPassingReferendumStorage(
-    ongoingData: any,
+    ongoingData: ReferendumOngoing,
     totalIssuance: bigint,
     currentBlock: number
-  ): any {
+  ): Record<string, unknown> {
     const originForStorage = convertOriginToStorageFormat(ongoingData.origin);
     const proposalForStorage = convertProposalToStorageFormat(ongoingData.proposal);
 
@@ -287,7 +297,7 @@ export class ReferendumSimulator {
 
     this.logger.debug('Setting referendum enactment to execute immediately (after: 0 blocks)');
 
-    let tally: any;
+    let tally: Record<string, unknown>;
     if (this.isFellowship) {
       tally = {
         bare_ayes: FELLOWSHIP_PASSING_BARE_AYES,
@@ -324,15 +334,14 @@ export class ReferendumSimulator {
 
   private async verifyReferendumModification(
     referendumId: number,
-    palletName: string
+    _palletName: string
   ): Promise<void> {
     this.logger.startSpinner('Verifying referendum modification...');
-    const verifyRefInfo = await (this.api.query as any)[palletName].ReferendumInfoFor.getValue(
-      referendumId
-    );
+    const palletQuery = this.getReferendaPalletQuery();
+    const verifyRefInfo = await palletQuery.ReferendumInfoFor.getValue(referendumId);
 
     if (verifyRefInfo && verifyRefInfo.type === 'Ongoing') {
-      const ongoing = verifyRefInfo.value;
+      const ongoing = verifyRefInfo.value as ReferendumOngoing;
       this.logger.succeedSpinner('Referendum modification verified');
       this.logger.info(`\u2713 Enactment: ${stringify(ongoing.enactment)}`);
       this.logger.info(`\u2713 Tally: ${stringify(ongoing.tally)}`);
@@ -394,7 +403,7 @@ export class ReferendumSimulator {
     if (scheduledEntry.maybeId) {
       try {
         const lookupId = scheduledEntry.maybeId;
-        const lookup = await (this.api.query.Scheduler as any).Lookup.getValue(lookupId);
+        const lookup = await this.api.query.Scheduler.Lookup.getValue(lookupId);
 
         if (lookup) {
           await this.chopsticks.setStorageBatch({
@@ -415,10 +424,14 @@ export class ReferendumSimulator {
     referendumId: number,
     callType: 'nudge' | 'execute',
     proposalHash?: string
-  ): Promise<{ keyArgs: any; agendaItems: any[]; scheduledEntry: any } | null> {
+  ): Promise<{
+    keyArgs: unknown[];
+    agendaItems: ScheduledEntry[];
+    scheduledEntry: ScheduledEntry;
+  } | null> {
     this.logger.debug(`Searching for ${callType} call (referendum ${referendumId}) in scheduler`);
 
-    const agendaEntries = await (this.api.query.Scheduler as any).Agenda.getEntries();
+    const agendaEntries = await this.api.query.Scheduler.Agenda.getEntries();
     this.logger.debug(`Found ${agendaEntries.length} total agenda entries`);
 
     for (const entry of agendaEntries) {
@@ -445,10 +458,12 @@ export class ReferendumSimulator {
     return null;
   }
 
-  private getCallInfo(call: any): { type: string; hex?: string; hash?: string } {
+  private getCallInfo(call: ScheduledCall): { type: string; hex?: string; hash?: string } {
     if (!call) {
       return { type: 'unknown' };
     }
+
+    const callRecord = call as Record<string, unknown>;
 
     if (call.type === 'Inline' && call.value) {
       return {
@@ -457,8 +472,10 @@ export class ReferendumSimulator {
       };
     }
 
-    if (call.type === 'Lookup' || (call.lookup && call.value)) {
-      const lookupData = call.type === 'Lookup' ? call.value : call.lookup;
+    if (call.type === 'Lookup' || ('lookup' in callRecord && call.value)) {
+      const lookupData = (call.type === 'Lookup' ? call.value : callRecord.lookup) as
+        | Record<string, unknown>
+        | undefined;
       return {
         type: 'Lookup',
         hash: (lookupData?.hash ? toHexString(lookupData.hash) : undefined) || undefined,
@@ -468,14 +485,18 @@ export class ReferendumSimulator {
     return { type: 'unknown' };
   }
 
-  private isProposalExecutionCall(call: any, proposalHash?: string): boolean {
+  private isProposalExecutionCall(call: ScheduledCall, proposalHash?: string): boolean {
     try {
       if (!call) {
         return false;
       }
 
-      if (call.type === 'Lookup' || call.lookup) {
-        const lookupData = call.type === 'Lookup' ? call.value : call.lookup;
+      const callRecord = call as Record<string, unknown>;
+
+      if (call.type === 'Lookup' || 'lookup' in callRecord) {
+        const lookupData = (call.type === 'Lookup' ? call.value : callRecord.lookup) as
+          | Record<string, unknown>
+          | undefined;
         if (proposalHash && lookupData) {
           const callHash = toHexString(lookupData.hash) ?? String(lookupData.hash);
           const matches = callHash === proposalHash;
@@ -487,8 +508,8 @@ export class ReferendumSimulator {
         return !proposalHash;
       }
 
-      if (call.type === 'Inline' || call.inline) {
-        const inlineValue = call.type === 'Inline' ? call.value : call.inline;
+      if (call.type === 'Inline' || 'inline' in callRecord) {
+        const inlineValue = call.type === 'Inline' ? call.value : callRecord.inline;
 
         if (!proposalHash) {
           this.logger.debug('Found Inline call (no hash to verify against)');
@@ -522,14 +543,17 @@ export class ReferendumSimulator {
     }
   }
 
-  private async isNudgeReferendumCall(callData: any, referendumId: number): Promise<boolean> {
+  private async isNudgeReferendumCall(
+    callData: ScheduledCall,
+    referendumId: number
+  ): Promise<boolean> {
     try {
       const palletName = this.getReferendaPalletName();
 
       // Strategy 1: Decode inline bytes via the runtime API (most reliable)
       if (callData?.type === 'Inline' && callData?.value) {
         try {
-          const decoded = await this.api.txFromCallData(callData.value);
+          const decoded = await this.api.txFromCallData(callData.value as Binary);
           if (decoded?.decodedCall?.type === palletName) {
             const callValue = decoded.decodedCall.value;
             if (this.isNudgeMethod(callValue?.type)) {
@@ -560,24 +584,33 @@ export class ReferendumSimulator {
     return name === 'nudge_referendum' || name === 'nudgeReferendum';
   }
 
-  private matchNudgeFromProperties(obj: any, palletName: string): boolean {
-    if (!obj) return false;
+  private matchNudgeFromProperties(obj: unknown, palletName: string): boolean {
+    if (!obj || typeof obj !== 'object') return false;
+
+    const o = obj as Record<string, unknown>;
+    const value = o.value as Record<string, unknown> | undefined;
 
     // Direct method property
-    if (this.isNudgeMethod(obj.method) || this.isNudgeMethod(obj.value?.type)) {
+    if (
+      this.isNudgeMethod(o.method as string | undefined) ||
+      this.isNudgeMethod(value?.type as string | undefined)
+    ) {
       return true;
     }
 
     // Pallet-scoped: { type: "Referenda", value: { type: "nudge_referendum" } }
-    if ((obj.type === palletName || obj.pallet === palletName) && obj.value) {
-      if (this.isNudgeMethod(obj.value.type) || this.isNudgeMethod(obj.value.method)) {
+    if ((o.type === palletName || o.pallet === palletName) && value) {
+      if (
+        this.isNudgeMethod(value.type as string | undefined) ||
+        this.isNudgeMethod(value.method as string | undefined)
+      ) {
         return true;
       }
     }
 
     // Inline wrapper: check the inner value's properties
-    if (obj.type === 'Inline' && obj.value) {
-      return this.matchNudgeFromProperties(obj.value, palletName);
+    if (o.type === 'Inline' && o.value) {
+      return this.matchNudgeFromProperties(o.value, palletName);
     }
 
     return false;
@@ -591,7 +624,8 @@ export class ReferendumSimulator {
     const failed: Array<{ event: ParsedEvent; message?: string }> = [];
 
     for (const e of dispatchedEvents) {
-      const eventValue = e.data?.value || e.data;
+      const dataRecord = e.data as Record<string, unknown> | undefined;
+      const eventValue = (dataRecord?.value || e.data) as Record<string, unknown> | undefined;
       const task = eventValue?.task;
       const result = eventValue?.result;
       const parsedResult = interpretDispatchResult(result);
@@ -653,7 +687,9 @@ export class ReferendumSimulator {
       (e) => e.section === 'Scheduler' && e.method === 'Scheduled'
     );
     for (const e of scheduledEvents) {
-      const whenBlock = e.data?.value?.when || e.data?.when;
+      const eData = e.data as Record<string, unknown> | undefined;
+      const eValue = eData?.value as Record<string, unknown> | undefined;
+      const whenBlock = eValue?.when || eData?.when;
       if (whenBlock) {
         this.logger.info(
           `Note: Proposal scheduled a future task at block ${whenBlock} (this is from the proposal content, not the referendum enactment)`
@@ -745,7 +781,9 @@ export class ReferendumSimulator {
 
     if (schedulerDispatched.length > 0) {
       const lastDispatch = schedulerDispatched[schedulerDispatched.length - 1];
-      const dispatchResult = lastDispatch.data?.value?.result;
+      const lastData = lastDispatch.data as Record<string, unknown> | undefined;
+      const lastValue = lastData?.value as Record<string, unknown> | undefined;
+      const dispatchResult = lastValue?.result as Record<string, unknown> | undefined;
 
       if (dispatchResult?.type === 'Ok') {
         this.logger.success('Pre-call executed successfully');
@@ -762,7 +800,7 @@ export class ReferendumSimulator {
   /**
    * Parse origin string into Chopsticks format
    */
-  private parseOriginString(originString: string): any {
+  private parseOriginString(originString: string): Record<string, string> {
     if (originString === 'Root') {
       return { System: 'Root' };
     }
@@ -790,7 +828,7 @@ export class ReferendumSimulator {
         return [];
       }
 
-      return events.map((e: any) => parseBlockEvent(e));
+      return events.map((e) => parseBlockEvent(e));
     } catch (error) {
       this.logger.warn(`Failed to get events for block ${blockNumber}: ${error}`);
       return [];

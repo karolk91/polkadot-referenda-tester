@@ -1,6 +1,8 @@
+import type { PolkadotClient } from 'polkadot-api';
 import { createClient } from 'polkadot-api';
 import { withPolkadotSdkCompat } from 'polkadot-api/polkadot-sdk-compat';
 import { getWsProvider } from 'polkadot-api/ws-provider/node';
+import type { ReferendaPallet, SubstrateApi } from '../types/substrate-api';
 
 export type ChainNetwork = 'polkadot' | 'kusama' | 'paseo' | 'westend' | 'rococo' | 'unknown';
 export type ChainKind = 'relay' | 'parachain';
@@ -18,7 +20,7 @@ export interface ChainInfo {
  * Get chain information from runtime metadata.
  * Uses system.version.specName to accurately identify the chain.
  */
-export async function getChainInfo(api: any, endpoint: string): Promise<ChainInfo> {
+export async function getChainInfo(api: SubstrateApi, endpoint: string): Promise<ChainInfo> {
   try {
     // Get runtime version to extract specName
     const systemVersion = await api.constants.System.Version();
@@ -80,7 +82,7 @@ export function buildChainInfoFromSpecName(specName: string, endpoint: string): 
 /**
  * Create a polkadot-api client connected to the given WebSocket endpoint.
  */
-export function createPolkadotClient(endpoint: string): any {
+export function createPolkadotClient(endpoint: string): PolkadotClient {
   return createClient(withPolkadotSdkCompat(getWsProvider(endpoint)));
 }
 
@@ -88,9 +90,9 @@ export function createPolkadotClient(endpoint: string): any {
  * Creates an API instance using unsafe API (always).
  * We don't use typed descriptors - unsafe API works for all chains.
  */
-export function createApiForChain(client: any): any {
+export function createApiForChain(client: PolkadotClient): SubstrateApi {
   if (typeof client.getUnsafeApi === 'function') {
-    return client.getUnsafeApi();
+    return client.getUnsafeApi() as unknown as SubstrateApi;
   }
 
   throw new Error('Unable to create unsafe API instance from client');
@@ -106,6 +108,6 @@ export function getReferendaPalletName(isFellowship: boolean): string {
 /**
  * Get the referenda pallet query accessor from the API.
  */
-export function getReferendaPallet(api: any, isFellowship: boolean): any {
+export function getReferendaPallet(api: SubstrateApi, isFellowship: boolean): ReferendaPallet {
   return isFellowship ? api.query.FellowshipReferenda : api.query.Referenda;
 }

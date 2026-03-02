@@ -22,7 +22,7 @@ export function toHexString(value: unknown): string | undefined {
   }
 
   if (typeof value === 'object') {
-    const obj = value as Record<string, any>;
+    const obj = value as Record<string, unknown>;
 
     if (typeof obj.asHex === 'function') {
       try {

@@ -1,10 +1,12 @@
 import { setupNetworks } from '@acala-network/chopsticks-testing';
-import type { TestOptions } from '../types';
+import type { PolkadotClient } from 'polkadot-api';
+import type { ChopsticksConfig, TestOptions } from '../types';
+import type { SubstrateApi } from '../types/substrate-api';
 import { displayChainEvents } from '../utils/event-serializer';
 import type { Logger } from '../utils/logger';
 import { createApiForChain, createPolkadotClient, getChainInfo } from './chain-registry';
 import { ChainTopologyBuilder, type TopologyConfig } from './chain-topology-builder';
-import { ChopsticksManager } from './chopsticks-manager';
+import { type ChopsticksContext, ChopsticksManager } from './chopsticks-manager';
 import { ReferendaFetcher } from './referenda-fetcher';
 import { ReferendumCreator } from './referendum-creator';
 import { ReferendumSimulator } from './referendum-simulator';
@@ -115,7 +117,7 @@ export class NetworkCoordinator {
     this.logger.startSpinner('Starting Chopsticks...');
 
     const chopsticks = new ChopsticksManager(this.logger);
-    let client: any;
+    let client: PolkadotClient | null = null;
 
     try {
       const storageInjection = options?.callToCreateGovernanceReferendum
@@ -127,7 +129,7 @@ export class NetworkCoordinator {
         storageInjection
       );
 
-      const context = await chopsticks.setup(config);
+      const context = await chopsticks.setup(config as unknown as ChopsticksConfig);
 
       const endpoint = context.ws.endpoint;
       client = createPolkadotClient(endpoint);
@@ -209,10 +211,10 @@ export class NetworkCoordinator {
     this.logger.startSpinner('Starting Chopsticks for fellowship chain...');
 
     const chopsticks = new ChopsticksManager(this.logger);
-    let client: any;
+    let client: PolkadotClient | null = null;
 
     try {
-      const config: any = {
+      const config: Record<string, unknown> = {
         endpoint: this.topology.getFellowshipEndpoint(),
         'build-block-mode': 'manual',
       };
@@ -230,7 +232,7 @@ export class NetworkCoordinator {
       const networkKey = await this.topology.detectRelayNetworkKey(
         this.topology.getFellowshipEndpoint()!
       );
-      const context = await chopsticks.setup(config, networkKey);
+      const context = await chopsticks.setup(config as unknown as ChopsticksConfig, networkKey);
 
       const endpoint = context.ws.endpoint;
       client = createPolkadotClient(endpoint);
@@ -306,7 +308,7 @@ export class NetworkCoordinator {
     this.logger.startSpinner('Starting shared chain...');
 
     const chopsticks = new ChopsticksManager(this.logger);
-    let client: any;
+    let client: PolkadotClient | null = null;
 
     try {
       // Use governance endpoint if available, otherwise fellowship
@@ -316,7 +318,7 @@ export class NetworkCoordinator {
         throw new Error('At least one chain endpoint must be provided');
       }
 
-      const config: any = {
+      const config: Record<string, unknown> = {
         endpoint: chainEndpoint,
         'build-block-mode': 'manual',
       };
@@ -333,7 +335,7 @@ export class NetworkCoordinator {
         this.logger.debug('Injecting fellowship storage for Alice account');
       }
 
-      const context = await chopsticks.setup(config);
+      const context = await chopsticks.setup(config as unknown as ChopsticksConfig);
 
       const endpoint = context.ws.endpoint;
       client = createPolkadotClient(endpoint);
@@ -392,7 +394,7 @@ export class NetworkCoordinator {
   }
 
   private async simulateSequentialReferenda(
-    api: any,
+    api: SubstrateApi,
     chopsticks: ChopsticksManager,
     fellowshipRefId: number,
     mainRefId: number
@@ -425,8 +427,8 @@ export class NetworkCoordinator {
   }
 
   private async simulateMultiChainReferenda(chains: {
-    fellowship: { api: any; chopsticks: ChopsticksManager; refId: number };
-    governance: { api: any; chopsticks: ChopsticksManager; refId: number };
+    fellowship: { api: SubstrateApi; chopsticks: ChopsticksManager; refId: number };
+    governance: { api: SubstrateApi; chopsticks: ChopsticksManager; refId: number };
   }): Promise<void> {
     const { fellowship, governance } = chains;
     const fetcher = new ReferendaFetcher(this.logger);
@@ -665,7 +667,7 @@ export class NetworkCoordinator {
       this.topology.fellowshipChain.kind === 'relay'
     );
 
-    const networks = await setupNetworks(networkConfig);
+    const networks = await setupNetworks(networkConfig as Parameters<typeof setupNetworks>[0]);
 
     const additionalManagers = new Map<string, ChopsticksManager>();
     for (const [chainLabel, networkKey] of chainToNetworkKey) {
@@ -684,7 +686,10 @@ export class NetworkCoordinator {
       );
       additionalManagers.set(
         chainLabel,
-        ChopsticksManager.fromExistingContext(this.logger, networks[networkKey])
+        ChopsticksManager.fromExistingContext(
+          this.logger,
+          networks[networkKey] as unknown as ChopsticksContext
+        )
       );
     }
 
@@ -698,18 +703,18 @@ export class NetworkCoordinator {
     return {
       governanceManager: ChopsticksManager.fromExistingContext(
         this.logger,
-        networks[governanceKey]
+        networks[governanceKey] as unknown as ChopsticksContext
       ),
       fellowshipManager: ChopsticksManager.fromExistingContext(
         this.logger,
-        networks[fellowshipKey]
+        networks[fellowshipKey] as unknown as ChopsticksContext
       ),
       additionalManagers,
     };
   }
 
   private async createReferendumIfNeeded(
-    api: any,
+    api: SubstrateApi,
     chopsticks: ChopsticksManager,
     callHex: string | undefined,
     preimageHex: string | undefined,
@@ -726,8 +731,8 @@ export class NetworkCoordinator {
   }
 
   private async displayPostExecutionEvents(context: {
-    governance: { chopsticks: ChopsticksManager; api: any };
-    fellowship: { chopsticks: ChopsticksManager; api: any };
+    governance: { chopsticks: ChopsticksManager; api: SubstrateApi };
+    fellowship: { chopsticks: ChopsticksManager; api: SubstrateApi };
     additionalManagers: Map<string, ChopsticksManager>;
   }): Promise<void> {
     const { governance, fellowship, additionalManagers } = context;

@@ -35,7 +35,7 @@
         "noUnusedVariables": "warn",
         "noUnusedImports": "warn"
       },
-      "suspicious": { "noExplicitAny": "off" },
+      "suspicious": { "noExplicitAny": "warn" },
       "style": {
         "useNodejsImportProtocol": "off",
         "noNonNullAssertion": "off"

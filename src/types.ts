@@ -19,10 +19,10 @@ export interface TestOptions {
 export interface ReferendumInfo {
   id: number;
   track: string;
-  origin: any;
+  origin: unknown;
   proposal: {
     hash: string; // Hex string representation
-    call: any;
+    call: unknown;
     type: 'Lookup' | 'Inline';
     len?: number; // Only present for Lookup proposals
   };
@@ -54,7 +54,7 @@ export interface SimulationResult {
   events: Array<{
     section: string;
     method: string;
-    data: any;
+    data: unknown;
   }>;
   errors?: string[];
   blockExecuted?: number;
@@ -66,7 +66,7 @@ export interface ChopsticksConfig {
   block?: number;
   db?: string;
   'build-block-mode'?: 'batch' | 'manual' | 'instant';
-  'import-storage'?: Record<string, any>;
+  'import-storage'?: Record<string, unknown>;
   'mock-signature-host'?: boolean;
   'allow-unresolved-imports'?: boolean;
   'runtime-log-level'?: number;

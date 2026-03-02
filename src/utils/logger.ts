@@ -3,7 +3,7 @@ import { createSpinner } from 'nanospinner';
 
 export class Logger {
   private verbose: boolean;
-  private spinner: any = null;
+  private spinner: ReturnType<typeof createSpinner> | null = null;
 
   constructor(verbose: boolean = false) {
     this.verbose = verbose;
@@ -73,7 +73,7 @@ export class Logger {
     console.log(`\n${chalk.bold.cyan(`━━━ ${title} ━━━`)}`);
   }
 
-  table(data: Record<string, any>): void {
+  table(data: Record<string, unknown>): void {
     console.log();
     for (const [key, value] of Object.entries(data)) {
       console.log(`  ${chalk.gray(key.padEnd(20))}: ${value}`);

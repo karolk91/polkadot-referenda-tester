@@ -6,18 +6,20 @@ import { toHexString } from './hex';
  * polkadot-api: { type: "Origins", value: { type: "Treasurer" } }
  * Chopsticks:   { origins: "Treasurer" }
  */
-export function convertOriginToStorageFormat(origin: any): any {
+export function convertOriginToStorageFormat(origin: unknown): unknown {
   if (!origin || typeof origin !== 'object') {
     return origin;
   }
 
-  if ('type' in origin && 'value' in origin) {
-    const outerVariant = origin.type.toLowerCase();
-    const innerValue = origin.value;
+  const o = origin as Record<string, unknown>;
+
+  if ('type' in o && 'value' in o) {
+    const outerVariant = (o.type as string).toLowerCase();
+    const innerValue = o.value;
 
     if (innerValue && typeof innerValue === 'object' && 'type' in innerValue) {
       return {
-        [outerVariant]: innerValue.type,
+        [outerVariant]: (innerValue as Record<string, unknown>).type,
       };
     }
 
@@ -34,29 +36,32 @@ export function convertOriginToStorageFormat(origin: any): any {
  *
  * Handles both Lookup and Inline proposal types.
  */
-export function convertProposalToStorageFormat(proposal: any): any {
+export function convertProposalToStorageFormat(proposal: unknown): unknown {
   if (!proposal || typeof proposal !== 'object') {
     return proposal;
   }
 
-  if ('type' in proposal && 'value' in proposal) {
-    const proposalType = proposal.type.toLowerCase();
+  const p = proposal as Record<string, unknown>;
+
+  if ('type' in p && 'value' in p) {
+    const proposalType = (p.type as string).toLowerCase();
 
     if (proposalType === 'lookup') {
+      const value = p.value as Record<string, unknown>;
       return {
         lookup: {
-          hash: toHexString(proposal.value.hash) ?? proposal.value.hash,
-          len: proposal.value.len,
+          hash: toHexString(value.hash) ?? value.hash,
+          len: value.len,
         },
       };
     } else if (proposalType === 'inline') {
       return {
-        inline: toHexString(proposal.value) ?? proposal.value,
+        inline: toHexString(p.value) ?? p.value,
       };
     }
 
     return {
-      [proposalType]: proposal.value,
+      [proposalType]: p.value,
     };
   }
 
@@ -66,25 +71,26 @@ export function convertProposalToStorageFormat(proposal: any): any {
 /**
  * Convert agenda items from polkadot-api format to Chopsticks storage format.
  */
-export function convertAgendaToStorageFormat(agendaItems: any[]): any[] {
+export function convertAgendaToStorageFormat(agendaItems: unknown[]): unknown[] {
   if (!Array.isArray(agendaItems)) {
     return agendaItems;
   }
 
-  return agendaItems.map((item) => {
-    if (!item) return item;
+  return agendaItems.map((item: unknown) => {
+    if (!item || typeof item !== 'object') return item;
 
-    const converted: any = {};
+    const entry = item as Record<string, unknown>;
+    const converted: Record<string, unknown> = {};
 
-    if (item.call) {
-      converted.call = convertCallToStorageFormat(item.call);
+    if (entry.call) {
+      converted.call = convertCallToStorageFormat(entry.call);
     }
 
-    if (item.maybeId !== undefined) converted.maybeId = item.maybeId;
-    if (item.priority !== undefined) converted.priority = item.priority;
-    if (item.maybePeriodic !== undefined) converted.maybePeriodic = item.maybePeriodic;
-    if (item.origin !== undefined) {
-      converted.origin = convertOriginToStorageFormat(item.origin);
+    if (entry.maybeId !== undefined) converted.maybeId = entry.maybeId;
+    if (entry.priority !== undefined) converted.priority = entry.priority;
+    if (entry.maybePeriodic !== undefined) converted.maybePeriodic = entry.maybePeriodic;
+    if (entry.origin !== undefined) {
+      converted.origin = convertOriginToStorageFormat(entry.origin);
     }
 
     return converted;
@@ -94,33 +100,36 @@ export function convertAgendaToStorageFormat(agendaItems: any[]): any[] {
 /**
  * Convert call enum (Inline/Lookup/Legacy) to Chopsticks storage format.
  */
-export function convertCallToStorageFormat(call: any): any {
+export function convertCallToStorageFormat(call: unknown): unknown {
   if (!call || typeof call !== 'object') {
     return call;
   }
 
-  if ('type' in call && 'value' in call) {
-    const callType = call.type.toLowerCase();
+  const c = call as Record<string, unknown>;
+
+  if ('type' in c && 'value' in c) {
+    const callType = (c.type as string).toLowerCase();
 
     if (callType === 'inline') {
       return {
-        inline: toHexString(call.value) ?? call.value,
+        inline: toHexString(c.value) ?? c.value,
       };
     } else if (callType === 'lookup') {
+      const value = c.value as Record<string, unknown>;
       return {
         lookup: {
-          hash: toHexString(call.value.hash) ?? call.value.hash,
-          len: call.value.len,
+          hash: toHexString(value.hash) ?? value.hash,
+          len: value.len,
         },
       };
     } else if (callType === 'legacy') {
       return {
-        legacy: call.value,
+        legacy: c.value,
       };
     }
 
     return {
-      [callType]: call.value,
+      [callType]: c.value,
     };
   }
 

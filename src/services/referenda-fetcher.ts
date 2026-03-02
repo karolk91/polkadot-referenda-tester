@@ -1,4 +1,10 @@
 import type { ReferendumInfo } from '../types';
+import type {
+  ReferendumOngoing,
+  ScheduledCall,
+  SubstrateApi,
+  TrackInfo,
+} from '../types/substrate-api';
 import { stringify } from '../utils/json';
 import type { Logger } from '../utils/logger';
 import { getReferendaPallet, getReferendaPalletName } from './chain-registry';
@@ -20,7 +26,7 @@ export class ReferendaFetcher {
   }
 
   async fetchReferendum(
-    api: any,
+    api: SubstrateApi,
     referendumId: number,
     useFellowship: boolean = false
   ): Promise<ReferendumInfo | null> {
@@ -39,8 +45,10 @@ export class ReferendaFetcher {
       this.logger.debug(`Raw referendum info: ${stringify(refInfo, 2)}`);
 
       // Handle both enum formats: { Ongoing: ... } and { type: "Ongoing", value: ... }
+      // Cast to record for fallback key-based access patterns
+      const refRecord = refInfo as unknown as Record<string, unknown>;
       const refType = refInfo.type || Object.keys(refInfo)[0];
-      const refValue = refInfo.value || refInfo[refType];
+      const refValue = refInfo.value || refRecord[refType];
 
       // Resolve status via lookup, falling back to key-based detection
       const resolvedType = STATUS_MAP[refType]
@@ -53,17 +61,20 @@ export class ReferendaFetcher {
 
       const status = STATUS_MAP[resolvedType];
 
-      let tally: any;
-      let deciding: any;
+      let tally: ReferendumInfo['tally'];
+      let deciding: ReferendumInfo['deciding'];
 
       if (status === 'ongoing') {
-        const ongoing = refValue || refInfo.Ongoing;
+        const ongoing = (refValue || refRecord.Ongoing) as ReferendumOngoing;
 
         tally = ongoing.tally
           ? {
               ayes: ongoing.tally.ayes,
               nays: ongoing.tally.nays,
-              support: ongoing.tally.support,
+              support:
+                'support' in ongoing.tally
+                  ? (ongoing.tally as { support: bigint }).support
+                  : BigInt(0),
             }
           : undefined;
 
@@ -75,7 +86,9 @@ export class ReferendaFetcher {
           : undefined;
       }
 
-      const ongoing = (refType === 'Ongoing' && refValue) || refInfo.Ongoing || null;
+      const ongoing = ((refType === 'Ongoing' && refValue) ||
+        refRecord.Ongoing ||
+        null) as ReferendumOngoing | null;
 
       if (!ongoing) {
         // For approved/rejected/etc referenda, return minimal info
@@ -127,9 +140,9 @@ export class ReferendaFetcher {
   }
 
   private async buildOngoingReferendumInfo(
-    api: any,
+    api: SubstrateApi,
     referendumId: number,
-    ongoing: any,
+    ongoing: ReferendumOngoing,
     status: ReferendumInfo['status'],
     tally: ReferendumInfo['tally'],
     deciding: ReferendumInfo['deciding'],
@@ -151,7 +164,7 @@ export class ReferendaFetcher {
       ? api.constants.FellowshipReferenda
       : api.constants.Referenda;
     const tracks = await referendaConstants.Tracks();
-    const track = tracks.find((t: any) => t[0] === trackId);
+    const track = tracks.find((t: TrackInfo) => t[0] === trackId);
     const trackName = track ? track[1]?.name || `track_${trackId}` : `track_${trackId}`;
 
     return {
@@ -183,38 +196,47 @@ export class ReferendaFetcher {
     };
   }
 
-  private parseProposal(proposal: any): {
+  private parseProposal(proposal: ScheduledCall): {
     hash: string | undefined;
-    call: any;
+    call: unknown;
     type: 'Lookup' | 'Inline';
     len: number;
   } {
     if (proposal.type === 'Lookup') {
+      const lookupValue = proposal.value as { hash: { asHex(): string }; len: number };
       return {
-        hash: proposal.value.hash.asHex(),
+        hash: lookupValue.hash.asHex(),
         call: undefined,
         type: 'Lookup',
-        len: proposal.value.len,
+        len: lookupValue.len,
       };
     }
 
-    const inlineValue = proposal.value ?? proposal;
-    const proposalHash = inlineValue?.hash ?? inlineValue;
-    const len = inlineValue?.length || inlineValue?.len || 0;
+    const inlineValue = (proposal.value ?? proposal) as Record<string, unknown> | undefined;
+    const proposalHash = (inlineValue as Record<string, unknown>)?.hash ?? inlineValue;
+    const len =
+      ((inlineValue as Record<string, unknown>)?.length as number) ||
+      ((inlineValue as Record<string, unknown>)?.len as number) ||
+      0;
 
     let hash: string | undefined;
     if (typeof proposalHash === 'string') {
       hash = proposalHash.startsWith('0x') ? proposalHash : `0x${proposalHash}`;
-    } else if (proposalHash && typeof proposalHash.asHex === 'function') {
-      hash = proposalHash.asHex();
-    } else if (proposalHash && typeof proposalHash.toString === 'function') {
-      hash = proposalHash.toString();
+    } else if (
+      proposalHash &&
+      typeof proposalHash === 'object' &&
+      'asHex' in proposalHash &&
+      typeof (proposalHash as Record<string, unknown>).asHex === 'function'
+    ) {
+      hash = (proposalHash as { asHex(): string }).asHex();
+    } else if (proposalHash && typeof proposalHash === 'object') {
+      hash = String(proposalHash);
     }
 
     return { hash, call: inlineValue, type: 'Inline', len };
   }
 
-  async getLatestBlock(api: any): Promise<number> {
+  async getLatestBlock(api: SubstrateApi): Promise<number> {
     const header = await api.query.System.Number.getValue();
     return Number(header);
   }

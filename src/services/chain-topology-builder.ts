@@ -1,5 +1,6 @@
 import { BuildBlockMode } from '@acala-network/chopsticks-core';
 import * as path from 'path';
+import type { PolkadotClient } from 'polkadot-api';
 import type { TestOptions } from '../types';
 import type { ParsedEndpoint } from '../utils/chain-endpoint-parser';
 import type { Logger } from '../utils/logger';
@@ -80,7 +81,7 @@ export class ChainTopologyBuilder {
   async detectChainTypes(): Promise<void> {
     this.logger.startSpinner('Detecting chain types...');
 
-    const clients: any[] = [];
+    const clients: PolkadotClient[] = [];
     try {
       if (this.governanceEndpoint) {
         const govClient = createPolkadotClient(this.governanceEndpoint);
@@ -139,7 +140,7 @@ export class ChainTopologyBuilder {
   }
 
   buildNetworkTopology(options?: TestOptions): {
-    networkConfig: Record<string, any>;
+    networkConfig: Record<string, unknown>;
     governanceKey: string;
     fellowshipKey: string;
   } {
@@ -150,7 +151,7 @@ export class ChainTopologyBuilder {
     const governanceIsRelay = this._governanceChain.kind === 'relay';
     const fellowshipIsRelay = this._fellowshipChain.kind === 'relay';
 
-    const networkConfig: Record<string, any> = {};
+    const networkConfig: Record<string, unknown> = {};
     let governanceKey: string;
     let fellowshipKey: string;
 
@@ -202,7 +203,7 @@ export class ChainTopologyBuilder {
   }
 
   registerAdditionalChains(
-    networkConfig: Record<string, any>,
+    networkConfig: Record<string, unknown>,
     usedEndpoints: Set<string>,
     governanceIsRelay: boolean,
     fellowshipIsRelay: boolean
@@ -250,8 +251,12 @@ export class ChainTopologyBuilder {
     return { usedEndpoints, chainToNetworkKey };
   }
 
-  buildConfig(endpoint: string, block?: number, storageInjection?: 'fellowship' | 'alice-account') {
-    const config: any = {
+  buildConfig(
+    endpoint: string,
+    block?: number,
+    storageInjection?: 'fellowship' | 'alice-account'
+  ): Record<string, unknown> {
+    const config: Record<string, unknown> = {
       endpoint,
       db: path.join(process.cwd(), '.chopsticks-db'),
       'build-block-mode': BuildBlockMode.Manual,
