@@ -48,7 +48,6 @@ export interface ReferendumInfo {
 }
 
 export interface SimulationResult {
-  success: boolean;
   referendumId: number;
   executionSucceeded: boolean;
   events: Array<{

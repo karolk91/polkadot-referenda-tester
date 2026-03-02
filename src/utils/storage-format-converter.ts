@@ -37,35 +37,7 @@ export function convertOriginToStorageFormat(origin: unknown): unknown {
  * Handles both Lookup and Inline proposal types.
  */
 export function convertProposalToStorageFormat(proposal: unknown): unknown {
-  if (!proposal || typeof proposal !== 'object') {
-    return proposal;
-  }
-
-  const p = proposal as Record<string, unknown>;
-
-  if ('type' in p && 'value' in p) {
-    const proposalType = (p.type as string).toLowerCase();
-
-    if (proposalType === 'lookup') {
-      const value = p.value as Record<string, unknown>;
-      return {
-        lookup: {
-          hash: toHexString(value.hash) ?? value.hash,
-          len: value.len,
-        },
-      };
-    } else if (proposalType === 'inline') {
-      return {
-        inline: toHexString(p.value) ?? p.value,
-      };
-    }
-
-    return {
-      [proposalType]: p.value,
-    };
-  }
-
-  return proposal;
+  return convertCallToStorageFormat(proposal);
 }
 
 /**

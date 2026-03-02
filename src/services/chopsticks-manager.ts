@@ -4,6 +4,7 @@ import { setupNetworks } from '@acala-network/chopsticks-testing';
 import * as path from 'path';
 import type { ChopsticksConfig } from '../types';
 import type { SubstrateApi } from '../types/substrate-api';
+import { stringify } from '../utils/json';
 import type { Logger } from '../utils/logger';
 
 const CHAIN_READY_MAX_ATTEMPTS = 10;
@@ -66,7 +67,7 @@ export class ChopsticksManager {
         ...(config['import-storage'] && { 'import-storage': config['import-storage'] }),
       } as Config;
 
-      this.logger.debug(`Chopsticks config: ${JSON.stringify(chopsticksConfig, null, 2)}`);
+      this.logger.debug(`Chopsticks config: ${stringify(chopsticksConfig, 2)}`);
 
       // Use the provided networkKey or default to "chain".
       // For relay chains, the key should match the network name (e.g. "kusama", "polkadot")

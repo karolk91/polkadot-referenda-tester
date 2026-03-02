@@ -17,7 +17,7 @@ import {
   convertOriginToStorageFormat,
   convertProposalToStorageFormat,
 } from '../utils/storage-format-converter';
-import { getReferendaPalletName } from './chain-registry';
+import { getReferendaPallet, getReferendaPalletName } from './chain-registry';
 import type { ChopsticksManager } from './chopsticks-manager';
 
 /** Arbitrary high number of voters for fellowship passing tally */
@@ -66,7 +66,7 @@ export class ReferendumSimulator {
   }
 
   private getReferendaPalletQuery(): ReferendaPallet {
-    return this.isFellowship ? this.api.query.FellowshipReferenda : this.api.query.Referenda;
+    return getReferendaPallet(this.api, this.isFellowship);
   }
 
   async simulate(
@@ -74,7 +74,6 @@ export class ReferendumSimulator {
     preExecutionOptions?: { preCall?: string; preOrigin?: string }
   ): Promise<SimulationResult> {
     const result: SimulationResult = {
-      success: false,
       referendumId: referendum.id,
       executionSucceeded: false,
       events: [],
@@ -85,7 +84,6 @@ export class ReferendumSimulator {
       if (referendum.status === 'approved') {
         this.logger.info(`Referendum #${referendum.id} is already approved - skipping simulation`);
         return {
-          success: true,
           referendumId: referendum.id,
           executionSucceeded: true,
           events: [],
@@ -97,7 +95,6 @@ export class ReferendumSimulator {
 
       const executionResult = await this.forceReferendumExecution(referendum, preExecutionOptions);
 
-      result.success = executionResult.success;
       result.executionSucceeded = executionResult.executionSucceeded;
       result.events = executionResult.events;
       result.blockExecuted = executionResult.blockExecuted;
@@ -121,7 +118,6 @@ export class ReferendumSimulator {
     referendum: ReferendumInfo,
     preExecutionOptions?: { preCall?: string; preOrigin?: string }
   ): Promise<{
-    success: boolean;
     executionSucceeded: boolean;
     events: ParsedEvent[];
     errors?: string[];
@@ -143,7 +139,6 @@ export class ReferendumSimulator {
       );
 
       return {
-        success: true,
         executionSucceeded,
         events,
         errors,
@@ -209,7 +204,7 @@ export class ReferendumSimulator {
     this.logger.succeedSpinner('Referendum state updated to passing');
 
     await this.chopsticks.newBlock();
-    await this.verifyReferendumModification(referendum.id, palletName);
+    await this.verifyReferendumModification(referendum.id);
   }
 
   private async scheduleAndExecuteProposal(referendum: ReferendumInfo): Promise<{
@@ -332,10 +327,7 @@ export class ReferendumSimulator {
     };
   }
 
-  private async verifyReferendumModification(
-    referendumId: number,
-    _palletName: string
-  ): Promise<void> {
+  private async verifyReferendumModification(referendumId: number): Promise<void> {
     this.logger.startSpinner('Verifying referendum modification...');
     const palletQuery = this.getReferendaPalletQuery();
     const verifyRefInfo = await palletQuery.ReferendumInfoFor.getValue(referendumId);
@@ -740,7 +732,7 @@ export class ReferendumSimulator {
   private async executePreCall(callHex: string, originString?: string): Promise<void> {
     this.logger.section('Executing Pre-Call');
 
-    const preCallHex = callHex.startsWith('0x') ? callHex : `0x${callHex}`;
+    const preCallHex = toHexString(callHex) as string;
     this.logger.debug(`Pre-call hex: ${preCallHex.substring(0, 66)}...`);
 
     const preOrigin = originString ? this.parseOriginString(originString) : { System: 'Root' };

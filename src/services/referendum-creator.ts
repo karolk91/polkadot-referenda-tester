@@ -5,6 +5,7 @@ import { getPolkadotSigner } from 'polkadot-api/signer';
 import type { SubstrateApi } from '../types/substrate-api';
 import { formatDispatchError } from '../utils/dispatch-result';
 import { parseBlockEvent } from '../utils/event-serializer';
+import { toHexString } from '../utils/hex';
 import { stringify } from '../utils/json';
 import type { Logger } from '../utils/logger';
 import { getReferendaPallet } from './chain-registry';
@@ -107,7 +108,7 @@ export class ReferendumCreator {
   }
 
   private static validateHex(input: string, paramName: string): string {
-    const hex = input.startsWith('0x') ? input : `0x${input}`;
+    const hex = toHexString(input) as string;
     if (!/^0x[0-9a-fA-F]*$/.test(hex)) {
       throw new Error(`Invalid hex string for ${paramName}: ${input}`);
     }

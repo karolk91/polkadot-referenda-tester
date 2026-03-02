@@ -118,7 +118,7 @@ export function formatDispatchError(error: unknown): string {
     }
 
     if ('token' in e) {
-      return `Token error: ${JSON.stringify(e.token)}`;
+      return `Token error: ${stringify(e.token)}`;
     }
 
     if ('value' in e) {

@@ -129,6 +129,7 @@ describe('convertCallToStorageFormat', () => {
 
 describe('convertAgendaToStorageFormat', () => {
   it('handles non-array input', () => {
+    // biome-ignore lint/suspicious/noExplicitAny: intentionally testing invalid input
     expect(convertAgendaToStorageFormat('not-array' as any)).toBe('not-array');
   });
 

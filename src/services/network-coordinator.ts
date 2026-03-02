@@ -515,8 +515,10 @@ export class NetworkCoordinator {
       const fellowshipApi = createApiForChain(fellowshipClient);
 
       this.logger.startSpinner('Waiting for chains to be ready...');
-      await governanceChopsticks.waitForChainReady(governanceApi);
-      await fellowshipChopsticks.waitForChainReady(fellowshipApi);
+      await Promise.all([
+        governanceChopsticks.waitForChainReady(governanceApi),
+        fellowshipChopsticks.waitForChainReady(fellowshipApi),
+      ]);
       this.logger.succeedSpinner('Chains are ready');
 
       if (!this.topology.getGovernanceEndpoint() || !this.topology.getFellowshipEndpoint()) {
@@ -525,14 +527,12 @@ export class NetworkCoordinator {
         );
       }
 
-      this.topology.governanceChain = await getChainInfo(
-        governanceApi,
-        this.topology.getGovernanceEndpoint()!
-      );
-      this.topology.fellowshipChain = await getChainInfo(
-        fellowshipApi,
-        this.topology.getFellowshipEndpoint()!
-      );
+      const [govChainInfo, fellChainInfo] = await Promise.all([
+        getChainInfo(governanceApi, this.topology.getGovernanceEndpoint()!),
+        getChainInfo(fellowshipApi, this.topology.getFellowshipEndpoint()!),
+      ]);
+      this.topology.governanceChain = govChainInfo;
+      this.topology.fellowshipChain = fellChainInfo;
       this.logger.info(
         `Governance: ${this.topology.governanceChain.label} (${this.topology.governanceChain.specName})`
       );
@@ -589,13 +589,11 @@ export class NetworkCoordinator {
       fellowshipClient.destroy();
 
       if (cleanup) {
-        await governanceChopsticks.cleanup();
-        await fellowshipChopsticks.cleanup();
-
-        // Cleanup additional chains
-        for (const manager of additionalManagers.values()) {
-          await manager.cleanup();
-        }
+        await Promise.all([
+          governanceChopsticks.cleanup(),
+          fellowshipChopsticks.cleanup(),
+          ...Array.from(additionalManagers.values()).map((m) => m.cleanup()),
+        ]);
       } else {
         await this.pauseAllManagers([
           {
@@ -739,11 +737,22 @@ export class NetworkCoordinator {
     this.logger.section('Post-Execution XCM Events');
     this.logger.info('Advancing blocks to process XCM messages...\n');
 
-    await governance.chopsticks.newBlock();
-    await fellowship.chopsticks.newBlock();
+    await Promise.all([governance.chopsticks.newBlock(), fellowship.chopsticks.newBlock()]);
 
-    const governanceBlockNumber = await governance.api.query.System.Number.getValue();
-    const governanceEventsPost = await governance.api.query.System.Events.getValue();
+    const [
+      [governanceBlockNumber, governanceEventsPost],
+      [fellowshipBlockNumber, fellowshipEvents],
+    ] = await Promise.all([
+      Promise.all([
+        governance.api.query.System.Number.getValue(),
+        governance.api.query.System.Events.getValue(),
+      ]),
+      Promise.all([
+        fellowship.api.query.System.Number.getValue(),
+        fellowship.api.query.System.Events.getValue(),
+      ]),
+    ]);
+
     displayChainEvents(
       this.topology.governanceChain!.label,
       governanceBlockNumber,
@@ -752,8 +761,6 @@ export class NetworkCoordinator {
     );
     this.logger.info('');
 
-    const fellowshipBlockNumber = await fellowship.api.query.System.Number.getValue();
-    const fellowshipEvents = await fellowship.api.query.System.Events.getValue();
     displayChainEvents(
       this.topology.fellowshipChain!.label,
       fellowshipBlockNumber,

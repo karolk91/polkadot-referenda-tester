@@ -5,6 +5,7 @@ import type {
   SubstrateApi,
   TrackInfo,
 } from '../types/substrate-api';
+import { toHexString } from '../utils/hex';
 import { stringify } from '../utils/json';
 import type { Logger } from '../utils/logger';
 import { getReferendaPallet, getReferendaPalletName } from './chain-registry';
@@ -221,7 +222,7 @@ export class ReferendaFetcher {
 
     let hash: string | undefined;
     if (typeof proposalHash === 'string') {
-      hash = proposalHash.startsWith('0x') ? proposalHash : `0x${proposalHash}`;
+      hash = toHexString(proposalHash) as string;
     } else if (
       proposalHash &&
       typeof proposalHash === 'object' &&

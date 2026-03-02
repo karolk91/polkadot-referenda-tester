@@ -83,27 +83,42 @@ export class ChainTopologyBuilder {
 
     const clients: PolkadotClient[] = [];
     try {
+      const detectionTasks: Promise<void>[] = [];
+
       if (this.governanceEndpoint) {
         const govClient = createPolkadotClient(this.governanceEndpoint);
         clients.push(govClient);
         const govApi = createApiForChain(govClient);
-        this._governanceChain = await getChainInfo(govApi, this.governanceEndpoint);
+        detectionTasks.push(
+          getChainInfo(govApi, this.governanceEndpoint).then((info) => {
+            this._governanceChain = info;
+          })
+        );
       }
 
       if (this.fellowshipEndpoint) {
         const fellClient = createPolkadotClient(this.fellowshipEndpoint);
         clients.push(fellClient);
         const fellApi = createApiForChain(fellClient);
-        this._fellowshipChain = await getChainInfo(fellApi, this.fellowshipEndpoint);
+        detectionTasks.push(
+          getChainInfo(fellApi, this.fellowshipEndpoint).then((info) => {
+            this._fellowshipChain = info;
+          })
+        );
       }
 
       for (const chain of this.additionalChainEndpoints) {
         const client = createPolkadotClient(chain.url);
         clients.push(client);
         const api = createApiForChain(client);
-        const chainInfo = await getChainInfo(api, chain.url);
-        this._additionalChains.push(chainInfo);
+        detectionTasks.push(
+          getChainInfo(api, chain.url).then((info) => {
+            this._additionalChains.push(info);
+          })
+        );
       }
+
+      await Promise.all(detectionTasks);
 
       this.logger.succeedSpinner('Chain types detected');
       if (this._governanceChain) {
