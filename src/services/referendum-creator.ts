@@ -1,12 +1,12 @@
-import { getPolkadotSigner } from 'polkadot-api/signer';
-import { Binary } from '@polkadot-api/substrate-bindings';
 import { Keyring } from '@polkadot/keyring';
-import { Logger } from '../utils/logger';
-import { stringify } from '../utils/json';
-import { ChopsticksManager } from './chopsticks-manager';
-import { parseBlockEvent } from '../utils/event-serializer';
+import { Binary } from '@polkadot-api/substrate-bindings';
+import { getPolkadotSigner } from 'polkadot-api/signer';
 import { formatDispatchError } from '../utils/dispatch-result';
+import { parseBlockEvent } from '../utils/event-serializer';
+import { stringify } from '../utils/json';
+import type { Logger } from '../utils/logger';
 import { getReferendaPallet } from './chain-registry';
+import type { ChopsticksManager } from './chopsticks-manager';
 
 // Alice's address on Substrate-based chains
 export const ALICE_ADDRESS = '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY';
@@ -146,7 +146,7 @@ export class ReferendumCreator {
     const validatedHex = ReferendumCreator.validateHex(preimageCallHex, 'preimageCall');
     this.logger.startSpinner('Noting preimage...');
 
-    let preimageCall;
+    let preimageCall: any;
     try {
       preimageCall = await api.txFromCallData(Binary.fromHex(validatedHex));
     } catch (e) {
@@ -175,7 +175,7 @@ export class ReferendumCreator {
   ): Promise<number> {
     this.logger.startSpinner('Submitting referendum...');
 
-    let submitCall;
+    let submitCall: any;
     try {
       submitCall = await api.txFromCallData(Binary.fromHex(validatedSubmitHex));
     } catch (e) {

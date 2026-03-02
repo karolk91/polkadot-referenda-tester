@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { serializeEventData, parseBlockEvent } from '../utils/event-serializer';
+import { describe, expect, it } from 'vitest';
+import { parseBlockEvent, serializeEventData } from '../utils/event-serializer';
 
 describe('serializeEventData', () => {
   it('returns null/undefined as-is', () => {

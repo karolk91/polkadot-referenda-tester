@@ -1,14 +1,14 @@
-import { Logger } from '../utils/logger';
 import {
   createApiForChain,
   createPolkadotClient,
   getReferendaPallet,
   getReferendaPalletName,
 } from '../services/chain-registry';
-import { parseEndpoint } from '../utils/chain-endpoint-parser';
 import { ChopsticksManager } from '../services/chopsticks-manager';
 import { ReferendaFetcher } from '../services/referenda-fetcher';
-import { ChopsticksConfig } from '../types';
+import type { ChopsticksConfig } from '../types';
+import { parseEndpoint } from '../utils/chain-endpoint-parser';
+import { Logger } from '../utils/logger';
 
 interface ListOptions {
   governanceChainUrl?: string;
@@ -105,7 +105,7 @@ export async function listReferendums(options: ListOptions): Promise<void> {
 
       // Parse status
       const refType = refInfo.type || Object.keys(refInfo)[0];
-      let status: string = refType.toLowerCase();
+      const status: string = refType.toLowerCase();
 
       // Get track and tally for ongoing referendums
       let track: string | undefined;

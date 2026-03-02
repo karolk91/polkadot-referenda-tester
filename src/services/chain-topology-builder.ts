@@ -1,16 +1,16 @@
-import { Logger } from '../utils/logger';
 import { BuildBlockMode } from '@acala-network/chopsticks-core';
 import * as path from 'path';
+import type { TestOptions } from '../types';
+import type { ParsedEndpoint } from '../utils/chain-endpoint-parser';
+import type { Logger } from '../utils/logger';
 import {
-  ChainInfo,
-  ChainNetwork,
-  getChainInfo,
+  type ChainInfo,
+  type ChainNetwork,
   createApiForChain,
   createPolkadotClient,
+  getChainInfo,
 } from './chain-registry';
 import { ReferendumCreator } from './referendum-creator';
-import { TestOptions } from '../types';
-import { ParsedEndpoint } from '../utils/chain-endpoint-parser';
 
 export interface TopologyConfig {
   governance?: string;
@@ -116,7 +116,9 @@ export class ChainTopologyBuilder {
         );
       }
     } finally {
-      clients.forEach((client) => client.destroy());
+      clients.forEach((client) => {
+        client.destroy();
+      });
     }
   }
 

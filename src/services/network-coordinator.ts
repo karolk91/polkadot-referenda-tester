@@ -1,13 +1,13 @@
-import { Logger } from '../utils/logger';
+import { setupNetworks } from '@acala-network/chopsticks-testing';
+import type { TestOptions } from '../types';
+import { displayChainEvents } from '../utils/event-serializer';
+import type { Logger } from '../utils/logger';
+import { createApiForChain, createPolkadotClient, getChainInfo } from './chain-registry';
+import { ChainTopologyBuilder, type TopologyConfig } from './chain-topology-builder';
 import { ChopsticksManager } from './chopsticks-manager';
-import { ReferendumSimulator } from './referendum-simulator';
 import { ReferendaFetcher } from './referenda-fetcher';
 import { ReferendumCreator } from './referendum-creator';
-import { setupNetworks } from '@acala-network/chopsticks-testing';
-import { getChainInfo, createApiForChain, createPolkadotClient } from './chain-registry';
-import { TestOptions } from '../types';
-import { displayChainEvents } from '../utils/event-serializer';
-import { ChainTopologyBuilder, TopologyConfig } from './chain-topology-builder';
+import { ReferendumSimulator } from './referendum-simulator';
 
 export class NetworkCoordinator {
   private logger: Logger;
@@ -175,7 +175,9 @@ export class NetworkCoordinator {
 
       if (!result.executionSucceeded) {
         if (result.errors) {
-          result.errors.forEach((err) => this.logger.error(`  ${err}`));
+          result.errors.forEach((err) => {
+            this.logger.error(`  ${err}`);
+          });
         }
         throw new Error(`Referendum #${actualRefId} execution failed`);
       }
@@ -274,7 +276,9 @@ export class NetworkCoordinator {
 
       if (!result.executionSucceeded) {
         if (result.errors) {
-          result.errors.forEach((err) => this.logger.error(`  ${err}`));
+          result.errors.forEach((err) => {
+            this.logger.error(`  ${err}`);
+          });
         }
         throw new Error(`Fellowship referendum #${fellowshipRefId} execution failed`);
       }
@@ -444,7 +448,9 @@ export class NetworkCoordinator {
 
     if (!fellowshipResult.executionSucceeded) {
       if (fellowshipResult.errors) {
-        fellowshipResult.errors.forEach((err) => this.logger.error(`  ${err}`));
+        fellowshipResult.errors.forEach((err) => {
+          this.logger.error(`  ${err}`);
+        });
       }
       throw new Error('Fellowship referendum execution failed');
     }
@@ -470,7 +476,9 @@ export class NetworkCoordinator {
 
     if (!mainResult.executionSucceeded) {
       if (mainResult.errors) {
-        mainResult.errors.forEach((err) => this.logger.error(`  ${err}`));
+        mainResult.errors.forEach((err) => {
+          this.logger.error(`  ${err}`);
+        });
       }
       throw new Error('Main referendum execution failed');
     }
@@ -605,7 +613,7 @@ export class NetworkCoordinator {
   private async pauseAllManagers(
     managers: Array<{ label: string; manager: ChopsticksManager }>
   ): Promise<void> {
-    this.logger.info('\n' + '='.repeat(70));
+    this.logger.info(`\n${'='.repeat(70)}`);
     this.logger.info('Chopsticks networks are paused for manual examination');
 
     for (const { label, manager } of managers) {

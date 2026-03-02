@@ -1,16 +1,16 @@
-import { ReferendumInfo, SimulationResult } from '../types';
-import { Logger } from '../utils/logger';
+import type { ReferendumInfo, SimulationResult } from '../types';
+import { formatDispatchError, interpretDispatchResult } from '../utils/dispatch-result';
+import { type ParsedEvent, parseBlockEvent, serializeEventData } from '../utils/event-serializer';
+import { toHexString } from '../utils/hex';
 import { stringify } from '../utils/json';
-import { ChopsticksManager } from './chopsticks-manager';
-import { serializeEventData, parseBlockEvent, ParsedEvent } from '../utils/event-serializer';
-import { interpretDispatchResult, formatDispatchError } from '../utils/dispatch-result';
+import type { Logger } from '../utils/logger';
 import {
+  convertAgendaToStorageFormat,
   convertOriginToStorageFormat,
   convertProposalToStorageFormat,
-  convertAgendaToStorageFormat,
 } from '../utils/storage-format-converter';
-import { toHexString } from '../utils/hex';
 import { getReferendaPalletName } from './chain-registry';
+import type { ChopsticksManager } from './chopsticks-manager';
 
 /** Arbitrary high number of voters for fellowship passing tally */
 const FELLOWSHIP_PASSING_BARE_AYES = 100;
@@ -629,7 +629,7 @@ export class ReferendumSimulator {
 
   private checkExecutionResults(
     events: ParsedEvent[],
-    referendumId: number,
+    _referendumId: number,
     expectedBlock?: number
   ): { executionSucceeded: boolean; errors?: string[] } {
     const extrinsicFailures = events.filter(

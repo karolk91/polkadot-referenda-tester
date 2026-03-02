@@ -1,9 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
+  convertAgendaToStorageFormat,
+  convertCallToStorageFormat,
   convertOriginToStorageFormat,
   convertProposalToStorageFormat,
-  convertCallToStorageFormat,
-  convertAgendaToStorageFormat,
 } from '../utils/storage-format-converter';
 
 describe('convertOriginToStorageFormat', () => {

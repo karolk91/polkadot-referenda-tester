@@ -1,7 +1,7 @@
-import { ReferendumInfo } from '../types';
-import { Logger } from '../utils/logger';
+import type { ReferendumInfo } from '../types';
 import { stringify } from '../utils/json';
-import { getReferendaPalletName, getReferendaPallet } from './chain-registry';
+import type { Logger } from '../utils/logger';
+import { getReferendaPallet, getReferendaPalletName } from './chain-registry';
 
 const STATUS_MAP: Record<string, ReferendumInfo['status']> = {
   Ongoing: 'ongoing',
@@ -53,8 +53,8 @@ export class ReferendaFetcher {
 
       const status = STATUS_MAP[resolvedType];
 
-      let tally;
-      let deciding;
+      let tally: any;
+      let deciding: any;
 
       if (status === 'ongoing') {
         const ongoing = refValue || refInfo.Ongoing;
@@ -204,7 +204,7 @@ export class ReferendaFetcher {
 
     let hash: string | undefined;
     if (typeof proposalHash === 'string') {
-      hash = proposalHash.startsWith('0x') ? proposalHash : '0x' + proposalHash;
+      hash = proposalHash.startsWith('0x') ? proposalHash : `0x${proposalHash}`;
     } else if (proposalHash && typeof proposalHash.asHex === 'function') {
       hash = proposalHash.asHex();
     } else if (proposalHash && typeof proposalHash.toString === 'function') {

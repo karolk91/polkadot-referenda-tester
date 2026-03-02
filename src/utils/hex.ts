@@ -10,15 +10,15 @@ export function toHexString(value: unknown): string | undefined {
   }
 
   if (typeof value === 'string') {
-    return value.startsWith('0x') ? value : '0x' + value;
+    return value.startsWith('0x') ? value : `0x${value}`;
   }
 
   if (value instanceof Uint8Array) {
-    return '0x' + Buffer.from(value).toString('hex');
+    return `0x${Buffer.from(value).toString('hex')}`;
   }
 
   if (Buffer.isBuffer(value)) {
-    return '0x' + value.toString('hex');
+    return `0x${value.toString('hex')}`;
   }
 
   if (typeof value === 'object') {
@@ -44,7 +44,7 @@ export function toHexString(value: unknown): string | undefined {
     if (typeof obj.toU8a === 'function') {
       try {
         const u8a = obj.toU8a();
-        return '0x' + Buffer.from(u8a).toString('hex');
+        return `0x${Buffer.from(u8a).toString('hex')}`;
       } catch {
         // fall through
       }

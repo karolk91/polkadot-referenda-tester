@@ -70,7 +70,7 @@ export class Logger {
   }
 
   section(title: string): void {
-    console.log('\n' + chalk.bold.cyan(`━━━ ${title} ━━━`));
+    console.log(`\n${chalk.bold.cyan(`━━━ ${title} ━━━`)}`);
   }
 
   table(data: Record<string, any>): void {

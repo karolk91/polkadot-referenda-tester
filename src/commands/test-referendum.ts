@@ -1,7 +1,7 @@
-import { TestOptions } from '../types';
-import { Logger } from '../utils/logger';
 import { NetworkCoordinator } from '../services/network-coordinator';
+import type { TestOptions } from '../types';
 import { parseEndpoint, parseMultipleEndpoints } from '../utils/chain-endpoint-parser';
+import { Logger } from '../utils/logger';
 
 function validateOptions(options: TestOptions): void {
   if (options.referendum && options.callToCreateGovernanceReferendum) {
@@ -56,13 +56,13 @@ export async function testReferendum(options: TestOptions): Promise<void> {
       ? parseMultipleEndpoints(options.additionalChains)
       : [];
 
-    const mainRefId = options.referendum ? parseInt(options.referendum) : undefined;
-    if (mainRefId !== undefined && isNaN(mainRefId)) {
+    const mainRefId = options.referendum ? parseInt(options.referendum, 10) : undefined;
+    if (mainRefId !== undefined && Number.isNaN(mainRefId)) {
       throw new Error(`Invalid referendum ID: ${options.referendum}`);
     }
 
-    const fellowshipRefId = options.fellowship ? parseInt(options.fellowship) : undefined;
-    if (fellowshipRefId !== undefined && isNaN(fellowshipRefId)) {
+    const fellowshipRefId = options.fellowship ? parseInt(options.fellowship, 10) : undefined;
+    if (fellowshipRefId !== undefined && Number.isNaN(fellowshipRefId)) {
       throw new Error('Invalid fellowship referendum ID');
     }
 

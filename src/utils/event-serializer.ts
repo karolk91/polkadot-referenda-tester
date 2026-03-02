@@ -1,6 +1,6 @@
-import { Logger } from './logger';
 import { toHexString } from './hex';
 import { stringify } from './json';
+import type { Logger } from './logger';
 
 export interface ParsedEvent {
   section: string;
@@ -44,7 +44,7 @@ export function serializeEventData(data: any): any {
   // Handle array-like objects (objects with numeric keys)
   if (typeof data === 'object' && !Array.isArray(data)) {
     const keys = Object.keys(data);
-    const isArrayLike = keys.length > 0 && keys.every((k) => !isNaN(Number(k)));
+    const isArrayLike = keys.length > 0 && keys.every((k) => !Number.isNaN(Number(k)));
 
     if (isArrayLike) {
       const bytes: number[] = [];
@@ -54,7 +54,7 @@ export function serializeEventData(data: any): any {
         }
       }
       if (bytes.length > 0) {
-        return '0x' + Buffer.from(bytes).toString('hex');
+        return `0x${Buffer.from(bytes).toString('hex')}`;
       }
     }
   }
@@ -88,7 +88,7 @@ export function parseBlockEvent(event: any): ParsedEvent {
   // polkadot-api direct format: { type: "PalletName", value: { type: "EventName", value: {...} } }
   if (event.type && typeof event.type === 'string') {
     section = event.type;
-    if (event.value && event.value.type) {
+    if (event.value?.type) {
       method = event.value.type;
       data = event.value.value || event.value;
     } else {

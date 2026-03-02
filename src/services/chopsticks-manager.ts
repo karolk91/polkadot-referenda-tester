@@ -1,9 +1,9 @@
-import { setupNetworks } from '@acala-network/chopsticks-testing';
 import type { Config } from '@acala-network/chopsticks/dist/esm/schema/index.js';
 import { BuildBlockMode } from '@acala-network/chopsticks-core';
-import { ChopsticksConfig } from '../types';
-import { Logger } from '../utils/logger';
+import { setupNetworks } from '@acala-network/chopsticks-testing';
 import * as path from 'path';
+import type { ChopsticksConfig } from '../types';
+import type { Logger } from '../utils/logger';
 
 const CHAIN_READY_MAX_ATTEMPTS = 10;
 const CHAIN_READY_DELAY_MS = 500;
