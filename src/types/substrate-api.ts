@@ -1,5 +1,5 @@
 import type { Binary } from '@polkadot-api/substrate-bindings';
-import type { PolkadotSigner } from 'polkadot-api';
+import type { Enum, HexString, PolkadotSigner, SS58String } from 'polkadot-api';
 
 // --- Storage entry types (mirrors polkadot-api's unsafe API shapes) ---
 
@@ -18,14 +18,16 @@ interface StorageEntries<K, V> {
 
 // --- Referendum types ---
 
+type WhoAmount = { who: SS58String; amount: bigint };
+
 export interface ReferendumOngoing {
   track: number;
   origin: unknown;
   proposal: ScheduledCall;
   enactment: unknown;
   submitted: number;
-  submission_deposit: { who: string; amount: bigint } | undefined;
-  decision_deposit: { who: string; amount: bigint } | undefined;
+  submission_deposit: WhoAmount | undefined;
+  decision_deposit: WhoAmount | undefined;
   deciding: { since: number; confirming: number | undefined } | undefined;
   tally: GovernanceTally | FellowshipTally;
   in_queue: boolean;
@@ -44,17 +46,21 @@ export interface FellowshipTally {
   nays: bigint;
 }
 
-export interface ReferendumInfo {
-  type: string;
-  value: ReferendumOngoing | unknown;
-}
+export type RawReferendumInfo = Enum<{
+  Ongoing: ReferendumOngoing;
+  Approved: [number, WhoAmount | undefined, WhoAmount | undefined];
+  Rejected: [number, WhoAmount | undefined, WhoAmount | undefined];
+  Cancelled: [number, WhoAmount | undefined, WhoAmount | undefined];
+  TimedOut: [number, WhoAmount | undefined, WhoAmount | undefined];
+  Killed: number;
+}>;
 
 // --- Scheduler types ---
 
-export type ScheduledCall = {
-  type: string;
-  value: unknown;
-};
+export type ScheduledCall = Enum<{
+  Inline: Binary;
+  Lookup: { hash: HexString; len: number };
+}>;
 
 export interface ScheduledEntry {
   call: ScheduledCall;
@@ -89,7 +95,7 @@ export type TrackInfo = [number, { name: string; [key: string]: unknown }];
 // --- Referenda pallet interface (shared by Referenda + FellowshipReferenda) ---
 
 export interface ReferendaPallet {
-  ReferendumInfoFor: StorageMap<number, ReferendumInfo>;
+  ReferendumInfoFor: StorageMap<number, RawReferendumInfo>;
   ReferendumCount: StorageValue<number>;
 }
 

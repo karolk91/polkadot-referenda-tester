@@ -104,10 +104,7 @@ export async function listReferendums(options: ListOptions): Promise<void> {
         continue; // Skip if referendum doesn't exist
       }
 
-      // Parse status
-      const refRecord = refInfo as unknown as Record<string, unknown>;
-      const refType = refInfo.type || Object.keys(refInfo)[0];
-      const status: string = refType.toLowerCase();
+      const status: string = refInfo.type.toLowerCase();
 
       // Get track and tally for ongoing referendums
       let track: string | undefined;
@@ -116,22 +113,15 @@ export async function listReferendums(options: ListOptions): Promise<void> {
       let support: string | undefined;
       let bareAyes: string | undefined;
 
-      if (status === 'ongoing') {
-        const refValue = (refInfo.value || refRecord[refType]) as
-          | Record<string, unknown>
-          | undefined;
-        const trackId = refValue?.track;
-        if (trackId !== undefined) {
-          track = String(trackId);
-        }
+      if (refInfo.type === 'Ongoing') {
+        const ongoing = refInfo.value;
+        track = String(ongoing.track);
 
-        // Extract tally information
-        const tally = refValue?.tally as Record<string, unknown> | undefined;
-        if (tally) {
-          ayes = tally.ayes?.toString();
-          nays = tally.nays?.toString();
-          support = tally.support?.toString();
-          bareAyes = tally.bare_ayes?.toString();
+        if (ongoing.tally) {
+          ayes = ongoing.tally.ayes.toString();
+          nays = ongoing.tally.nays.toString();
+          support = 'support' in ongoing.tally ? String(ongoing.tally.support) : undefined;
+          bareAyes = 'bare_ayes' in ongoing.tally ? String(ongoing.tally.bare_ayes) : undefined;
         }
       }
 

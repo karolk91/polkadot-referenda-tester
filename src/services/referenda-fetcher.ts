@@ -5,19 +5,9 @@ import type {
   SubstrateApi,
   TrackInfo,
 } from '../types/substrate-api';
-import { toHexString } from '../utils/hex';
 import { stringify } from '../utils/json';
 import type { Logger } from '../utils/logger';
 import { getReferendaPallet, getReferendaPalletName } from './chain-registry';
-
-const STATUS_MAP: Record<string, ReferendumInfo['status']> = {
-  Ongoing: 'ongoing',
-  Approved: 'approved',
-  Rejected: 'rejected',
-  Cancelled: 'cancelled',
-  TimedOut: 'timedout',
-  Killed: 'killed',
-};
 
 export class ReferendaFetcher {
   private logger: Logger;
@@ -45,56 +35,10 @@ export class ReferendaFetcher {
 
       this.logger.debug(`Raw referendum info: ${stringify(refInfo, 2)}`);
 
-      // Handle both enum formats: { Ongoing: ... } and { type: "Ongoing", value: ... }
-      // Cast to record for fallback key-based access patterns
-      const refRecord = refInfo as unknown as Record<string, unknown>;
-      const refType = refInfo.type || Object.keys(refInfo)[0];
-      const refValue = refInfo.value || refRecord[refType];
+      const status = refInfo.type.toLowerCase() as ReferendumInfo['status'];
 
-      // Resolve status via lookup, falling back to key-based detection
-      const resolvedType = STATUS_MAP[refType]
-        ? refType
-        : Object.keys(STATUS_MAP).find((key) => key in refInfo);
-
-      if (!resolvedType) {
-        throw new Error(`Unknown referendum status: ${stringify(refInfo)}`);
-      }
-
-      const status = STATUS_MAP[resolvedType];
-
-      let tally: ReferendumInfo['tally'];
-      let deciding: ReferendumInfo['deciding'];
-
-      if (status === 'ongoing') {
-        const ongoing = (refValue || refRecord.Ongoing) as ReferendumOngoing;
-
-        tally = ongoing.tally
-          ? {
-              ayes: ongoing.tally.ayes,
-              nays: ongoing.tally.nays,
-              support:
-                'support' in ongoing.tally
-                  ? (ongoing.tally as { support: bigint }).support
-                  : BigInt(0),
-            }
-          : undefined;
-
-        deciding = ongoing.deciding
-          ? {
-              since: ongoing.deciding.since,
-              confirming: ongoing.deciding.confirming,
-            }
-          : undefined;
-      }
-
-      const ongoing = ((refType === 'Ongoing' && refValue) ||
-        refRecord.Ongoing ||
-        null) as ReferendumOngoing | null;
-
-      if (!ongoing) {
-        // For approved/rejected/etc referenda, return minimal info
-        // This allows the flow to continue (e.g., test main referendum even if fellowship is approved)
-        if (status === 'approved') {
+      if (refInfo.type !== 'Ongoing') {
+        if (refInfo.type === 'Approved') {
           this.logger.info(
             `Referendum #${referendumId} is already approved - calls have been executed`
           );
@@ -116,6 +60,26 @@ export class ReferendaFetcher {
         this.logger.info(`Please try an ongoing referendum ID`);
         return null;
       }
+
+      const ongoing = refInfo.value;
+
+      const tally: ReferendumInfo['tally'] = ongoing.tally
+        ? {
+            ayes: ongoing.tally.ayes,
+            nays: ongoing.tally.nays,
+            support:
+              'support' in ongoing.tally
+                ? (ongoing.tally as { support: bigint }).support
+                : BigInt(0),
+          }
+        : undefined;
+
+      const deciding: ReferendumInfo['deciding'] = ongoing.deciding
+        ? {
+            since: ongoing.deciding.since,
+            confirming: ongoing.deciding.confirming,
+          }
+        : undefined;
 
       const referendumInfo = await this.buildOngoingReferendumInfo(
         api,
@@ -204,37 +168,16 @@ export class ReferendaFetcher {
     len: number;
   } {
     if (proposal.type === 'Lookup') {
-      const lookupValue = proposal.value as { hash: { asHex(): string }; len: number };
       return {
-        hash: lookupValue.hash.asHex(),
+        hash: proposal.value.hash,
         call: undefined,
         type: 'Lookup',
-        len: lookupValue.len,
+        len: proposal.value.len,
       };
     }
 
-    const inlineValue = (proposal.value ?? proposal) as Record<string, unknown> | undefined;
-    const proposalHash = (inlineValue as Record<string, unknown>)?.hash ?? inlineValue;
-    const len =
-      ((inlineValue as Record<string, unknown>)?.length as number) ||
-      ((inlineValue as Record<string, unknown>)?.len as number) ||
-      0;
-
-    let hash: string | undefined;
-    if (typeof proposalHash === 'string') {
-      hash = toHexString(proposalHash) as string;
-    } else if (
-      proposalHash &&
-      typeof proposalHash === 'object' &&
-      'asHex' in proposalHash &&
-      typeof (proposalHash as Record<string, unknown>).asHex === 'function'
-    ) {
-      hash = (proposalHash as { asHex(): string }).asHex();
-    } else if (proposalHash && typeof proposalHash === 'object') {
-      hash = String(proposalHash);
-    }
-
-    return { hash, call: inlineValue, type: 'Inline', len };
+    // proposal.type === 'Inline' → proposal.value is Binary
+    return { hash: undefined, call: proposal.value, type: 'Inline', len: 0 };
   }
 
   async getLatestBlock(api: SubstrateApi): Promise<number> {

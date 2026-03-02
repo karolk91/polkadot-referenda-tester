@@ -1,4 +1,3 @@
-import type { Binary } from '@polkadot-api/substrate-bindings';
 import type { ReferendumInfo, SimulationResult } from '../types';
 import type {
   ReferendaPallet,
@@ -164,20 +163,21 @@ export class ReferendumSimulator {
     }
 
     if (refInfo.type !== 'Ongoing') {
-      const actualState = refInfo.type || Object.keys(refInfo)[0] || 'unknown';
       this.logger.info(
-        `Referendum ${referendum.id} is in state: ${actualState} (expected: Ongoing)`
+        `Referendum ${referendum.id} is in state: ${refInfo.type} (expected: Ongoing)`
       );
 
-      if (actualState === 'Approved' || actualState === 'approved') {
+      if (refInfo.type === 'Approved') {
         this.logger.info(
           'Referendum already approved in Chopsticks fork, attempting to execute scheduled call...'
         );
-      } else {
-        throw new Error(
-          `Referendum ${referendum.id} is not in Ongoing state (current state: ${actualState})`
-        );
+        this.logger.succeedSpinner('Referendum already approved — skipping state update');
+        return;
       }
+
+      throw new Error(
+        `Referendum ${referendum.id} is not in Ongoing state (current state: ${refInfo.type})`
+      );
     }
 
     const totalIssuance = await this.api.query.Balances.TotalIssuance.getValue();
@@ -186,7 +186,7 @@ export class ReferendumSimulator {
     const { currentBlock } = await this.getSchedulingBlocks();
 
     const modifiedRefInfo = this.buildPassingReferendumStorage(
-      refInfo.value as ReferendumOngoing,
+      refInfo.value,
       totalIssuance,
       currentBlock
     );
@@ -333,7 +333,7 @@ export class ReferendumSimulator {
     const verifyRefInfo = await palletQuery.ReferendumInfoFor.getValue(referendumId);
 
     if (verifyRefInfo && verifyRefInfo.type === 'Ongoing') {
-      const ongoing = verifyRefInfo.value as ReferendumOngoing;
+      const ongoing = verifyRefInfo.value;
       this.logger.succeedSpinner('Referendum modification verified');
       this.logger.info(`\u2713 Enactment: ${stringify(ongoing.enactment)}`);
       this.logger.info(`\u2713 Tally: ${stringify(ongoing.tally)}`);
@@ -451,84 +451,57 @@ export class ReferendumSimulator {
   }
 
   private getCallInfo(call: ScheduledCall): { type: string; hex?: string; hash?: string } {
-    if (!call) {
-      return { type: 'unknown' };
-    }
-
-    const callRecord = call as Record<string, unknown>;
-
-    if (call.type === 'Inline' && call.value) {
+    if (call.type === 'Inline') {
       return {
         type: 'Inline',
         hex: toHexString(call.value) || undefined,
       };
     }
 
-    if (call.type === 'Lookup' || ('lookup' in callRecord && call.value)) {
-      const lookupData = (call.type === 'Lookup' ? call.value : callRecord.lookup) as
-        | Record<string, unknown>
-        | undefined;
-      return {
-        type: 'Lookup',
-        hash: (lookupData?.hash ? toHexString(lookupData.hash) : undefined) || undefined,
-      };
-    }
-
-    return { type: 'unknown' };
+    return {
+      type: 'Lookup',
+      hash: (call.value.hash ? toHexString(call.value.hash) : undefined) || undefined,
+    };
   }
 
   private isProposalExecutionCall(call: ScheduledCall, proposalHash?: string): boolean {
     try {
-      if (!call) {
-        return false;
-      }
-
-      const callRecord = call as Record<string, unknown>;
-
-      if (call.type === 'Lookup' || 'lookup' in callRecord) {
-        const lookupData = (call.type === 'Lookup' ? call.value : callRecord.lookup) as
-          | Record<string, unknown>
-          | undefined;
-        if (proposalHash && lookupData) {
-          const callHash = toHexString(lookupData.hash) ?? String(lookupData.hash);
+      if (call.type === 'Lookup') {
+        if (proposalHash) {
+          const callHash = toHexString(call.value.hash) ?? String(call.value.hash);
           const matches = callHash === proposalHash;
           if (matches) {
             this.logger.debug(`\u2713 Found Lookup call matching proposal hash: ${proposalHash}`);
           }
           return matches;
         }
-        return !proposalHash;
+        return true;
       }
 
-      if (call.type === 'Inline' || 'inline' in callRecord) {
-        const inlineValue = call.type === 'Inline' ? call.value : callRecord.inline;
-
-        if (!proposalHash) {
-          this.logger.debug('Found Inline call (no hash to verify against)');
-          return true;
-        }
-
-        const callDataHex =
-          toHexString(inlineValue) ??
-          (inlineValue && typeof inlineValue === 'object' ? stringify(inlineValue) : '');
-
-        const matches =
-          callDataHex === proposalHash || callDataHex.toLowerCase() === proposalHash.toLowerCase();
-
-        if (matches) {
-          this.logger.debug(
-            `\u2713 Found Inline call matching proposal call data: ${proposalHash.substring(0, 66)}...`
-          );
-        } else {
-          this.logger.debug(
-            `Inline call data ${callDataHex.substring(0, 66)}... doesn't match proposal ${proposalHash.substring(0, 66)}...`
-          );
-        }
-
-        return matches;
+      // call.type === 'Inline'
+      if (!proposalHash) {
+        this.logger.debug('Found Inline call (no hash to verify against)');
+        return true;
       }
 
-      return false;
+      const callDataHex =
+        toHexString(call.value) ??
+        (call.value && typeof call.value === 'object' ? stringify(call.value) : '');
+
+      const matches =
+        callDataHex === proposalHash || callDataHex.toLowerCase() === proposalHash.toLowerCase();
+
+      if (matches) {
+        this.logger.debug(
+          `\u2713 Found Inline call matching proposal call data: ${proposalHash.substring(0, 66)}...`
+        );
+      } else {
+        this.logger.debug(
+          `Inline call data ${callDataHex.substring(0, 66)}... doesn't match proposal ${proposalHash.substring(0, 66)}...`
+        );
+      }
+
+      return matches;
     } catch (error) {
       this.logger.debug(`Error checking proposal execution call: ${error}`);
       return false;
@@ -545,7 +518,7 @@ export class ReferendumSimulator {
       // Strategy 1: Decode inline bytes via the runtime API (most reliable)
       if (callData?.type === 'Inline' && callData?.value) {
         try {
-          const decoded = await this.api.txFromCallData(callData.value as Binary);
+          const decoded = await this.api.txFromCallData(callData.value);
           if (decoded?.decodedCall?.type === palletName) {
             const callValue = decoded.decodedCall.value;
             if (this.isNudgeMethod(callValue?.type)) {

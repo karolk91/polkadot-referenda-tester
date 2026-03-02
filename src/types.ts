@@ -1,3 +1,5 @@
+import type { SS58String } from 'polkadot-api';
+
 export interface TestOptions {
   governanceChainUrl?: string;
   referendum?: string;
@@ -34,11 +36,11 @@ export interface ReferendumInfo {
   };
   submittedAt: number;
   submissionDeposit?: {
-    who: string;
+    who: SS58String;
     amount: bigint;
   };
   decisionDeposit?: {
-    who: string;
+    who: SS58String;
     amount: bigint;
   };
   deciding?: {
