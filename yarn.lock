@@ -1919,6 +1919,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@tsconfig/node20@npm:^20.1.9":
+  version: 20.1.9
+  resolution: "@tsconfig/node20@npm:20.1.9"
+  checksum: 10c0/04e4e515dc6ce9386af74accb565884c3771b355208acc3d3dee32f0ce4c1d12e59319e05200fb2b87a8655ed4d8eb9910e36667a91e4683879feea9938d90d1
+  languageName: node
+  linkType: hard
+
 "@types/bn.js@npm:^5.1.6":
   version: 5.2.0
   resolution: "@types/bn.js@npm:5.2.0"
@@ -4766,6 +4773,7 @@ __metadata:
     "@acala-network/chopsticks-testing": "npm:^1.2.7"
     "@biomejs/biome": "npm:^2.0.0"
     "@polkadot/keyring": "npm:^13.0.0"
+    "@tsconfig/node20": "npm:^20.1.9"
     "@types/node": "npm:^22.15.21"
     chalk: "npm:^4.1.2"
     cli-table3: "npm:^0.6.5"
