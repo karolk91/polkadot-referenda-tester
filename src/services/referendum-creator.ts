@@ -145,6 +145,24 @@ export class ReferendumCreator {
     return { referendumId, preimageNoted };
   }
 
+  private async decodeAndSignCall(
+    api: SubstrateApi,
+    signer: PolkadotSigner,
+    validatedHex: string,
+    failureLabel: string
+  ): Promise<string> {
+    const decoded = await api.txFromCallData(Binary.fromHex(validatedHex)).catch((e: Error) => {
+      this.logger.failSpinner(`Failed to decode ${failureLabel} call data`);
+      throw new Error(
+        `Invalid ${failureLabel} call data for this chain's runtime. The hex may have been generated for a different runtime version or chain. Original error: ${e.message}`
+      );
+    });
+
+    const signedTx = await decoded.sign(signer);
+    this.logger.debug(`${failureLabel} transaction signed`);
+    return signedTx;
+  }
+
   private async notePreimage(
     api: SubstrateApi,
     signer: PolkadotSigner,
@@ -153,18 +171,7 @@ export class ReferendumCreator {
     const validatedHex = ReferendumCreator.validateHex(preimageCallHex, 'preimageCall');
     this.logger.startSpinner('Noting preimage...');
 
-    const preimageCall = await api
-      .txFromCallData(Binary.fromHex(validatedHex))
-      .catch((e: Error) => {
-        this.logger.failSpinner('Failed to decode preimage call data');
-        throw new Error(
-          `Invalid preimage call data for this chain's runtime. The hex may have been generated for a different runtime version or chain. Original error: ${e.message}`
-        );
-      });
-
-    // Sign and pass directly to newBlock to avoid race conditions with async tx pool
-    const signedPreimageTx = await preimageCall.sign(signer);
-    this.logger.debug('Preimage transaction signed');
+    const signedPreimageTx = await this.decodeAndSignCall(api, signer, validatedHex, 'preimage');
 
     await this.chopsticks.newBlock({ transactions: [signedPreimageTx] });
     await this.chopsticks.newBlock();
@@ -181,22 +188,16 @@ export class ReferendumCreator {
   ): Promise<number> {
     this.logger.startSpinner('Submitting referendum...');
 
-    const submitCall = await api
-      .txFromCallData(Binary.fromHex(validatedSubmitHex))
-      .catch((e: Error) => {
-        this.logger.failSpinner('Failed to decode referendum submit call data');
-        throw new Error(
-          `Invalid referendum submit call data for this chain's runtime. The hex may have been generated for a different runtime version or chain. Original error: ${e.message}`
-        );
-      });
-
     const palletQuery = getReferendaPallet(api, isFellowship);
     const countBefore = Number(await palletQuery.ReferendumCount.getValue());
     this.logger.debug(`Referendum count before submit: ${countBefore}`);
 
-    // Sign and pass directly to newBlock to avoid race conditions with async tx pool
-    const signedSubmitTx = await submitCall.sign(signer);
-    this.logger.debug('Referendum transaction signed');
+    const signedSubmitTx = await this.decodeAndSignCall(
+      api,
+      signer,
+      validatedSubmitHex,
+      'referendum submit'
+    );
 
     await this.chopsticks.newBlock({ transactions: [signedSubmitTx] });
 

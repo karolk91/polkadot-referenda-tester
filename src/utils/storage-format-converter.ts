@@ -11,11 +11,11 @@ export function convertOriginToStorageFormat(origin: unknown): unknown {
     return origin;
   }
 
-  const o = origin as Record<string, unknown>;
+  const originRecord = origin as Record<string, unknown>;
 
-  if ('type' in o && 'value' in o) {
-    const outerVariant = (o.type as string).toLowerCase();
-    const innerValue = o.value;
+  if ('type' in originRecord && 'value' in originRecord) {
+    const outerVariant = (originRecord.type as string).toLowerCase();
+    const innerValue = originRecord.value;
 
     if (innerValue && typeof innerValue === 'object' && 'type' in innerValue) {
       return {
@@ -77,17 +77,17 @@ export function convertCallToStorageFormat(call: unknown): unknown {
     return call;
   }
 
-  const c = call as Record<string, unknown>;
+  const callRecord = call as Record<string, unknown>;
 
-  if ('type' in c && 'value' in c) {
-    const callType = (c.type as string).toLowerCase();
+  if ('type' in callRecord && 'value' in callRecord) {
+    const callType = (callRecord.type as string).toLowerCase();
 
     if (callType === 'inline') {
       return {
-        inline: toHexString(c.value) ?? c.value,
+        inline: toHexString(callRecord.value) ?? callRecord.value,
       };
     } else if (callType === 'lookup') {
-      const value = c.value as Record<string, unknown>;
+      const value = callRecord.value as Record<string, unknown>;
       return {
         lookup: {
           hash: toHexString(value.hash) ?? value.hash,
@@ -96,12 +96,12 @@ export function convertCallToStorageFormat(call: unknown): unknown {
       };
     } else if (callType === 'legacy') {
       return {
-        legacy: c.value,
+        legacy: callRecord.value,
       };
     }
 
     return {
-      [callType]: c.value,
+      [callType]: callRecord.value,
     };
   }
 

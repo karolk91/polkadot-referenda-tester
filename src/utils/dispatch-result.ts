@@ -27,48 +27,61 @@ export function interpretDispatchResult(result: unknown): {
   }
 
   if (typeof result === 'object' && result !== null) {
-    const r = result as Record<string, unknown>;
+    const resultRecord = result as Record<string, unknown>;
 
-    if ('success' in r && typeof r.success === 'boolean') {
+    if ('success' in resultRecord && typeof resultRecord.success === 'boolean') {
       return {
-        outcome: r.success ? 'success' : 'failure',
-        message: r.success ? undefined : formatDispatchError(r.value ?? r.error ?? r.err),
+        outcome: resultRecord.success ? 'success' : 'failure',
+        message: resultRecord.success
+          ? undefined
+          : formatDispatchError(resultRecord.value ?? resultRecord.error ?? resultRecord.err),
       };
     }
 
-    if ('isOk' in r && typeof r.isOk === 'boolean') {
-      if (r.isOk) {
+    if ('isOk' in resultRecord && typeof resultRecord.isOk === 'boolean') {
+      if (resultRecord.isOk) {
         return { outcome: 'success' };
       }
-      const errVal = typeof r.asErr === 'function' ? (r.asErr as () => unknown)() : r.asErr;
+      const errVal =
+        typeof resultRecord.asErr === 'function'
+          ? (resultRecord.asErr as () => unknown)()
+          : resultRecord.asErr;
       return { outcome: 'failure', message: formatDispatchError(errVal) };
     }
 
-    if ('ok' in r && typeof r.ok === 'boolean') {
+    if ('ok' in resultRecord && typeof resultRecord.ok === 'boolean') {
       return {
-        outcome: r.ok ? 'success' : 'failure',
-        message: r.ok ? undefined : formatDispatchError(r.err),
+        outcome: resultRecord.ok ? 'success' : 'failure',
+        message: resultRecord.ok ? undefined : formatDispatchError(resultRecord.err),
       };
     }
 
-    if ('Ok' in r && r.Ok !== undefined) {
+    if ('Ok' in resultRecord && resultRecord.Ok !== undefined) {
       return { outcome: 'success' };
     }
 
-    if ('Err' in r) {
-      return { outcome: 'failure', message: formatDispatchError(r.Err) };
+    if ('Err' in resultRecord) {
+      return { outcome: 'failure', message: formatDispatchError(resultRecord.Err) };
     }
 
-    const type = (r.type || r.__kind || r.kind || '').toString();
-    if (type) {
-      const loweredType = type.toLowerCase();
-      if (loweredType === 'ok' || loweredType === 'success') {
+    // Extract the enum variant tag used by various polkadot-api result formats
+    const resultTypeTag = (
+      resultRecord.type ||
+      resultRecord.__kind ||
+      resultRecord.kind ||
+      ''
+    ).toString();
+    if (resultTypeTag) {
+      const loweredTag = resultTypeTag.toLowerCase();
+      if (loweredTag === 'ok' || loweredTag === 'success') {
         return { outcome: 'success' };
       }
-      if (['err', 'error', 'fail', 'failure'].includes(loweredType)) {
+      if (['err', 'error', 'fail', 'failure'].includes(loweredTag)) {
         return {
           outcome: 'failure',
-          message: formatDispatchError(r.value ?? r.error ?? r.err),
+          message: formatDispatchError(
+            resultRecord.value ?? resultRecord.error ?? resultRecord.err
+          ),
         };
       }
     }
@@ -99,30 +112,30 @@ export function formatDispatchError(error: unknown): string {
       return error.map((entry: unknown) => formatDispatchError(entry)).join(', ');
     }
 
-    const e = error as Record<string, unknown>;
+    const errorRecord = error as Record<string, unknown>;
 
-    if ('type' in e && typeof e.type === 'string') {
-      const payload = e.value ?? e.error ?? e.err ?? e.data;
+    if ('type' in errorRecord && typeof errorRecord.type === 'string') {
+      const payload = errorRecord.value ?? errorRecord.error ?? errorRecord.err ?? errorRecord.data;
       if (payload !== undefined) {
-        return `${e.type}: ${stringify(payload)}`;
+        return `${errorRecord.type}: ${stringify(payload)}`;
       }
-      return e.type;
+      return errorRecord.type;
     }
 
-    if ('Module' in e) {
-      return `Module error: ${stringify(e.Module)}`;
+    if ('Module' in errorRecord) {
+      return `Module error: ${stringify(errorRecord.Module)}`;
     }
 
-    if ('module' in e) {
-      return `Module error: ${stringify(e.module)}`;
+    if ('module' in errorRecord) {
+      return `Module error: ${stringify(errorRecord.module)}`;
     }
 
-    if ('token' in e) {
-      return `Token error: ${stringify(e.token)}`;
+    if ('token' in errorRecord) {
+      return `Token error: ${stringify(errorRecord.token)}`;
     }
 
-    if ('value' in e) {
-      return stringify(e.value);
+    if ('value' in errorRecord) {
+      return stringify(errorRecord.value);
     }
 
     return stringify(error);

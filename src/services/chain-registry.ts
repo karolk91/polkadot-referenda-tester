@@ -21,23 +21,10 @@ export interface ChainInfo {
  * Uses system.version.specName to accurately identify the chain.
  */
 export async function getChainInfo(api: SubstrateApi, endpoint: string): Promise<ChainInfo> {
-  try {
-    // Get runtime version to extract specName
-    const systemVersion = await api.constants.System.Version();
-    const specName: string = systemVersion.spec_name || systemVersion.specName || 'unknown';
+  const systemVersion = await api.constants.System.Version();
+  const specName: string = systemVersion.spec_name || systemVersion.specName || 'unknown';
 
-    return buildChainInfoFromSpecName(specName, endpoint);
-  } catch {
-    // Fallback to unknown if we can't read specName
-    return {
-      id: 'unknown',
-      label: 'unknown',
-      endpoint,
-      network: 'unknown',
-      kind: 'parachain',
-      specName: 'unknown',
-    };
-  }
+  return buildChainInfoFromSpecName(specName, endpoint);
 }
 
 /**

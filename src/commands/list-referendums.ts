@@ -8,6 +8,7 @@ import {
 import { ChopsticksManager } from '../services/chopsticks-manager';
 import { ReferendaFetcher } from '../services/referenda-fetcher';
 import type { ChopsticksConfig } from '../types';
+import type { RawReferendumInfo, ReferendaPallet } from '../types/substrate-api';
 import { parseEndpoint } from '../utils/chain-endpoint-parser';
 import { Logger } from '../utils/logger';
 
@@ -18,6 +19,84 @@ interface ListOptions {
   verbose?: boolean;
 }
 
+interface ReferendumEntry {
+  id: number;
+  status: string;
+  track?: string;
+  ayes?: string;
+  nays?: string;
+  support?: string;
+  bareAyes?: string;
+}
+
+async function fetchAllReferendumEntries(
+  pallet: ReferendaPallet,
+  referendumCount: number
+): Promise<ReferendumEntry[]> {
+  const entries: ReferendumEntry[] = [];
+
+  for (let id = 0; id < referendumCount; id++) {
+    const refInfo = (await pallet.ReferendumInfoFor.getValue(id)) as RawReferendumInfo | undefined;
+
+    if (!refInfo) {
+      continue;
+    }
+
+    const status: string = refInfo.type.toLowerCase();
+    let track: string | undefined;
+    let ayes: string | undefined;
+    let nays: string | undefined;
+    let support: string | undefined;
+    let bareAyes: string | undefined;
+
+    if (refInfo.type === 'Ongoing') {
+      const ongoing = refInfo.value;
+      track = String(ongoing.track);
+
+      if (ongoing.tally) {
+        ayes = ongoing.tally.ayes.toString();
+        nays = ongoing.tally.nays.toString();
+        support = 'support' in ongoing.tally ? String(ongoing.tally.support) : undefined;
+        bareAyes = 'bare_ayes' in ongoing.tally ? String(ongoing.tally.bare_ayes) : undefined;
+      }
+    }
+
+    entries.push({ id, status, track, ayes, nays, support, bareAyes });
+  }
+
+  return entries;
+}
+
+function formatReferendumOutput(entries: ReferendumEntry[], statusFilter?: string): void {
+  let filtered = entries;
+  if (statusFilter) {
+    const filterStatus = statusFilter.toLowerCase();
+    filtered = entries.filter((entry) => entry.status === filterStatus);
+  }
+
+  for (const entry of filtered) {
+    const parts: Array<string | number> = [entry.id, entry.status];
+
+    if (entry.track !== undefined) {
+      parts.push(`track=${entry.track}`);
+    }
+    if (entry.ayes !== undefined) {
+      parts.push(`ayes=${entry.ayes}`);
+    }
+    if (entry.nays !== undefined) {
+      parts.push(`nays=${entry.nays}`);
+    }
+    if (entry.support !== undefined) {
+      parts.push(`support=${entry.support}`);
+    }
+    if (entry.bareAyes !== undefined) {
+      parts.push(`bareAyes=${entry.bareAyes}`);
+    }
+
+    console.log(parts.join(','));
+  }
+}
+
 export async function listReferendums(options: ListOptions): Promise<void> {
   const logger = new Logger(options.verbose);
 
@@ -25,7 +104,6 @@ export async function listReferendums(options: ListOptions): Promise<void> {
   let client: PolkadotClient | null = null;
 
   try {
-    // Determine which chain to use
     let chainUrl: string;
     let blockNumber: number | undefined;
     let useFellowship = false;
@@ -44,7 +122,6 @@ export async function listReferendums(options: ListOptions): Promise<void> {
       throw new Error('Either --governance-chain-url or --fellowship-chain-url is required');
     }
 
-    // Determine fork block
     let forkBlock: number;
     if (blockNumber !== undefined) {
       forkBlock = blockNumber;
@@ -59,7 +136,6 @@ export async function listReferendums(options: ListOptions): Promise<void> {
       logger.succeedSpinner(`Latest block: ${forkBlock}`);
     }
 
-    // Start Chopsticks
     chopsticks = new ChopsticksManager(logger);
     const chopsticksConfig: ChopsticksConfig = {
       endpoint: chainUrl,
@@ -83,80 +159,10 @@ export async function listReferendums(options: ListOptions): Promise<void> {
     logger.startSpinner(`Fetching ${palletName} referendums...`);
 
     const referendumCount: number = await pallet.ReferendumCount.getValue();
-
     logger.succeedSpinner(`Found ${referendumCount} referendum(s)`);
 
-    // Fetch all referendums
-    const results: Array<{
-      id: number;
-      status: string;
-      track?: string;
-      ayes?: string;
-      nays?: string;
-      support?: string;
-      bareAyes?: string;
-    }> = [];
-
-    for (let id = 0; id < referendumCount; id++) {
-      const refInfo = await pallet.ReferendumInfoFor.getValue(id);
-
-      if (!refInfo) {
-        continue; // Skip if referendum doesn't exist
-      }
-
-      const status: string = refInfo.type.toLowerCase();
-
-      // Get track and tally for ongoing referendums
-      let track: string | undefined;
-      let ayes: string | undefined;
-      let nays: string | undefined;
-      let support: string | undefined;
-      let bareAyes: string | undefined;
-
-      if (refInfo.type === 'Ongoing') {
-        const ongoing = refInfo.value;
-        track = String(ongoing.track);
-
-        if (ongoing.tally) {
-          ayes = ongoing.tally.ayes.toString();
-          nays = ongoing.tally.nays.toString();
-          support = 'support' in ongoing.tally ? String(ongoing.tally.support) : undefined;
-          bareAyes = 'bare_ayes' in ongoing.tally ? String(ongoing.tally.bare_ayes) : undefined;
-        }
-      }
-
-      results.push({ id, status, track, ayes, nays, support, bareAyes });
-    }
-
-    // Filter results by status if specified
-    let filteredResults = results;
-    if (options.status) {
-      const filterStatus = options.status.toLowerCase();
-      filteredResults = results.filter((ref) => ref.status === filterStatus);
-    }
-
-    // Output results in parseable format: id,status,track,ayes,nays,support,bareAyes
-    for (const ref of filteredResults) {
-      const parts = [ref.id, ref.status];
-
-      if (ref.track !== undefined) {
-        parts.push(`track=${ref.track}`);
-      }
-      if (ref.ayes !== undefined) {
-        parts.push(`ayes=${ref.ayes}`);
-      }
-      if (ref.nays !== undefined) {
-        parts.push(`nays=${ref.nays}`);
-      }
-      if (ref.support !== undefined) {
-        parts.push(`support=${ref.support}`);
-      }
-      if (ref.bareAyes !== undefined) {
-        parts.push(`bareAyes=${ref.bareAyes}`);
-      }
-
-      console.log(parts.join(','));
-    }
+    const entries = await fetchAllReferendumEntries(pallet, referendumCount);
+    formatReferendumOutput(entries, options.status);
 
     process.exitCode = 0;
   } catch (error) {

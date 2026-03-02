@@ -24,21 +24,9 @@ use crate::common::context::{GovernanceTestContext, KusamaTestContext, MultiChai
 use crate::common::extrinsic_submitter;
 use crate::common::network::{initialize_network, verify_binaries};
 use crate::common::port_allocator;
+use crate::common::run_and_bail;
 use crate::common::tool_runner::{ToolArgs, ToolRunner};
 use crate::common::tracks;
-
-/// Panic immediately when the first sub-test failure is detected.
-/// This avoids wasting CI time running remaining sub-tests when a
-/// systemic bug (e.g. broken Lookup hash parsing) causes all of them to fail.
-fn bail_on_first_error(errors: &[String]) {
-    if !errors.is_empty() {
-        panic!(
-            "{} sub-test(s) failed (bailing early):\n{}",
-            errors.len(),
-            errors.join("\n")
-        );
-    }
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Polkadot Governance — all 16 tracks + scenario tests
@@ -59,87 +47,29 @@ async fn polkadot_governance_all_tracks() {
         .expect("failed to build context");
 
     let runner = ToolRunner::new();
-
     let mut errors: Vec<String> = Vec::new();
 
     // ── Per-track tests (create + by-number for each track) ──────────────
 
     for track in tracks::GOVERNANCE_TRACKS {
-        match run_gov_create_test(&ctx, &runner, track).await {
-            Ok(()) => log::info!("PASS: gov_create_{}", track.name),
-            Err(e) => {
-                let msg = format!("FAIL: gov_create_{}: {e:#}", track.name);
-                log::error!("{msg}");
-                errors.push(msg);
-            }
-        }
-        bail_on_first_error(&errors);
-
-        match run_gov_bynum_test(&ctx, &runner, track).await {
-            Ok(()) => log::info!("PASS: gov_bynum_{}", track.name),
-            Err(e) => {
-                let msg = format!("FAIL: gov_bynum_{}: {e:#}", track.name);
-                log::error!("{msg}");
-                errors.push(msg);
-            }
-        }
-        bail_on_first_error(&errors);
+        run_and_bail!(errors, format!("gov_create_{}", track.name), run_gov_create_test(&ctx, &runner, track));
+        run_and_bail!(errors, format!("gov_bynum_{}", track.name), run_gov_bynum_test(&ctx, &runner, track));
     }
 
     // ── Scenario tests ───────────────────────────────────────────────────
 
-    // Refresh fork blocks — after running per-track tests the zombienet nodes
-    // may have pruned state for the original fork blocks.
     ctx.refresh_fork_blocks()
         .await
         .expect("failed to refresh fork blocks");
 
-    let scenarios: Vec<(&str, _)> = vec![
-        (
-            "gov_happy_path",
-            run_governance_happy_path(&ctx, &runner).await,
-        ),
-        (
-            "gov_dispatch_failure",
-            run_governance_dispatch_failure(&ctx, &runner).await,
-        ),
-        (
-            "gov_pre_call_remark",
-            run_governance_with_pre_call(&ctx, &runner).await,
-        ),
-        (
-            "gov_remark_proposal",
-            run_governance_remark_proposal(&ctx, &runner).await,
-        ),
-        (
-            "gov_invalid_hex",
-            run_governance_invalid_hex(&ctx, &runner).await,
-        ),
-        (
-            "gov_pre_call_non_root_origin",
-            run_governance_pre_call_non_root_origin(&ctx, &runner).await,
-        ),
-        (
-            "gov_pre_call_invalid_origin",
-            run_governance_pre_call_invalid_origin(&ctx, &runner).await,
-        ),
-        (
-            "gov_create_no_preimage",
-            run_governance_create_no_preimage(&ctx, &runner).await,
-        ),
-    ];
-
-    for (name, result) in scenarios {
-        match result {
-            Ok(()) => log::info!("PASS: {name}"),
-            Err(e) => {
-                let msg = format!("FAIL: {name}: {e:#}");
-                log::error!("{msg}");
-                errors.push(msg);
-            }
-        }
-        bail_on_first_error(&errors);
-    }
+    run_and_bail!(errors, "gov_happy_path", run_governance_happy_path(&ctx, &runner));
+    run_and_bail!(errors, "gov_dispatch_failure", run_governance_dispatch_failure(&ctx, &runner));
+    run_and_bail!(errors, "gov_pre_call_remark", run_governance_with_pre_call(&ctx, &runner));
+    run_and_bail!(errors, "gov_remark_proposal", run_governance_remark_proposal(&ctx, &runner));
+    run_and_bail!(errors, "gov_invalid_hex", run_governance_invalid_hex(&ctx, &runner));
+    run_and_bail!(errors, "gov_pre_call_non_root_origin", run_governance_pre_call_non_root_origin(&ctx, &runner));
+    run_and_bail!(errors, "gov_pre_call_invalid_origin", run_governance_pre_call_invalid_origin(&ctx, &runner));
+    run_and_bail!(errors, "gov_create_no_preimage", run_governance_create_no_preimage(&ctx, &runner));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -166,8 +96,8 @@ async fn polkadot_fellowship_tracks_part1() {
     let mut errors: Vec<String> = Vec::new();
 
     for track in &tracks::POLKADOT_FELLOWSHIP_TRACKS[..15] {
-        run_polkadot_fellowship_track_pair(&ctx, &runner, track, &mut errors).await;
-        bail_on_first_error(&errors);
+        run_and_bail!(errors, format!("fell_create_{}", track.name), run_polkadot_fellowship_create_test(&ctx, &runner, track));
+        run_and_bail!(errors, format!("fell_bynum_{}", track.name), run_polkadot_fellowship_bynum_test(&ctx, &runner, track));
     }
 }
 
@@ -191,8 +121,8 @@ async fn polkadot_fellowship_tracks_part2() {
     let mut errors: Vec<String> = Vec::new();
 
     for track in &tracks::POLKADOT_FELLOWSHIP_TRACKS[15..] {
-        run_polkadot_fellowship_track_pair(&ctx, &runner, track, &mut errors).await;
-        bail_on_first_error(&errors);
+        run_and_bail!(errors, format!("fell_create_{}", track.name), run_polkadot_fellowship_create_test(&ctx, &runner, track));
+        run_and_bail!(errors, format!("fell_bynum_{}", track.name), run_polkadot_fellowship_bynum_test(&ctx, &runner, track));
     }
 
     // ── Multi-chain scenario tests ───────────────────────────────────────
@@ -201,59 +131,10 @@ async fn polkadot_fellowship_tracks_part2() {
         .await
         .expect("failed to refresh fork blocks");
 
-    let scenarios: Vec<(&str, _)> = vec![
-        (
-            "multichain_happy_path",
-            run_multichain_happy_path(&ctx, &runner).await,
-        ),
-        ("fellowship_only", run_fellowship_only(&ctx, &runner).await),
-        (
-            "nonexistent_referendum",
-            run_nonexistent_referendum(&ctx, &runner).await,
-        ),
-        (
-            "fellowship_create_no_preimage",
-            run_fellowship_create_no_preimage(&ctx, &runner).await,
-        ),
-    ];
-
-    for (name, result) in scenarios {
-        match result {
-            Ok(()) => log::info!("PASS: {name}"),
-            Err(e) => {
-                let msg = format!("FAIL: {name}: {e:#}");
-                log::error!("{msg}");
-                errors.push(msg);
-            }
-        }
-        bail_on_first_error(&errors);
-    }
-}
-
-/// Helper: run create + by-number tests for a single fellowship track.
-async fn run_polkadot_fellowship_track_pair(
-    ctx: &MultiChainTestContext,
-    runner: &ToolRunner,
-    track: &tracks::FellowshipTrack,
-    errors: &mut Vec<String>,
-) {
-    match run_polkadot_fellowship_create_test(ctx, runner, track).await {
-        Ok(()) => log::info!("PASS: fell_create_{}", track.name),
-        Err(e) => {
-            let msg = format!("FAIL: fell_create_{}: {e:#}", track.name);
-            log::error!("{msg}");
-            errors.push(msg);
-        }
-    }
-
-    match run_polkadot_fellowship_bynum_test(ctx, runner, track).await {
-        Ok(()) => log::info!("PASS: fell_bynum_{}", track.name),
-        Err(e) => {
-            let msg = format!("FAIL: fell_bynum_{}: {e:#}", track.name);
-            log::error!("{msg}");
-            errors.push(msg);
-        }
-    }
+    run_and_bail!(errors, "multichain_happy_path", run_multichain_happy_path(&ctx, &runner));
+    run_and_bail!(errors, "fellowship_only", run_fellowship_only(&ctx, &runner));
+    run_and_bail!(errors, "nonexistent_referendum", run_nonexistent_referendum(&ctx, &runner));
+    run_and_bail!(errors, "fellowship_create_no_preimage", run_fellowship_create_no_preimage(&ctx, &runner));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -275,31 +156,13 @@ async fn kusama_governance_all_tracks() {
         .expect("failed to build context");
 
     let runner = ToolRunner::new();
-
     let mut errors: Vec<String> = Vec::new();
 
     // ── Per-track tests (create + by-number for each track) ──────────────
 
     for track in tracks::GOVERNANCE_TRACKS {
-        match run_kusama_gov_create_test(&ctx, &runner, track).await {
-            Ok(()) => log::info!("PASS: ksm_gov_create_{}", track.name),
-            Err(e) => {
-                let msg = format!("FAIL: ksm_gov_create_{}: {e:#}", track.name);
-                log::error!("{msg}");
-                errors.push(msg);
-            }
-        }
-        bail_on_first_error(&errors);
-
-        match run_kusama_gov_bynum_test(&ctx, &runner, track).await {
-            Ok(()) => log::info!("PASS: ksm_gov_bynum_{}", track.name),
-            Err(e) => {
-                let msg = format!("FAIL: ksm_gov_bynum_{}: {e:#}", track.name);
-                log::error!("{msg}");
-                errors.push(msg);
-            }
-        }
-        bail_on_first_error(&errors);
+        run_and_bail!(errors, format!("ksm_gov_create_{}", track.name), run_kusama_gov_create_test(&ctx, &runner, track));
+        run_and_bail!(errors, format!("ksm_gov_bynum_{}", track.name), run_kusama_gov_bynum_test(&ctx, &runner, track));
     }
 
     // ── Scenario test ────────────────────────────────────────────────────
@@ -308,15 +171,7 @@ async fn kusama_governance_all_tracks() {
         .await
         .expect("failed to refresh fork blocks");
 
-    match run_kusama_governance_happy_path(&ctx, &runner).await {
-        Ok(()) => log::info!("PASS: ksm_gov_happy_path"),
-        Err(e) => {
-            let msg = format!("FAIL: ksm_gov_happy_path: {e:#}");
-            log::error!("{msg}");
-            errors.push(msg);
-        }
-    }
-    bail_on_first_error(&errors);
+    run_and_bail!(errors, "ksm_gov_happy_path", run_kusama_governance_happy_path(&ctx, &runner));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -338,31 +193,13 @@ async fn kusama_fellowship_all_tracks() {
         .expect("failed to build context");
 
     let runner = ToolRunner::new();
-
     let mut errors: Vec<String> = Vec::new();
 
     // ── Per-track tests (create + by-number for each track) ──────────────
 
     for track in tracks::KUSAMA_FELLOWSHIP_TRACKS {
-        match run_kusama_fellowship_create_test(&ctx, &runner, track).await {
-            Ok(()) => log::info!("PASS: ksm_fell_create_{}", track.name),
-            Err(e) => {
-                let msg = format!("FAIL: ksm_fell_create_{}: {e:#}", track.name);
-                log::error!("{msg}");
-                errors.push(msg);
-            }
-        }
-        bail_on_first_error(&errors);
-
-        match run_kusama_fellowship_bynum_test(&ctx, &runner, track).await {
-            Ok(()) => log::info!("PASS: ksm_fell_bynum_{}", track.name),
-            Err(e) => {
-                let msg = format!("FAIL: ksm_fell_bynum_{}: {e:#}", track.name);
-                log::error!("{msg}");
-                errors.push(msg);
-            }
-        }
-        bail_on_first_error(&errors);
+        run_and_bail!(errors, format!("ksm_fell_create_{}", track.name), run_kusama_fellowship_create_test(&ctx, &runner, track));
+        run_and_bail!(errors, format!("ksm_fell_bynum_{}", track.name), run_kusama_fellowship_bynum_test(&ctx, &runner, track));
     }
 
     // ── Scenario tests ───────────────────────────────────────────────────
@@ -371,28 +208,8 @@ async fn kusama_fellowship_all_tracks() {
         .await
         .expect("failed to refresh fork blocks");
 
-    let scenarios: Vec<(&str, _)> = vec![
-        (
-            "ksm_multichain_happy_path",
-            run_kusama_multichain_happy_path(&ctx, &runner).await,
-        ),
-        (
-            "ksm_fellowship_on_relay",
-            run_kusama_fellowship_on_relay(&ctx, &runner).await,
-        ),
-    ];
-
-    for (name, result) in scenarios {
-        match result {
-            Ok(()) => log::info!("PASS: {name}"),
-            Err(e) => {
-                let msg = format!("FAIL: {name}: {e:#}");
-                log::error!("{msg}");
-                errors.push(msg);
-            }
-        }
-        bail_on_first_error(&errors);
-    }
+    run_and_bail!(errors, "ksm_multichain_happy_path", run_kusama_multichain_happy_path(&ctx, &runner));
+    run_and_bail!(errors, "ksm_fellowship_on_relay", run_kusama_fellowship_on_relay(&ctx, &runner));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

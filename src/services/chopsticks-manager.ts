@@ -44,16 +44,13 @@ export class ChopsticksManager {
     try {
       this.logger.startSpinner('Starting Chopsticks local environment...');
 
-      // Build config for setupNetworks
-      // Map string build-block-mode to enum
-      let buildBlockMode = BuildBlockMode.Instant;
-      if (config['build-block-mode'] === 'instant') {
-        buildBlockMode = BuildBlockMode.Instant;
-      } else if (config['build-block-mode'] === 'batch') {
-        buildBlockMode = BuildBlockMode.Batch;
-      } else if (config['build-block-mode'] === 'manual') {
-        buildBlockMode = BuildBlockMode.Manual;
-      }
+      const buildBlockModeMap: Record<string, BuildBlockMode> = {
+        instant: BuildBlockMode.Instant,
+        batch: BuildBlockMode.Batch,
+        manual: BuildBlockMode.Manual,
+      };
+      const buildBlockMode =
+        buildBlockModeMap[config['build-block-mode'] ?? 'instant'] ?? BuildBlockMode.Instant;
 
       const chopsticksConfig: Config = {
         endpoint: config.endpoint,
@@ -109,8 +106,8 @@ export class ChopsticksManager {
     // Chopsticks versions. We record the head before, call newBlock, then poll
     // until the head actually advances — guaranteeing subsequent storage reads
     // see the new block's state.
-    const chain = this.context.chain ?? this.context;
-    const headBefore = chain.head?.number as number | undefined;
+    const chainContext = this.context.chain ?? this.context;
+    const headBefore = chainContext.head?.number as number | undefined;
 
     await this.context.dev.newBlock(params);
 
@@ -120,7 +117,7 @@ export class ChopsticksManager {
       const pollInterval = 100;
       const start = Date.now();
       while (Date.now() - start < maxWait) {
-        const headNow = chain.head?.number;
+        const headNow = chainContext.head?.number;
         if (headNow !== undefined && headNow > headBefore) {
           break;
         }

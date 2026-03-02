@@ -86,33 +86,24 @@ export class ChainTopologyBuilder {
       const detectionTasks: Promise<void>[] = [];
 
       if (this.governanceEndpoint) {
-        const govClient = createPolkadotClient(this.governanceEndpoint);
-        clients.push(govClient);
-        const govApi = createApiForChain(govClient);
         detectionTasks.push(
-          getChainInfo(govApi, this.governanceEndpoint).then((info) => {
+          this.detectChainInfo(this.governanceEndpoint, clients).then((info) => {
             this._governanceChain = info;
           })
         );
       }
 
       if (this.fellowshipEndpoint) {
-        const fellClient = createPolkadotClient(this.fellowshipEndpoint);
-        clients.push(fellClient);
-        const fellApi = createApiForChain(fellClient);
         detectionTasks.push(
-          getChainInfo(fellApi, this.fellowshipEndpoint).then((info) => {
+          this.detectChainInfo(this.fellowshipEndpoint, clients).then((info) => {
             this._fellowshipChain = info;
           })
         );
       }
 
-      for (const chain of this.additionalChainEndpoints) {
-        const client = createPolkadotClient(chain.url);
-        clients.push(client);
-        const api = createApiForChain(client);
+      for (const additionalEndpoint of this.additionalChainEndpoints) {
         detectionTasks.push(
-          getChainInfo(api, chain.url).then((info) => {
+          this.detectChainInfo(additionalEndpoint.url, clients).then((info) => {
             this._additionalChains.push(info);
           })
         );
@@ -132,24 +123,33 @@ export class ChainTopologyBuilder {
         );
       }
     } finally {
-      clients.forEach((client) => {
+      for (const client of clients) {
         client.destroy();
-      });
+      }
     }
   }
 
+  private async detectChainInfo(endpoint: string, clients: PolkadotClient[]): Promise<ChainInfo> {
+    const client = createPolkadotClient(endpoint);
+    clients.push(client);
+    const api = createApiForChain(client);
+    return getChainInfo(api, endpoint);
+  }
+
   async detectRelayNetworkKey(endpoint: string): Promise<string | undefined> {
+    let tempClient: PolkadotClient | undefined;
     try {
-      const tempClient = createPolkadotClient(endpoint);
+      tempClient = createPolkadotClient(endpoint);
       const tempApi = createApiForChain(tempClient);
       const chainInfo = await getChainInfo(tempApi, endpoint);
-      tempClient.destroy();
       if (chainInfo.kind === 'relay') {
         this.logger.debug(`Chain is a relay chain, using network key: ${chainInfo.network}`);
         return chainInfo.network;
       }
-    } catch (e) {
-      this.logger.debug(`Pre-detection failed, using default network key: ${e}`);
+    } catch (error) {
+      this.logger.debug(`Pre-detection failed, using default network key: ${error}`);
+    } finally {
+      tempClient?.destroy();
     }
     return undefined;
   }
@@ -233,7 +233,7 @@ export class ChainTopologyBuilder {
       usedRelayKeys.add(this.getRelayKey(this._fellowshipChain!.network));
     }
 
-    this._additionalChains.forEach((chain, index) => {
+    this._additionalChains.forEach((chain, chainIndex) => {
       if (usedEndpoints.has(chain.endpoint)) {
         this.logger.debug(`Skipping duplicate endpoint for ${chain.label}: ${chain.endpoint}`);
         return;
@@ -251,10 +251,10 @@ export class ChainTopologyBuilder {
         key = relayKey;
         usedRelayKeys.add(relayKey);
       } else {
-        key = `additional_${index}`;
+        key = `additional_${chainIndex}`;
       }
 
-      const block = this.additionalChainEndpoints[index]?.block;
+      const block = this.additionalChainEndpoints[chainIndex]?.block;
       networkConfig[key] = this.buildConfig(chain.endpoint, block);
       usedEndpoints.add(chain.endpoint);
       chainToNetworkKey.set(chain.label, key);

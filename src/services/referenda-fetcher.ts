@@ -10,6 +10,16 @@ import { stringify } from '../utils/json';
 import type { Logger } from '../utils/logger';
 import { getReferendaPallet, getReferendaPalletName } from './chain-registry';
 
+interface BuildReferendumInfoParams {
+  api: SubstrateApi;
+  referendumId: number;
+  ongoing: ReferendumOngoing;
+  status: ReferendumInfo['status'];
+  tally: ReferendumInfo['tally'];
+  deciding: ReferendumInfo['deciding'];
+  useFellowship: boolean;
+}
+
 export class ReferendaFetcher {
   private logger: Logger;
 
@@ -22,98 +32,83 @@ export class ReferendaFetcher {
     referendumId: number,
     useFellowship: boolean = false
   ): Promise<ReferendumInfo | null> {
-    try {
-      const palletName = getReferendaPalletName(useFellowship);
-      this.logger.debug(`Fetching referendum #${referendumId} from ${palletName} pallet...`);
+    const palletName = getReferendaPalletName(useFellowship);
+    this.logger.debug(`Fetching referendum #${referendumId} from ${palletName} pallet...`);
 
-      const pallet = getReferendaPallet(api, useFellowship);
-      const refInfo = await pallet.ReferendumInfoFor.getValue(referendumId);
+    const pallet = getReferendaPallet(api, useFellowship);
+    const refInfo = await pallet.ReferendumInfoFor.getValue(referendumId);
 
-      if (!refInfo) {
-        this.logger.error(`Referendum #${referendumId} not found in ${palletName} pallet`);
-        return null;
-      }
-
-      this.logger.debug(`Raw referendum info: ${stringify(refInfo, 2)}`);
-
-      const status = refInfo.type.toLowerCase() as ReferendumInfo['status'];
-
-      if (refInfo.type !== 'Ongoing') {
-        if (refInfo.type === 'Approved') {
-          this.logger.info(
-            `Referendum #${referendumId} is already approved - calls have been executed`
-          );
-          return {
-            id: referendumId,
-            track: 'unknown',
-            origin: null,
-            proposal: {
-              hash: 'unknown',
-              call: undefined,
-              type: 'Lookup' as const,
-            },
-            status,
-            submittedAt: 0,
-          };
-        }
-
-        this.logger.warn(`Referendum #${referendumId} is not ongoing (status: ${status})`);
-        this.logger.info(`Please try an ongoing referendum ID`);
-        return null;
-      }
-
-      const ongoing = refInfo.value;
-
-      const tally: ReferendumInfo['tally'] = ongoing.tally
-        ? {
-            ayes: ongoing.tally.ayes,
-            nays: ongoing.tally.nays,
-            support:
-              'support' in ongoing.tally
-                ? (ongoing.tally as { support: bigint }).support
-                : BigInt(0),
-          }
-        : undefined;
-
-      const deciding: ReferendumInfo['deciding'] = ongoing.deciding
-        ? {
-            since: ongoing.deciding.since,
-            confirming: ongoing.deciding.confirming,
-          }
-        : undefined;
-
-      const referendumInfo = await this.buildOngoingReferendumInfo(
-        api,
-        referendumId,
-        ongoing,
-        status,
-        tally,
-        deciding,
-        useFellowship
-      );
-
-      this.logger.debug(`Parsed referendum info: ${stringify(referendumInfo, 2)}`);
-
-      return referendumInfo;
-    } catch (error) {
-      const palletName = getReferendaPalletName(useFellowship);
-      this.logger.error(
-        `Failed to fetch referendum #${referendumId} from ${palletName} pallet`,
-        error as Error
-      );
+    if (!refInfo) {
+      this.logger.error(`Referendum #${referendumId} not found in ${palletName} pallet`);
       return null;
     }
+
+    this.logger.debug(`Raw referendum info: ${stringify(refInfo, 2)}`);
+
+    const status = refInfo.type.toLowerCase() as ReferendumInfo['status'];
+
+    if (refInfo.type !== 'Ongoing') {
+      if (refInfo.type === 'Approved') {
+        this.logger.info(
+          `Referendum #${referendumId} is already approved - calls have been executed`
+        );
+        return {
+          id: referendumId,
+          track: 'unknown',
+          origin: null,
+          proposal: {
+            hash: 'unknown',
+            call: undefined,
+            type: 'Lookup' as const,
+          },
+          status,
+          submittedAt: 0,
+        };
+      }
+
+      this.logger.warn(`Referendum #${referendumId} is not ongoing (status: ${status})`);
+      this.logger.info('Please try an ongoing referendum ID');
+      return null;
+    }
+
+    const ongoing = refInfo.value;
+
+    const tally: ReferendumInfo['tally'] = ongoing.tally
+      ? {
+          ayes: ongoing.tally.ayes,
+          nays: ongoing.tally.nays,
+          support:
+            'support' in ongoing.tally ? (ongoing.tally as { support: bigint }).support : BigInt(0),
+        }
+      : undefined;
+
+    const deciding: ReferendumInfo['deciding'] = ongoing.deciding
+      ? {
+          since: ongoing.deciding.since,
+          confirming: ongoing.deciding.confirming,
+        }
+      : undefined;
+
+    const referendumInfo = await this.buildOngoingReferendumInfo({
+      api,
+      referendumId,
+      ongoing,
+      status,
+      tally,
+      deciding,
+      useFellowship,
+    });
+
+    this.logger.debug(`Parsed referendum info: ${stringify(referendumInfo, 2)}`);
+
+    return referendumInfo;
   }
 
   private async buildOngoingReferendumInfo(
-    api: SubstrateApi,
-    referendumId: number,
-    ongoing: ReferendumOngoing,
-    status: ReferendumInfo['status'],
-    tally: ReferendumInfo['tally'],
-    deciding: ReferendumInfo['deciding'],
-    useFellowship: boolean
+    params: BuildReferendumInfoParams
   ): Promise<ReferendumInfo> {
+    const { api, referendumId, ongoing, status, tally, deciding, useFellowship } = params;
+
     const {
       hash: proposalHashHex,
       call: preimage,

@@ -9,6 +9,41 @@ export interface ParsedEvent {
 }
 
 /**
+ * Attempt to convert a value to a hex string if it's a binary-like type.
+ * Handles Uint8Array, Buffer, polkadot-api Binary/FixedSizeBinary, and objects
+ * with a hex-producing toString().
+ *
+ * Returns the hex string if the value is binary-like, undefined otherwise.
+ */
+function tryConvertToHex(data: unknown): string | undefined {
+  if (typeof data !== 'object' || data === null) {
+    return undefined;
+  }
+
+  const hex = toHexString(data);
+
+  // Native binary types
+  if (hex !== undefined && (data instanceof Uint8Array || Buffer.isBuffer(data))) {
+    return hex;
+  }
+
+  // polkadot-api Binary/FixedSizeBinary types (have asHex/toHex/toU8a)
+  if ('asHex' in data || 'toHex' in data || 'toU8a' in data) {
+    if (hex !== undefined) return hex;
+  }
+
+  // Objects with hex-producing toString
+  if (typeof (data as Record<string, unknown>).toString === 'function') {
+    const str = (data as Record<string, unknown>).toString() as string;
+    if (str.startsWith('0x')) {
+      return str;
+    }
+  }
+
+  return undefined;
+}
+
+/**
  * Serialize event data, converting Uint8Arrays and other binary data to hex strings.
  * Handles polkadot-api Binary types, Buffer, Uint8Array, BigInt, and nested structures.
  */
@@ -17,34 +52,11 @@ export function serializeEventData(data: unknown): unknown {
     return data;
   }
 
-  // Try direct hex conversion for binary-like values
-  const hex = toHexString(data);
-  if (hex !== undefined && (data instanceof Uint8Array || Buffer.isBuffer(data))) {
-    return hex;
+  const hexResult = tryConvertToHex(data);
+  if (hexResult !== undefined) {
+    return hexResult;
   }
 
-  // Handle polkadot-api Binary/FixedSizeBinary types (have asHex)
-  if (
-    typeof data === 'object' &&
-    data !== null &&
-    ('asHex' in data || 'toHex' in data || 'toU8a' in data)
-  ) {
-    if (hex !== undefined) return hex;
-  }
-
-  // Handle objects with toString that might give us useful info
-  if (
-    typeof data === 'object' &&
-    data !== null &&
-    typeof (data as Record<string, unknown>).toString === 'function'
-  ) {
-    const str = (data as Record<string, unknown>).toString() as string;
-    if (str.startsWith('0x')) {
-      return str;
-    }
-  }
-
-  // Handle arrays
   if (Array.isArray(data)) {
     return data.map((item: unknown) => serializeEventData(item));
   }
@@ -68,7 +80,6 @@ export function serializeEventData(data: unknown): unknown {
     }
   }
 
-  // Handle plain objects
   if (typeof data === 'object' && data !== null) {
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(data)) {
@@ -77,7 +88,6 @@ export function serializeEventData(data: unknown): unknown {
     return result;
   }
 
-  // Handle bigint
   if (typeof data === 'bigint') {
     return data.toString();
   }
@@ -98,23 +108,23 @@ export function parseBlockEvent(event: unknown): ParsedEvent {
     return { section, method, data };
   }
 
-  const e = event as Record<string, unknown>;
+  const eventRecord = event as Record<string, unknown>;
 
   // polkadot-api direct format: { type: "PalletName", value: { type: "EventName", value: {...} } }
-  if (e.type && typeof e.type === 'string') {
-    section = e.type;
-    const value = e.value as Record<string, unknown> | undefined;
+  if (eventRecord.type && typeof eventRecord.type === 'string') {
+    section = eventRecord.type;
+    const value = eventRecord.value as Record<string, unknown> | undefined;
     if (value?.type) {
       method = value.type as string;
       data = value.value || value;
     } else {
-      data = e.value;
+      data = eventRecord.value;
     }
   }
 
   // Wrapped format: { event: { type: ..., value: ... } }
-  if (section === 'unknown' && e.event) {
-    const inner = e.event as Record<string, unknown>;
+  if (section === 'unknown' && eventRecord.event) {
+    const inner = eventRecord.event as Record<string, unknown>;
     if (typeof inner.type === 'string') {
       section = inner.type;
     }
@@ -136,11 +146,11 @@ export function parseBlockEvent(event: unknown): ParsedEvent {
   }
 
   // Final fallback: direct section/method properties
-  if (section === 'unknown' && e.section) {
-    section = String(e.section);
+  if (section === 'unknown' && eventRecord.section) {
+    section = String(eventRecord.section);
   }
-  if (method === 'unknown' && e.method) {
-    method = String(e.method);
+  if (method === 'unknown' && eventRecord.method) {
+    method = String(eventRecord.method);
   }
 
   return { section, method, data };
