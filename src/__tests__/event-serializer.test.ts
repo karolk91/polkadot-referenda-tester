@@ -29,7 +29,9 @@ describe('serializeEventData', () => {
 
   it('falls back to toU8a when asHex throws', () => {
     const data = {
-      asHex: () => { throw new Error('no hex'); },
+      asHex: () => {
+        throw new Error('no hex');
+      },
       toU8a: () => new Uint8Array([0xff]),
     };
     expect(serializeEventData(data)).toBe('0xff');

@@ -115,105 +115,15 @@ export class ReferendumSimulator {
     errors?: string[];
     blockExecuted: number;
   }> {
-    // If pre-execution call is provided, execute it first
     if (preExecutionOptions?.preCall) {
       await this.executePreCall(preExecutionOptions.preCall, preExecutionOptions.preOrigin);
     }
 
-    this.logger.startSpinner('Forcing referendum to passing state...');
-
     try {
-      // Get current referendum info from Chopsticks instance using the correct pallet
-      const palletName = this.getReferendaPalletName();
-      const refInfo = await (this.api.query as any)[palletName].ReferendumInfoFor.getValue(
-        referendum.id
-      );
+      await this.applyPassingState(referendum);
+      const { events, executionBlock, scheduledBlock } =
+        await this.scheduleAndExecuteProposal(referendum);
 
-      if (!refInfo) {
-        throw new Error(
-          `Referendum ${referendum.id} not found in ${palletName} pallet in Chopsticks instance`
-        );
-      }
-
-      if (refInfo.type !== 'Ongoing') {
-        const actualState = refInfo.type || Object.keys(refInfo)[0] || 'unknown';
-        this.logger.info(
-          `Referendum ${referendum.id} is in state: ${actualState} (expected: Ongoing)`
-        );
-
-        // If it's already approved, we can skip forcing and just try to execute
-        if (actualState === 'Approved' || actualState === 'approved') {
-          this.logger.info(
-            'Referendum already approved in Chopsticks fork, attempting to execute scheduled call...'
-          );
-        } else {
-          throw new Error(
-            `Referendum ${referendum.id} is not in Ongoing state (current state: ${actualState})`
-          );
-        }
-      }
-
-      const totalIssuance = await this.api.query.Balances.TotalIssuance.getValue();
-      this.logger.debug(`Total issuance: ${totalIssuance}`);
-
-      const { currentBlock, targetBlock } = await this.getSchedulingBlocks();
-      this.logger.debug(`Current block: ${currentBlock}, Target block: ${targetBlock}`);
-
-      const modifiedRefInfo = this.buildPassingReferendumStorage(
-        refInfo.value,
-        totalIssuance,
-        currentBlock
-      );
-
-      const referendumStorageUpdate = {
-        [palletName]: {
-          ReferendumInfoFor: [[[referendum.id], modifiedRefInfo]],
-        },
-      };
-
-      this.logger.debug(
-        `Sending storage update to ${palletName} pallet in Chopsticks: ${stringify(modifiedRefInfo, 2)}`
-      );
-      await this.chopsticks.setStorageBatch(referendumStorageUpdate);
-      this.logger.succeedSpinner('Referendum state updated to passing');
-
-      // Create block to commit storage changes
-      await this.chopsticks.newBlock();
-
-      await this.verifyReferendumModification(referendum.id, palletName);
-
-      // Move nudgeReferendum scheduled call to next block
-      this.logger.startSpinner('Moving nudgeReferendum to next block...');
-      await this.moveScheduledCallToNextBlock(referendum.id, 'nudge');
-      this.logger.succeedSpinner('nudgeReferendum moved');
-
-      // Create a block to trigger nudgeReferendum
-      this.logger.startSpinner('Creating block to trigger referendum nudge...');
-      await this.chopsticks.newBlock();
-      this.logger.succeedSpinner('Referendum nudged');
-
-      // Move the actual proposal execution to next block
-      this.logger.startSpinner('Moving proposal execution to next block...');
-      const proposalHash = referendum.proposal.hash;
-      this.logger.debug(`Looking for proposal execution with hash: ${proposalHash}`);
-      const scheduledBlock = await this.moveScheduledCallToNextBlock(
-        referendum.id,
-        'execute',
-        proposalHash
-      );
-      this.logger.succeedSpinner(`Proposal execution scheduled at block ${scheduledBlock}`);
-
-      // Create a block to execute the proposal
-      this.logger.startSpinner('Creating block to execute proposal...');
-      await this.chopsticks.newBlock();
-
-      const executionBlock = Number(await this.api.query.System.Number.getValue());
-      this.logger.succeedSpinner(`Proposal executed at block ${executionBlock}`);
-
-      // Get events from the execution block
-      const events = await this.getBlockEvents(executionBlock);
-
-      // Check for execution results
       const { executionSucceeded, errors } = this.checkExecutionResults(
         events,
         referendum.id,
@@ -231,6 +141,98 @@ export class ReferendumSimulator {
       this.logger.failSpinner('Failed to force referendum execution');
       throw error;
     }
+  }
+
+  private async applyPassingState(referendum: ReferendumInfo): Promise<void> {
+    this.logger.startSpinner('Forcing referendum to passing state...');
+
+    const palletName = this.getReferendaPalletName();
+    const refInfo = await (this.api.query as any)[palletName].ReferendumInfoFor.getValue(
+      referendum.id
+    );
+
+    if (!refInfo) {
+      throw new Error(
+        `Referendum ${referendum.id} not found in ${palletName} pallet in Chopsticks instance`
+      );
+    }
+
+    if (refInfo.type !== 'Ongoing') {
+      const actualState = refInfo.type || Object.keys(refInfo)[0] || 'unknown';
+      this.logger.info(
+        `Referendum ${referendum.id} is in state: ${actualState} (expected: Ongoing)`
+      );
+
+      if (actualState === 'Approved' || actualState === 'approved') {
+        this.logger.info(
+          'Referendum already approved in Chopsticks fork, attempting to execute scheduled call...'
+        );
+      } else {
+        throw new Error(
+          `Referendum ${referendum.id} is not in Ongoing state (current state: ${actualState})`
+        );
+      }
+    }
+
+    const totalIssuance = await this.api.query.Balances.TotalIssuance.getValue();
+    this.logger.debug(`Total issuance: ${totalIssuance}`);
+
+    const { currentBlock } = await this.getSchedulingBlocks();
+
+    const modifiedRefInfo = this.buildPassingReferendumStorage(
+      refInfo.value,
+      totalIssuance,
+      currentBlock
+    );
+
+    const referendumStorageUpdate = {
+      [palletName]: {
+        ReferendumInfoFor: [[[referendum.id], modifiedRefInfo]],
+      },
+    };
+
+    this.logger.debug(
+      `Sending storage update to ${palletName} pallet in Chopsticks: ${stringify(modifiedRefInfo, 2)}`
+    );
+    await this.chopsticks.setStorageBatch(referendumStorageUpdate);
+    this.logger.succeedSpinner('Referendum state updated to passing');
+
+    await this.chopsticks.newBlock();
+    await this.verifyReferendumModification(referendum.id, palletName);
+  }
+
+  private async scheduleAndExecuteProposal(referendum: ReferendumInfo): Promise<{
+    events: ParsedEvent[];
+    executionBlock: number;
+    scheduledBlock: number;
+  }> {
+    this.logger.startSpinner('Moving nudgeReferendum to next block...');
+    await this.moveScheduledCallToNextBlock(referendum.id, 'nudge');
+    this.logger.succeedSpinner('nudgeReferendum moved');
+
+    this.logger.startSpinner('Creating block to trigger referendum nudge...');
+    await this.chopsticks.newBlock();
+    this.logger.succeedSpinner('Referendum nudged');
+
+    this.logger.startSpinner('Moving proposal execution to next block...');
+    const proposalHash = referendum.proposal.hash;
+    this.logger.debug(`Looking for proposal execution with hash: ${proposalHash}`);
+    const scheduledBlock = await this.moveScheduledCallToNextBlock(
+      referendum.id,
+      'execute',
+      proposalHash
+    );
+    this.logger.succeedSpinner(`Proposal execution scheduled at block ${scheduledBlock}`);
+
+    this.logger.startSpinner('Creating block to execute proposal...');
+    await this.chopsticks.newBlock();
+
+    const executionBlock = Number(await this.api.query.System.Number.getValue());
+    this.logger.succeedSpinner(`Proposal executed at block ${executionBlock}`);
+
+    const events = await this.getBlockEvents(executionBlock);
+
+    return { events, executionBlock, scheduledBlock };
   }
 
   /**
@@ -325,16 +327,18 @@ export class ReferendumSimulator {
     palletName: string
   ): Promise<void> {
     this.logger.startSpinner('Verifying referendum modification...');
-    const verifyRefInfo = await (this.api.query as any)[
-      palletName
-    ].ReferendumInfoFor.getValue(referendumId);
+    const verifyRefInfo = await (this.api.query as any)[palletName].ReferendumInfoFor.getValue(
+      referendumId
+    );
 
     if (verifyRefInfo && verifyRefInfo.type === 'Ongoing') {
       const ongoing = verifyRefInfo.value;
       this.logger.succeedSpinner('Referendum modification verified');
       this.logger.info(`\u2713 Enactment: ${stringify(ongoing.enactment)}`);
       this.logger.info(`\u2713 Tally: ${stringify(ongoing.tally)}`);
-      this.logger.info(`\u2713 Deciding: ${ongoing.deciding ? stringify(ongoing.deciding) : 'null'}`);
+      this.logger.info(
+        `\u2713 Deciding: ${ongoing.deciding ? stringify(ongoing.deciding) : 'null'}`
+      );
     } else {
       this.logger.failSpinner(
         `Failed to verify - referendum is ${verifyRefInfo?.type || 'unknown'} state`
@@ -427,9 +431,10 @@ export class ReferendumSimulator {
       for (const scheduledEntry of agendaItems) {
         if (!scheduledEntry?.call) continue;
 
-        const isMatch = callType === 'nudge'
-          ? await this.isNudgeReferendumCall(scheduledEntry.call, referendumId)
-          : this.isProposalExecutionCall(scheduledEntry.call, proposalHash);
+        const isMatch =
+          callType === 'nudge'
+            ? await this.isNudgeReferendumCall(scheduledEntry.call, referendumId)
+            : this.isProposalExecutionCall(scheduledEntry.call, proposalHash);
 
         if (isMatch) {
           return { keyArgs, agendaItems, scheduledEntry };
@@ -490,8 +495,9 @@ export class ReferendumSimulator {
           return true;
         }
 
-        const callDataHex = toHexString(inlineValue)
-          ?? (inlineValue && typeof inlineValue === 'object' ? stringify(inlineValue) : '');
+        const callDataHex =
+          toHexString(inlineValue) ??
+          (inlineValue && typeof inlineValue === 'object' ? stringify(inlineValue) : '');
 
         const matches =
           callDataHex === proposalHash || callDataHex.toLowerCase() === proposalHash.toLowerCase();

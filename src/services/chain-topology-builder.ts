@@ -1,7 +1,13 @@
 import { Logger } from '../utils/logger';
 import { BuildBlockMode } from '@acala-network/chopsticks-core';
 import * as path from 'path';
-import { ChainInfo, ChainNetwork, getChainInfo, createApiForChain, createPolkadotClient } from './chain-registry';
+import {
+  ChainInfo,
+  ChainNetwork,
+  getChainInfo,
+  createApiForChain,
+  createPolkadotClient,
+} from './chain-registry';
 import { ReferendumCreator } from './referendum-creator';
 import { TestOptions } from '../types';
 import { ParsedEndpoint } from '../utils/chain-endpoint-parser';
@@ -130,9 +136,11 @@ export class ChainTopologyBuilder {
     return undefined;
   }
 
-  buildNetworkTopology(
-    options?: TestOptions
-  ): { networkConfig: Record<string, any>; governanceKey: string; fellowshipKey: string } {
+  buildNetworkTopology(options?: TestOptions): {
+    networkConfig: Record<string, any>;
+    governanceKey: string;
+    fellowshipKey: string;
+  } {
     if (!this._governanceChain || !this._fellowshipChain) {
       throw new Error('Chain types must be detected before building network topology');
     }
@@ -145,10 +153,10 @@ export class ChainTopologyBuilder {
     let fellowshipKey: string;
 
     const fellowshipInjection = options?.callToCreateFellowshipReferendum
-      ? 'fellowship' as const
+      ? ('fellowship' as const)
       : undefined;
     const governanceInjection = options?.callToCreateGovernanceReferendum
-      ? 'alice-account' as const
+      ? ('alice-account' as const)
       : undefined;
 
     if (!governanceIsRelay && !fellowshipIsRelay) {
@@ -240,11 +248,7 @@ export class ChainTopologyBuilder {
     return { usedEndpoints, chainToNetworkKey };
   }
 
-  buildConfig(
-    endpoint: string,
-    block?: number,
-    storageInjection?: 'fellowship' | 'alice-account'
-  ) {
+  buildConfig(endpoint: string, block?: number, storageInjection?: 'fellowship' | 'alice-account') {
     const config: any = {
       endpoint,
       db: path.join(process.cwd(), '.chopsticks-db'),

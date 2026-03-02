@@ -67,7 +67,7 @@ export class NetworkCoordinator {
 
     // Main referendum only (no fellowship)
     if (hasMain && !hasFellowship) {
-      return this.testSingleReferendum(mainRefId, options);
+      return this.testSingleReferendum(mainRefId, cleanup, options);
     }
 
     // Both main and fellowship referenda (either existing or being created)
@@ -105,6 +105,7 @@ export class NetworkCoordinator {
 
   private async testSingleReferendum(
     refId: number | undefined,
+    cleanup: boolean,
     options?: TestOptions
   ): Promise<void> {
     if (!this.topology.getGovernanceEndpoint()) {
@@ -117,14 +118,14 @@ export class NetworkCoordinator {
     let client: any;
 
     try {
-      const config: any = {
-        endpoint: this.topology.getGovernanceEndpoint(),
-        'build-block-mode': 'manual',
-      };
-
-      if (this.topology.getGovernanceBlock() !== undefined) {
-        config.block = this.topology.getGovernanceBlock();
-      }
+      const storageInjection = options?.callToCreateGovernanceReferendum
+        ? ('alice-account' as const)
+        : undefined;
+      const config = this.topology.buildConfig(
+        this.topology.getGovernanceEndpoint()!,
+        this.topology.getGovernanceBlock(),
+        storageInjection
+      );
 
       const context = await chopsticks.setup(config);
 
@@ -134,19 +135,21 @@ export class NetworkCoordinator {
 
       this.logger.succeedSpinner(`Chopsticks ready at ${endpoint}`);
 
-      // Wait for chain to be ready
       this.logger.startSpinner('Waiting for chain to be ready...');
       await chopsticks.waitForChainReady(api);
       this.logger.succeedSpinner('Chain is ready');
 
-      // Detect chain info from runtime
-      this.topology.governanceChain = await getChainInfo(api, this.topology.getGovernanceEndpoint()!);
+      this.topology.governanceChain = await getChainInfo(
+        api,
+        this.topology.getGovernanceEndpoint()!
+      );
       this.logger.info(
         `Detected chain: ${this.topology.governanceChain.label} (${this.topology.governanceChain.specName})`
       );
 
       const createdId = await this.createReferendumIfNeeded(
-        api, chopsticks,
+        api,
+        chopsticks,
         options?.callToCreateGovernanceReferendum,
         options?.callToNotePreimageForGovernanceReferendum,
         false
@@ -164,17 +167,31 @@ export class NetworkCoordinator {
         throw new Error(`Failed to fetch referendum ${actualRefId}`);
       }
 
-      const simulator = new ReferendumSimulator(this.logger, chopsticks, api, false); // Main governance
-      const result = await simulator.simulate(referendum);
+      const simulator = new ReferendumSimulator(this.logger, chopsticks, api, false);
+      const result = await simulator.simulate(referendum, {
+        preCall: options?.preCall,
+        preOrigin: options?.preOrigin,
+      });
 
       if (!result.executionSucceeded) {
+        if (result.errors) {
+          result.errors.forEach((err) => this.logger.error(`  ${err}`));
+        }
         throw new Error(`Referendum #${actualRefId} execution failed`);
       }
+
+      this.logger.success(`\n✓ Referendum #${actualRefId} executed successfully!`);
     } finally {
       if (client) {
         client.destroy();
       }
-      await chopsticks.cleanup();
+      if (cleanup) {
+        await chopsticks.cleanup();
+      } else {
+        this.logger.info(`\nChopsticks instance still running for inspection`);
+        this.logger.info('Press Ctrl+C to exit');
+        await chopsticks.pause();
+      }
     }
   }
 
@@ -208,7 +225,9 @@ export class NetworkCoordinator {
         this.logger.debug('Injecting fellowship storage for Alice account');
       }
 
-      const networkKey = await this.topology.detectRelayNetworkKey(this.topology.getFellowshipEndpoint()!);
+      const networkKey = await this.topology.detectRelayNetworkKey(
+        this.topology.getFellowshipEndpoint()!
+      );
       const context = await chopsticks.setup(config, networkKey);
 
       const endpoint = context.ws.endpoint;
@@ -217,20 +236,22 @@ export class NetworkCoordinator {
 
       this.logger.succeedSpinner(`Chopsticks ready at ${endpoint}`);
 
-      // Wait for chain to be ready
       this.logger.startSpinner('Waiting for chain to be ready...');
       await chopsticks.waitForChainReady(api);
       this.logger.succeedSpinner('Chain is ready');
 
-      // Detect chain info from runtime
-      this.topology.fellowshipChain = await getChainInfo(api, this.topology.getFellowshipEndpoint()!);
+      this.topology.fellowshipChain = await getChainInfo(
+        api,
+        this.topology.getFellowshipEndpoint()!
+      );
       this.logger.info(
         `Detected chain: ${this.topology.fellowshipChain.label} (${this.topology.fellowshipChain.specName})`
       );
 
       // Create referendum if needed
       const createdFellowshipId = await this.createReferendumIfNeeded(
-        api, chopsticks,
+        api,
+        chopsticks,
         options?.callToCreateFellowshipReferendum,
         options?.callToNotePreimageForFellowshipReferendum,
         true
@@ -285,7 +306,8 @@ export class NetworkCoordinator {
 
     try {
       // Use governance endpoint if available, otherwise fellowship
-      const chainEndpoint = this.topology.getGovernanceEndpoint() || this.topology.getFellowshipEndpoint();
+      const chainEndpoint =
+        this.topology.getGovernanceEndpoint() || this.topology.getFellowshipEndpoint();
       if (!chainEndpoint) {
         throw new Error('At least one chain endpoint must be provided');
       }
@@ -315,12 +337,10 @@ export class NetworkCoordinator {
 
       this.logger.succeedSpinner(`Chain ready at ${endpoint}`);
 
-      // Wait for chain to be ready
       this.logger.startSpinner('Waiting for chain to be ready...');
       await chopsticks.waitForChainReady(api);
       this.logger.succeedSpinner('Chain is ready');
 
-      // Detect chain info from runtime
       this.topology.governanceChain = await getChainInfo(api, chainEndpoint);
       this.topology.fellowshipChain = this.topology.governanceChain;
       this.logger.info(
@@ -328,7 +348,8 @@ export class NetworkCoordinator {
       );
 
       const createdFellowship = await this.createReferendumIfNeeded(
-        api, chopsticks,
+        api,
+        chopsticks,
         options?.callToCreateFellowshipReferendum,
         options?.callToNotePreimageForFellowshipReferendum,
         true
@@ -336,7 +357,8 @@ export class NetworkCoordinator {
       const actualFellowshipRefId = createdFellowship ?? fellowshipRefId;
 
       const createdGovernance = await this.createReferendumIfNeeded(
-        api, chopsticks,
+        api,
+        chopsticks,
         options?.callToCreateGovernanceReferendum,
         options?.callToNotePreimageForGovernanceReferendum,
         false
@@ -352,7 +374,10 @@ export class NetworkCoordinator {
       }
 
       await this.simulateSequentialReferenda(
-        api, chopsticks, actualFellowshipRefId, actualMainRefId
+        api,
+        chopsticks,
+        actualFellowshipRefId,
+        actualMainRefId
       );
     } finally {
       if (client) {
@@ -395,15 +420,70 @@ export class NetworkCoordinator {
     this.logger.success('\n✓ Both referenda executed successfully!');
   }
 
+  private async simulateMultiChainReferenda(chains: {
+    fellowship: { api: any; chopsticks: ChopsticksManager; refId: number };
+    governance: { api: any; chopsticks: ChopsticksManager; refId: number };
+  }): Promise<void> {
+    const { fellowship, governance } = chains;
+    const fetcher = new ReferendaFetcher(this.logger);
+
+    this.logger.section(
+      `[1/2] Fellowship Referendum #${fellowship.refId} (${this.topology.fellowshipChain!.label})`
+    );
+    const fellowshipRef = await fetcher.fetchReferendum(fellowship.api, fellowship.refId, true);
+    if (!fellowshipRef) {
+      throw new Error(`Failed to fetch fellowship referendum ${fellowship.refId}`);
+    }
+    const fellowshipSimulator = new ReferendumSimulator(
+      this.logger,
+      fellowship.chopsticks,
+      fellowship.api,
+      true
+    );
+    const fellowshipResult = await fellowshipSimulator.simulate(fellowshipRef);
+
+    if (!fellowshipResult.executionSucceeded) {
+      if (fellowshipResult.errors) {
+        fellowshipResult.errors.forEach((err) => this.logger.error(`  ${err}`));
+      }
+      throw new Error('Fellowship referendum execution failed');
+    }
+
+    this.logger.startSpinner('Waiting for XCM message propagation...');
+    await fellowship.chopsticks.newBlock();
+    await governance.chopsticks.newBlock();
+    this.logger.succeedSpinner('XCM messages propagated');
+
+    this.logger.section(
+      `[2/2] Main Governance Referendum #${governance.refId} (${this.topology.governanceChain!.label})`
+    );
+    const mainRef = await fetcher.fetchReferendum(governance.api, governance.refId);
+    if (!mainRef) {
+      throw new Error(`Failed to fetch main referendum ${governance.refId}`);
+    }
+    const governanceSimulator = new ReferendumSimulator(
+      this.logger,
+      governance.chopsticks,
+      governance.api
+    );
+    const mainResult = await governanceSimulator.simulate(mainRef);
+
+    if (!mainResult.executionSucceeded) {
+      if (mainResult.errors) {
+        mainResult.errors.forEach((err) => this.logger.error(`  ${err}`));
+      }
+      throw new Error('Main referendum execution failed');
+    }
+
+    this.logger.success('\n✓ Both referenda executed successfully!');
+  }
+
   private async testMultiChain(
     mainRefId: number | undefined,
     fellowshipRefId: number | undefined,
     cleanup: boolean = true,
     options?: TestOptions
   ): Promise<void> {
-    // First, quickly detect chain types to set up topology
-    await this.topology.detectChainTypes();
-
     const { governanceManager, fellowshipManager, additionalManagers } =
       await this.setupInterconnectedChains(options);
 
@@ -424,22 +504,25 @@ export class NetworkCoordinator {
       const governanceApi = createApiForChain(governanceClient);
       const fellowshipApi = createApiForChain(fellowshipClient);
 
-      // Wait for both chains to be ready
       this.logger.startSpinner('Waiting for chains to be ready...');
       await governanceChopsticks.waitForChainReady(governanceApi);
       await fellowshipChopsticks.waitForChainReady(fellowshipApi);
       this.logger.succeedSpinner('Chains are ready');
 
-      // Validate endpoints are set (should be guaranteed by caller but TypeScript needs to know)
       if (!this.topology.getGovernanceEndpoint() || !this.topology.getFellowshipEndpoint()) {
         throw new Error(
           'Both governance and fellowship endpoints must be set for multi-chain testing'
         );
       }
 
-      // Detect chain info from runtimes
-      this.topology.governanceChain = await getChainInfo(governanceApi, this.topology.getGovernanceEndpoint()!);
-      this.topology.fellowshipChain = await getChainInfo(fellowshipApi, this.topology.getFellowshipEndpoint()!);
+      this.topology.governanceChain = await getChainInfo(
+        governanceApi,
+        this.topology.getGovernanceEndpoint()!
+      );
+      this.topology.fellowshipChain = await getChainInfo(
+        fellowshipApi,
+        this.topology.getFellowshipEndpoint()!
+      );
       this.logger.info(
         `Governance: ${this.topology.governanceChain.label} (${this.topology.governanceChain.specName})`
       );
@@ -448,7 +531,8 @@ export class NetworkCoordinator {
       );
 
       const createdFellowship = await this.createReferendumIfNeeded(
-        fellowshipApi, fellowshipChopsticks,
+        fellowshipApi,
+        fellowshipChopsticks,
         options?.callToCreateFellowshipReferendum,
         options?.callToNotePreimageForFellowshipReferendum,
         true
@@ -456,7 +540,8 @@ export class NetworkCoordinator {
       const actualFellowshipRefId = createdFellowship ?? fellowshipRefId;
 
       const createdGovernance = await this.createReferendumIfNeeded(
-        governanceApi, governanceChopsticks,
+        governanceApi,
+        governanceChopsticks,
         options?.callToCreateGovernanceReferendum,
         options?.callToNotePreimageForGovernanceReferendum,
         false
@@ -471,68 +556,24 @@ export class NetworkCoordinator {
         throw new Error('Main referendum ID is required but was not provided or created');
       }
 
-      const fetcher = new ReferendaFetcher(this.logger);
+      await this.simulateMultiChainReferenda({
+        fellowship: {
+          api: fellowshipApi,
+          chopsticks: fellowshipChopsticks,
+          refId: actualFellowshipRefId,
+        },
+        governance: {
+          api: governanceApi,
+          chopsticks: governanceChopsticks,
+          refId: actualMainRefId,
+        },
+      });
 
-      this.logger.section(
-        `[1/2] Fellowship Referendum #${actualFellowshipRefId} (${this.topology.fellowshipChain!.label})`
-      );
-      const fellowshipRef = await fetcher.fetchReferendum(
-        fellowshipApi,
-        actualFellowshipRefId,
-        true
-      );
-      if (!fellowshipRef) {
-        throw new Error(`Failed to fetch fellowship referendum ${actualFellowshipRefId}`);
-      }
-      const fellowshipSimulator = new ReferendumSimulator(
-        this.logger,
-        fellowshipChopsticks,
-        fellowshipApi,
-        true // isFellowship = true
-      );
-      const fellowshipResult = await fellowshipSimulator.simulate(fellowshipRef);
-
-      if (!fellowshipResult.executionSucceeded) {
-        if (fellowshipResult.errors) {
-          fellowshipResult.errors.forEach((err) => this.logger.error(`  ${err}`));
-        }
-        throw new Error('Fellowship referendum execution failed');
-      }
-
-      this.logger.startSpinner('Waiting for XCM message propagation...');
-      await fellowshipChopsticks.newBlock();
-      await governanceChopsticks.newBlock();
-
-      this.logger.succeedSpinner('XCM messages propagated');
-
-      this.logger.section(
-        `[2/2] Main Governance Referendum #${actualMainRefId} (${this.topology.governanceChain.label})`
-      );
-      const mainRef = await fetcher.fetchReferendum(governanceApi, actualMainRefId);
-      if (!mainRef) {
-        throw new Error(`Failed to fetch main referendum ${actualMainRefId}`);
-      }
-      const governanceSimulator = new ReferendumSimulator(
-        this.logger,
-        governanceChopsticks,
-        governanceApi
-      );
-      const mainResult = await governanceSimulator.simulate(mainRef);
-
-      if (!mainResult.executionSucceeded) {
-        if (mainResult.errors) {
-          mainResult.errors.forEach((err) => this.logger.error(`  ${err}`));
-        }
-        throw new Error('Main referendum execution failed');
-      }
-
-      this.logger.success('\n✓ Both referenda executed successfully!');
-
-      await this.displayPostExecutionEvents(
-        governanceChopsticks, fellowshipChopsticks,
-        governanceApi, fellowshipApi,
-        additionalManagers
-      );
+      await this.displayPostExecutionEvents({
+        governance: { chopsticks: governanceChopsticks, api: governanceApi },
+        fellowship: { chopsticks: fellowshipChopsticks, api: fellowshipApi },
+        additionalManagers,
+      });
     } finally {
       governanceClient.destroy();
       fellowshipClient.destroy();
@@ -547,9 +588,15 @@ export class NetworkCoordinator {
         }
       } else {
         await this.pauseAllManagers([
-          { label: `Governance (${this.topology.governanceChain!.label})`, manager: governanceChopsticks },
+          {
+            label: `Governance (${this.topology.governanceChain!.label})`,
+            manager: governanceChopsticks,
+          },
           ...Array.from(additionalManagers).map(([label, manager]) => ({ label, manager })),
-          { label: `Fellowship (${this.topology.fellowshipChain!.label})`, manager: fellowshipChopsticks },
+          {
+            label: `Fellowship (${this.topology.fellowshipChain!.label})`,
+            manager: fellowshipChopsticks,
+          },
         ]);
       }
     }
@@ -600,7 +647,8 @@ export class NetworkCoordinator {
       throw new Error('Chain types must be detected before setting up interconnected chains');
     }
 
-    const { networkConfig, governanceKey, fellowshipKey } = this.topology.buildNetworkTopology(options);
+    const { networkConfig, governanceKey, fellowshipKey } =
+      this.topology.buildNetworkTopology(options);
 
     const { chainToNetworkKey } = this.topology.registerAdditionalChains(
       networkConfig,
@@ -640,8 +688,14 @@ export class NetworkCoordinator {
     }
 
     return {
-      governanceManager: ChopsticksManager.fromExistingContext(this.logger, networks[governanceKey]),
-      fellowshipManager: ChopsticksManager.fromExistingContext(this.logger, networks[fellowshipKey]),
+      governanceManager: ChopsticksManager.fromExistingContext(
+        this.logger,
+        networks[governanceKey]
+      ),
+      fellowshipManager: ChopsticksManager.fromExistingContext(
+        this.logger,
+        networks[fellowshipKey]
+      ),
       additionalManagers,
     };
   }
@@ -663,27 +717,36 @@ export class NetworkCoordinator {
     return result.referendumId;
   }
 
-  private async displayPostExecutionEvents(
-    governanceChopsticks: ChopsticksManager,
-    fellowshipChopsticks: ChopsticksManager,
-    governanceApi: any,
-    fellowshipApi: any,
-    additionalManagers: Map<string, ChopsticksManager>
-  ): Promise<void> {
+  private async displayPostExecutionEvents(context: {
+    governance: { chopsticks: ChopsticksManager; api: any };
+    fellowship: { chopsticks: ChopsticksManager; api: any };
+    additionalManagers: Map<string, ChopsticksManager>;
+  }): Promise<void> {
+    const { governance, fellowship, additionalManagers } = context;
     this.logger.section('Post-Execution XCM Events');
     this.logger.info('Advancing blocks to process XCM messages...\n');
 
-    await governanceChopsticks.newBlock();
-    await fellowshipChopsticks.newBlock();
+    await governance.chopsticks.newBlock();
+    await fellowship.chopsticks.newBlock();
 
-    const governanceBlockNumber = await governanceApi.query.System.Number.getValue();
-    const governanceEventsPost = await governanceApi.query.System.Events.getValue();
-    displayChainEvents(this.topology.governanceChain!.label, governanceBlockNumber, governanceEventsPost, this.logger);
+    const governanceBlockNumber = await governance.api.query.System.Number.getValue();
+    const governanceEventsPost = await governance.api.query.System.Events.getValue();
+    displayChainEvents(
+      this.topology.governanceChain!.label,
+      governanceBlockNumber,
+      governanceEventsPost,
+      this.logger
+    );
     this.logger.info('');
 
-    const fellowshipBlockNumber = await fellowshipApi.query.System.Number.getValue();
-    const fellowshipEvents = await fellowshipApi.query.System.Events.getValue();
-    displayChainEvents(this.topology.fellowshipChain!.label, fellowshipBlockNumber, fellowshipEvents, this.logger);
+    const fellowshipBlockNumber = await fellowship.api.query.System.Number.getValue();
+    const fellowshipEvents = await fellowship.api.query.System.Events.getValue();
+    displayChainEvents(
+      this.topology.fellowshipChain!.label,
+      fellowshipBlockNumber,
+      fellowshipEvents,
+      this.logger
+    );
     this.logger.info('');
 
     await this.collectAdditionalChainEvents(additionalManagers);
@@ -735,5 +798,4 @@ export class NetworkCoordinator {
       }
     }
   }
-
 }

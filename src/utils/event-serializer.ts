@@ -1,5 +1,6 @@
 import { Logger } from './logger';
 import { toHexString } from './hex';
+import { stringify } from './json';
 
 export interface ParsedEvent {
   section: string;
@@ -146,7 +147,7 @@ export function displayChainEvents(
 
       if (logger.isVerbose() && parsed.data) {
         const serialized = serializeEventData(parsed.data);
-        logger.debug(`    Data: ${JSON.stringify(serialized, null, 2)}`);
+        logger.debug(`    Data: ${stringify(serialized, 2)}`);
       }
     });
   } else {

@@ -1,5 +1,10 @@
 import { Logger } from '../utils/logger';
-import { createApiForChain, createPolkadotClient, getReferendaPallet, getReferendaPalletName } from '../services/chain-registry';
+import {
+  createApiForChain,
+  createPolkadotClient,
+  getReferendaPallet,
+  getReferendaPalletName,
+} from '../services/chain-registry';
 import { parseEndpoint } from '../utils/chain-endpoint-parser';
 import { ChopsticksManager } from '../services/chopsticks-manager';
 import { ReferendaFetcher } from '../services/referenda-fetcher';

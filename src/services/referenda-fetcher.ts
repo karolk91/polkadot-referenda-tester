@@ -36,9 +36,7 @@ export class ReferendaFetcher {
         return null;
       }
 
-      this.logger.debug(
-        `Raw referendum info: ${stringify(refInfo, 2)}`
-      );
+      this.logger.debug(`Raw referendum info: ${stringify(refInfo, 2)}`);
 
       // Handle both enum formats: { Ongoing: ... } and { type: "Ongoing", value: ... }
       const refType = refInfo.type || Object.keys(refInfo)[0];
@@ -105,53 +103,17 @@ export class ReferendaFetcher {
         return null;
       }
 
-      const { hash: proposalHashHex, call: preimage, type: proposalType, len: proposalLen } =
-        this.parseProposal(ongoing.proposal);
-
-      this.logger.debug(
-        `Proposal type: ${proposalType}, hash: ${proposalHashHex ?? 'unknown'}, preimage length: ${proposalLen}`
-      );
-
-      // Determine the track name from on-chain data
-      const trackId = ongoing.track;
-      const referendaConstants = useFellowship ? api.constants.FellowshipReferenda : api.constants.Referenda;
-      const tracks = await referendaConstants.Tracks();
-      const track = tracks.find((t: any) => t[0] === trackId);
-      const trackName = track ? track[1]?.name || `track_${trackId}` : `track_${trackId}`;
-
-      const hashValue = proposalHashHex ?? 'inline';
-
-      const referendumInfo: ReferendumInfo = {
-        id: referendumId,
-        track: trackName,
-        origin: ongoing.origin,
-        proposal: {
-          hash: hashValue,
-          call: preimage,
-          type: proposalType,
-          len: proposalType === 'Lookup' ? proposalLen : undefined,
-        },
+      const referendumInfo = await this.buildOngoingReferendumInfo(
+        api,
+        referendumId,
+        ongoing,
         status,
         tally,
-        submittedAt: ongoing.submitted,
-        submissionDeposit: ongoing.submission_deposit
-          ? {
-              who: ongoing.submission_deposit.who,
-              amount: ongoing.submission_deposit.amount,
-            }
-          : undefined,
-        decisionDeposit: ongoing.decision_deposit
-          ? {
-              who: ongoing.decision_deposit.who,
-              amount: ongoing.decision_deposit.amount,
-            }
-          : undefined,
         deciding,
-      };
-
-      this.logger.debug(
-        `Parsed referendum info: ${stringify(referendumInfo, 2)}`
+        useFellowship
       );
+
+      this.logger.debug(`Parsed referendum info: ${stringify(referendumInfo, 2)}`);
 
       return referendumInfo;
     } catch (error) {
@@ -162,6 +124,63 @@ export class ReferendaFetcher {
       );
       return null;
     }
+  }
+
+  private async buildOngoingReferendumInfo(
+    api: any,
+    referendumId: number,
+    ongoing: any,
+    status: ReferendumInfo['status'],
+    tally: ReferendumInfo['tally'],
+    deciding: ReferendumInfo['deciding'],
+    useFellowship: boolean
+  ): Promise<ReferendumInfo> {
+    const {
+      hash: proposalHashHex,
+      call: preimage,
+      type: proposalType,
+      len: proposalLen,
+    } = this.parseProposal(ongoing.proposal);
+
+    this.logger.debug(
+      `Proposal type: ${proposalType}, hash: ${proposalHashHex ?? 'unknown'}, preimage length: ${proposalLen}`
+    );
+
+    const trackId = ongoing.track;
+    const referendaConstants = useFellowship
+      ? api.constants.FellowshipReferenda
+      : api.constants.Referenda;
+    const tracks = await referendaConstants.Tracks();
+    const track = tracks.find((t: any) => t[0] === trackId);
+    const trackName = track ? track[1]?.name || `track_${trackId}` : `track_${trackId}`;
+
+    return {
+      id: referendumId,
+      track: trackName,
+      origin: ongoing.origin,
+      proposal: {
+        hash: proposalHashHex ?? 'inline',
+        call: preimage,
+        type: proposalType,
+        len: proposalType === 'Lookup' ? proposalLen : undefined,
+      },
+      status,
+      tally,
+      submittedAt: ongoing.submitted,
+      submissionDeposit: ongoing.submission_deposit
+        ? {
+            who: ongoing.submission_deposit.who,
+            amount: ongoing.submission_deposit.amount,
+          }
+        : undefined,
+      decisionDeposit: ongoing.decision_deposit
+        ? {
+            who: ongoing.decision_deposit.who,
+            amount: ongoing.decision_deposit.amount,
+          }
+        : undefined,
+      deciding,
+    };
   }
 
   private parseProposal(proposal: any): {
