@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { interpretDispatchResult, formatDispatchError } from '../utils/dispatch-result';
+import { describe, expect, it } from 'vitest';
+import { formatDispatchError, interpretDispatchResult } from '../utils/dispatch-result';
 
 describe('interpretDispatchResult', () => {
   it('returns unknown for null/undefined', () => {

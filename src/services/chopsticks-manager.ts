@@ -1,32 +1,45 @@
-import { setupNetworks } from '@acala-network/chopsticks-testing';
 import type { Config } from '@acala-network/chopsticks/dist/esm/schema/index.js';
 import { BuildBlockMode } from '@acala-network/chopsticks-core';
-import { createClient } from 'polkadot-api';
-import { getWsProvider } from 'polkadot-api/ws-provider/node';
-import { withPolkadotSdkCompat } from 'polkadot-api/polkadot-sdk-compat';
-import { ChopsticksConfig } from '../types';
-import { Logger } from '../utils/logger';
-import { getChainInfo, createApiForChain, ChainInfo } from './chain-registry';
+import { setupNetworks } from '@acala-network/chopsticks-testing';
 import * as path from 'path';
+import type { ChopsticksConfig } from '../types';
+import type { SubstrateApi } from '../types/substrate-api';
+import type { Logger } from '../utils/logger';
 
 const CHAIN_READY_MAX_ATTEMPTS = 10;
 const CHAIN_READY_DELAY_MS = 500;
 
+/** Minimal interface for the Chopsticks network context returned by setupNetworks */
+export interface ChopsticksContext {
+  ws: { endpoint: string };
+  dev: {
+    newBlock(params?: { transactions?: string[] }): Promise<unknown>;
+    setStorage(updates: unknown): Promise<unknown>;
+    timeTravel(timestamp: string | number): Promise<unknown>;
+    setHead?(hashOrNumber: string | number): Promise<unknown>;
+  };
+  chain?: { port?: number; head?: { number: number } };
+  head?: { number: number };
+  pause?(): Promise<unknown>;
+  teardown?(): Promise<void>;
+  close?(): Promise<void>;
+}
+
 export class ChopsticksManager {
   private logger: Logger;
-  private context: any = null;
+  private context: ChopsticksContext | null = null;
 
   constructor(logger: Logger) {
     this.logger = logger;
   }
 
-  static fromExistingContext(logger: Logger, context: any): ChopsticksManager {
+  static fromExistingContext(logger: Logger, context: ChopsticksContext): ChopsticksManager {
     const manager = new ChopsticksManager(logger);
     manager.setContext(context);
     return manager;
   }
 
-  async setup(config: ChopsticksConfig, networkKey?: string): Promise<any> {
+  async setup(config: ChopsticksConfig, networkKey?: string): Promise<ChopsticksContext> {
     try {
       this.logger.startSpinner('Starting Chopsticks local environment...');
 
@@ -63,7 +76,7 @@ export class ChopsticksManager {
         [key]: chopsticksConfig,
       });
 
-      this.context = networks[key];
+      this.context = networks[key] as unknown as ChopsticksContext;
 
       const endpoint = this.context.ws.endpoint;
       this.logger.succeedSpinner(`Chopsticks started at ${endpoint}`);
@@ -96,7 +109,7 @@ export class ChopsticksManager {
     // until the head actually advances — guaranteeing subsequent storage reads
     // see the new block's state.
     const chain = this.context.chain ?? this.context;
-    const headBefore = chain.head?.number;
+    const headBefore = chain.head?.number as number | undefined;
 
     await this.context.dev.newBlock(params);
 
@@ -115,7 +128,7 @@ export class ChopsticksManager {
     }
   }
 
-  async setStorage(module: string, item: string, key: any, value: any): Promise<void> {
+  async setStorage(module: string, item: string, key: unknown, value: unknown): Promise<void> {
     if (!this.context) {
       throw new Error('Chopsticks context not initialized');
     }
@@ -128,7 +141,7 @@ export class ChopsticksManager {
     });
   }
 
-  async setStorageBatch(updates: Record<string, any>): Promise<void> {
+  async setStorageBatch(updates: Record<string, unknown>): Promise<void> {
     if (!this.context) {
       throw new Error('Chopsticks context not initialized');
     }
@@ -146,40 +159,8 @@ export class ChopsticksManager {
     await this.context.dev.timeTravel(timestamp);
   }
 
-  /**
-   * Create a fully connected Chopsticks instance with client, API, and chain info.
-   * Encapsulates the common setup pattern: create → connect → wait for ready → detect chain.
-   */
-  static async createConnected(
-    logger: Logger,
-    config: ChopsticksConfig,
-    originalEndpoint: string
-  ): Promise<{
-    chopsticks: ChopsticksManager;
-    client: any;
-    api: any;
-    chainInfo: ChainInfo;
-  }> {
-    const chopsticks = new ChopsticksManager(logger);
-    const context = await chopsticks.setup(config);
-
-    const endpoint = context.ws.endpoint;
-    const wsProvider = getWsProvider(endpoint);
-    const client = createClient(withPolkadotSdkCompat(wsProvider));
-    const api = createApiForChain(client);
-
-    logger.startSpinner('Waiting for chain to be ready...');
-    await chopsticks.waitForChainReady(api);
-    logger.succeedSpinner('Chain is ready');
-
-    const chainInfo = await getChainInfo(api, originalEndpoint);
-    logger.info(`Detected chain: ${chainInfo.label} (${chainInfo.specName})`);
-
-    return { chopsticks, client, api, chainInfo };
-  }
-
   async waitForChainReady(
-    api: any,
+    api: SubstrateApi,
     maxAttempts = CHAIN_READY_MAX_ATTEMPTS,
     delayMs = CHAIN_READY_DELAY_MS
   ): Promise<void> {
@@ -204,14 +185,14 @@ export class ChopsticksManager {
     }
   }
 
-  getContext(): any {
+  getContext(): ChopsticksContext {
     if (!this.context) {
       throw new Error('Chopsticks context not initialized');
     }
     return this.context;
   }
 
-  setContext(context: any): void {
+  setContext(context: ChopsticksContext): void {
     this.context = context;
   }
 
@@ -222,8 +203,8 @@ export class ChopsticksManager {
 
     this.logger.debug('Pausing Chopsticks instance...');
 
-    if (typeof this.context.pause === 'function') {
-      return this.context.pause();
+    if (this.context.pause) {
+      await this.context.pause();
     } else {
       this.logger.warn('pause() method not available on context');
     }
@@ -232,9 +213,9 @@ export class ChopsticksManager {
   async cleanup(): Promise<void> {
     if (this.context) {
       this.logger.debug('Cleaning up Chopsticks context...');
-      if (typeof this.context.teardown === 'function') {
+      if (this.context.teardown) {
         await this.context.teardown();
-      } else if (typeof this.context.close === 'function') {
+      } else if (this.context.close) {
         await this.context.close();
       }
       this.context = null;

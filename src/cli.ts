@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
-import { testReferendum } from './commands/test-referendum';
-import { listReferendums } from './commands/list-referendums';
 import { version } from '../package.json';
+import { listReferendums } from './commands/list-referendums';
+import { testReferendum } from './commands/test-referendum';
 
 const program = new Command();
 

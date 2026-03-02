@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { serializeEventData, parseBlockEvent } from '../utils/event-serializer';
+import { describe, expect, it } from 'vitest';
+import { parseBlockEvent, serializeEventData } from '../utils/event-serializer';
 
 describe('serializeEventData', () => {
   it('returns null/undefined as-is', () => {
@@ -22,15 +22,17 @@ describe('serializeEventData', () => {
     expect(serializeEventData(data)).toBe('0xabcd');
   });
 
-  it('handles objects with asHex getter', () => {
-    const data = { asHex: '0x1234' };
+  it('handles objects with asHex method', () => {
+    const data = { asHex: () => '0x1234' };
     expect(serializeEventData(data)).toBe('0x1234');
   });
 
-  it('falls back to asBytes when asHex returns null', () => {
+  it('falls back to toU8a when asHex throws', () => {
     const data = {
-      asHex: null,
-      asBytes: () => new Uint8Array([0xff]),
+      asHex: () => {
+        throw new Error('no hex');
+      },
+      toU8a: () => new Uint8Array([0xff]),
     };
     expect(serializeEventData(data)).toBe('0xff');
   });

@@ -84,6 +84,9 @@ jobs:
       - name: Install JS dependencies
         run: yarn install --immutable
 
+      - name: Lint and format check
+        run: yarn check
+
       - name: Build TypeScript CLI
         run: yarn build
 

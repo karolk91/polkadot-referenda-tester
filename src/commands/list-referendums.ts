@@ -1,12 +1,15 @@
-import { createClient } from 'polkadot-api';
-import { getWsProvider } from 'polkadot-api/ws-provider/node';
-import { withPolkadotSdkCompat } from 'polkadot-api/polkadot-sdk-compat';
-import { Logger } from '../utils/logger';
-import { createApiForChain } from '../services/chain-registry';
-import { parseEndpoint } from '../utils/chain-endpoint-parser';
+import type { PolkadotClient } from 'polkadot-api';
+import {
+  createApiForChain,
+  createPolkadotClient,
+  getReferendaPallet,
+  getReferendaPalletName,
+} from '../services/chain-registry';
 import { ChopsticksManager } from '../services/chopsticks-manager';
 import { ReferendaFetcher } from '../services/referenda-fetcher';
-import { ChopsticksConfig } from '../types';
+import type { ChopsticksConfig } from '../types';
+import { parseEndpoint } from '../utils/chain-endpoint-parser';
+import { Logger } from '../utils/logger';
 
 interface ListOptions {
   governanceChainUrl?: string;
@@ -19,7 +22,7 @@ export async function listReferendums(options: ListOptions): Promise<void> {
   const logger = new Logger(options.verbose);
 
   let chopsticks: ChopsticksManager | null = null;
-  let client: any = null;
+  let client: PolkadotClient | null = null;
 
   try {
     // Determine which chain to use
@@ -48,7 +51,7 @@ export async function listReferendums(options: ListOptions): Promise<void> {
       logger.info(`Using specified block: ${forkBlock}`);
     } else {
       logger.startSpinner('Connecting to live network to get latest block...');
-      const tempClient = createClient(withPolkadotSdkCompat(getWsProvider(chainUrl)));
+      const tempClient = createPolkadotClient(chainUrl);
       const tempApi = createApiForChain(tempClient);
       const fetcher = new ReferendaFetcher(logger);
       forkBlock = await fetcher.getLatestBlock(tempApi);
@@ -71,20 +74,15 @@ export async function listReferendums(options: ListOptions): Promise<void> {
 
     logger.startSpinner('Connecting to Chopsticks...');
     const chopsticksEndpoint = context.ws.endpoint;
-    client = createClient(withPolkadotSdkCompat(getWsProvider(chopsticksEndpoint)));
+    client = createPolkadotClient(chopsticksEndpoint);
     const api = createApiForChain(client);
     logger.succeedSpinner('Connected');
 
-    const palletName = useFellowship ? 'FellowshipReferenda' : 'Referenda';
+    const palletName = getReferendaPalletName(useFellowship);
+    const pallet = getReferendaPallet(api, useFellowship);
     logger.startSpinner(`Fetching ${palletName} referendums...`);
 
-    // Get referendum count
-    let referendumCount: number;
-    if (useFellowship) {
-      referendumCount = await api.query.FellowshipReferenda.ReferendumCount.getValue();
-    } else {
-      referendumCount = await api.query.Referenda.ReferendumCount.getValue();
-    }
+    const referendumCount: number = await pallet.ReferendumCount.getValue();
 
     logger.succeedSpinner(`Found ${referendumCount} referendum(s)`);
 
@@ -100,20 +98,16 @@ export async function listReferendums(options: ListOptions): Promise<void> {
     }> = [];
 
     for (let id = 0; id < referendumCount; id++) {
-      let refInfo;
-      if (useFellowship) {
-        refInfo = await api.query.FellowshipReferenda.ReferendumInfoFor.getValue(id);
-      } else {
-        refInfo = await api.query.Referenda.ReferendumInfoFor.getValue(id);
-      }
+      const refInfo = await pallet.ReferendumInfoFor.getValue(id);
 
       if (!refInfo) {
         continue; // Skip if referendum doesn't exist
       }
 
       // Parse status
+      const refRecord = refInfo as unknown as Record<string, unknown>;
       const refType = refInfo.type || Object.keys(refInfo)[0];
-      let status: string = refType.toLowerCase();
+      const status: string = refType.toLowerCase();
 
       // Get track and tally for ongoing referendums
       let track: string | undefined;
@@ -123,30 +117,25 @@ export async function listReferendums(options: ListOptions): Promise<void> {
       let bareAyes: string | undefined;
 
       if (status === 'ongoing') {
-        const refValue = refInfo.value || refInfo[refType];
+        const refValue = (refInfo.value || refRecord[refType]) as
+          | Record<string, unknown>
+          | undefined;
         const trackId = refValue?.track;
         if (trackId !== undefined) {
-          track = trackId.toString();
+          track = String(trackId);
         }
 
         // Extract tally information
-        if (refValue?.tally) {
-          ayes = refValue.tally.ayes?.toString();
-          nays = refValue.tally.nays?.toString();
-          support = refValue.tally.support?.toString();
-          bareAyes = refValue.tally.bare_ayes?.toString();
+        const tally = refValue?.tally as Record<string, unknown> | undefined;
+        if (tally) {
+          ayes = tally.ayes?.toString();
+          nays = tally.nays?.toString();
+          support = tally.support?.toString();
+          bareAyes = tally.bare_ayes?.toString();
         }
       }
 
       results.push({ id, status, track, ayes, nays, support, bareAyes });
-    }
-
-    // Cleanup
-    if (client) {
-      client.destroy();
-    }
-    if (chopsticks) {
-      await chopsticks.cleanup();
     }
 
     // Filter results by status if specified
@@ -182,23 +171,17 @@ export async function listReferendums(options: ListOptions): Promise<void> {
     process.exitCode = 0;
   } catch (error) {
     logger.error('Failed to list referendums', error as Error);
-
-    // Cleanup on error
-    if (client) {
-      try {
-        client.destroy();
-      } catch (cleanupError) {
-        logger.debug(`Error destroying client: ${cleanupError}`);
-      }
-    }
-    if (chopsticks) {
-      try {
-        await chopsticks.cleanup();
-      } catch (cleanupError) {
-        logger.debug(`Error cleaning up chopsticks: ${cleanupError}`);
-      }
-    }
-
     process.exitCode = 1;
+  } finally {
+    try {
+      if (client) client.destroy();
+    } catch (cleanupError) {
+      logger.debug(`Error destroying client: ${cleanupError}`);
+    }
+    try {
+      if (chopsticks) await chopsticks.cleanup();
+    } catch (cleanupError) {
+      logger.debug(`Error cleaning up chopsticks: ${cleanupError}`);
+    }
   }
 }

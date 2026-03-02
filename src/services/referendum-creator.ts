@@ -1,10 +1,14 @@
-import { getPolkadotSigner } from 'polkadot-api/signer';
-import { Binary } from '@polkadot-api/substrate-bindings';
 import { Keyring } from '@polkadot/keyring';
-import { Logger } from '../utils/logger';
-import { ChopsticksManager } from './chopsticks-manager';
-import { parseBlockEvent } from '../utils/event-serializer';
+import { Binary } from '@polkadot-api/substrate-bindings';
+import type { PolkadotSigner } from 'polkadot-api';
+import { getPolkadotSigner } from 'polkadot-api/signer';
+import type { SubstrateApi } from '../types/substrate-api';
 import { formatDispatchError } from '../utils/dispatch-result';
+import { parseBlockEvent } from '../utils/event-serializer';
+import { stringify } from '../utils/json';
+import type { Logger } from '../utils/logger';
+import { getReferendaPallet } from './chain-registry';
+import type { ChopsticksManager } from './chopsticks-manager';
 
 // Alice's address on Substrate-based chains
 export const ALICE_ADDRESS = '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY';
@@ -102,14 +106,6 @@ export class ReferendumCreator {
     this.chopsticks = chopsticks;
   }
 
-  /**
-   * Creates a referendum on the given chain using Alice account
-   * @param api - The typed API for the chain
-   * @param submitCallHex - Hex string of the referendum submit call
-   * @param preimageCallHex - Optional hex string of the preimage note call
-   * @param isFellowship - Whether this is a fellowship referendum
-   * @returns The created referendum ID and preimage status
-   */
   private static validateHex(input: string, paramName: string): string {
     const hex = input.startsWith('0x') ? input : `0x${input}`;
     if (!/^0x[0-9a-fA-F]*$/.test(hex)) {
@@ -119,15 +115,13 @@ export class ReferendumCreator {
   }
 
   async createReferendum(
-    api: any,
+    api: SubstrateApi,
     submitCallHex: string,
     preimageCallHex?: string,
     isFellowship: boolean = false
   ): Promise<ReferendumCreationResult> {
-    // Validate hex inputs
     const validatedSubmitHex = ReferendumCreator.validateHex(submitCallHex, 'submitCall');
 
-    // Create Alice account from keyring
     const keyring = new Keyring({ type: 'sr25519' });
     const alice = keyring.addFromUri('//Alice');
     const signer = getPolkadotSigner(alice.publicKey, 'Sr25519', alice.sign);
@@ -136,61 +130,75 @@ export class ReferendumCreator {
       `Creating ${isFellowship ? 'fellowship' : 'governance'} referendum using Alice account...`
     );
 
-    // Note preimage if provided
-    let preimageNoted = false;
-    if (preimageCallHex) {
-      const validatedPreimageHex = ReferendumCreator.validateHex(preimageCallHex, 'preimageCall');
-      this.logger.startSpinner('Noting preimage...');
-      let preimageCall;
-      try {
-        preimageCall = await api.txFromCallData(Binary.fromHex(validatedPreimageHex));
-      } catch (e) {
+    const preimageNoted = preimageCallHex
+      ? await this.notePreimage(api, signer, preimageCallHex)
+      : false;
+
+    const referendumId = await this.submitAndRetrieveId(
+      api,
+      signer,
+      validatedSubmitHex,
+      isFellowship
+    );
+
+    return { referendumId, preimageNoted };
+  }
+
+  private async notePreimage(
+    api: SubstrateApi,
+    signer: PolkadotSigner,
+    preimageCallHex: string
+  ): Promise<boolean> {
+    const validatedHex = ReferendumCreator.validateHex(preimageCallHex, 'preimageCall');
+    this.logger.startSpinner('Noting preimage...');
+
+    const preimageCall = await api
+      .txFromCallData(Binary.fromHex(validatedHex))
+      .catch((e: Error) => {
         this.logger.failSpinner('Failed to decode preimage call data');
         throw new Error(
-          `Invalid preimage call data for this chain's runtime. The hex may have been generated for a different runtime version or chain. Original error: ${(e as Error).message}`
+          `Invalid preimage call data for this chain's runtime. The hex may have been generated for a different runtime version or chain. Original error: ${e.message}`
         );
-      }
+      });
 
-      // Sign the transaction and pass it directly to newBlock to avoid race conditions.
-      // Using signAndSubmit in fire-and-forget mode can cause the extrinsic to not be in the
-      // tx pool when newBlock() is called, because the async validation/broadcast pipeline
-      // may not have completed yet.
-      const signedPreimageTx = await preimageCall.sign(signer);
-      this.logger.debug('Preimage transaction signed');
+    // Sign and pass directly to newBlock to avoid race conditions with async tx pool
+    const signedPreimageTx = await preimageCall.sign(signer);
+    this.logger.debug('Preimage transaction signed');
 
-      // Create block with the signed transaction included directly
-      await this.chopsticks.newBlock({ transactions: [signedPreimageTx] });
-      await this.chopsticks.newBlock();
+    await this.chopsticks.newBlock({ transactions: [signedPreimageTx] });
+    await this.chopsticks.newBlock();
 
-      this.logger.succeedSpinner('Preimage noted successfully');
-      preimageNoted = true;
-    }
+    this.logger.succeedSpinner('Preimage noted successfully');
+    return true;
+  }
 
-    // Submit referendum
+  private async submitAndRetrieveId(
+    api: SubstrateApi,
+    signer: PolkadotSigner,
+    validatedSubmitHex: string,
+    isFellowship: boolean
+  ): Promise<number> {
     this.logger.startSpinner('Submitting referendum...');
-    let submitCall;
-    try {
-      submitCall = await api.txFromCallData(Binary.fromHex(validatedSubmitHex));
-    } catch (e) {
-      this.logger.failSpinner('Failed to decode referendum submit call data');
-      throw new Error(
-        `Invalid referendum submit call data for this chain's runtime. The hex may have been generated for a different runtime version or chain. Original error: ${(e as Error).message}`
-      );
-    }
 
-    // Read referendum count BEFORE submitting so we can determine the new ID
-    const palletQuery = isFellowship ? api.query.FellowshipReferenda : api.query.Referenda;
+    const submitCall = await api
+      .txFromCallData(Binary.fromHex(validatedSubmitHex))
+      .catch((e: Error) => {
+        this.logger.failSpinner('Failed to decode referendum submit call data');
+        throw new Error(
+          `Invalid referendum submit call data for this chain's runtime. The hex may have been generated for a different runtime version or chain. Original error: ${e.message}`
+        );
+      });
+
+    const palletQuery = getReferendaPallet(api, isFellowship);
     const countBefore = Number(await palletQuery.ReferendumCount.getValue());
     this.logger.debug(`Referendum count before submit: ${countBefore}`);
 
-    // Sign the transaction and pass it directly to newBlock to avoid race conditions.
+    // Sign and pass directly to newBlock to avoid race conditions with async tx pool
     const signedSubmitTx = await submitCall.sign(signer);
     this.logger.debug('Referendum transaction signed');
 
-    // Create block with the signed transaction included directly
     await this.chopsticks.newBlock({ transactions: [signedSubmitTx] });
 
-    // Inspect events from the submit block to detect dispatch errors
     try {
       const events = await api.query.System.Events.getValue();
       if (events && Array.isArray(events)) {
@@ -201,7 +209,7 @@ export class ReferendumCreator {
           if (parsed.section === 'System' && parsed.method === 'ExtrinsicFailed') {
             const errMsg = formatDispatchError(parsed.data);
             this.logger.error(`Extrinsic dispatch failed: ${errMsg}`);
-            this.logger.error(`Full error data: ${JSON.stringify(parsed.data, (_, v) => typeof v === 'bigint' ? v.toString() : v, 2)}`);
+            this.logger.error(`Full error data: ${stringify(parsed.data, 2)}`);
           }
         }
       }
@@ -210,48 +218,37 @@ export class ReferendumCreator {
     }
 
     await this.chopsticks.newBlock();
-
     this.logger.succeedSpinner('Referendum submitted successfully');
 
-    // Retrieve referendum ID from ReferendumCount (most reliable method)
     this.logger.startSpinner('Retrieving referendum ID...');
-
     const countAfter = Number(await palletQuery.ReferendumCount.getValue());
     this.logger.debug(`Referendum count after submit: ${countAfter}`);
 
-    let referendumId: number | undefined;
-    if (countAfter > countBefore) {
-      // The new referendum ID is countAfter - 1 (0-indexed)
-      referendumId = countAfter - 1;
-      this.logger.debug(`Referendum ID determined from count: #${referendumId}`);
-    }
-
-    if (referendumId === undefined) {
+    if (countAfter <= countBefore) {
       this.logger.failSpinner('Referendum count did not increase — submission may have failed');
       throw new Error(
         'No new referendum detected after submission. The call data may be invalid or the origin may lack permissions.'
       );
     }
 
+    const referendumId = countAfter - 1;
+    this.logger.debug(`Referendum ID determined from count: #${referendumId}`);
     this.logger.succeedSpinner(`Referendum #${referendumId} created successfully`);
 
-    return {
-      referendumId,
-      preimageNoted,
-    };
+    return referendumId;
   }
 
   /**
    * Gets the fellowship storage injection object for Alice
    */
-  static getFellowshipStorageInjection(): any {
+  static getFellowshipStorageInjection(): Record<string, unknown> {
     return FELLOWSHIP_STORAGE_INJECTION;
   }
 
   /**
    * Gets a minimal storage injection to fund Alice on any chain
    */
-  static getAliceAccountInjection(): any {
+  static getAliceAccountInjection(): Record<string, unknown> {
     return ALICE_ACCOUNT_INJECTION;
   }
 }
