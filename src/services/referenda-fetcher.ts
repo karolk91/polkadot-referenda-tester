@@ -5,6 +5,7 @@ import type {
   SubstrateApi,
   TrackInfo,
 } from '../types/substrate-api';
+import { toHexString } from '../utils/hex';
 import { stringify } from '../utils/json';
 import type { Logger } from '../utils/logger';
 import { getReferendaPallet, getReferendaPalletName } from './chain-registry';
@@ -169,7 +170,7 @@ export class ReferendaFetcher {
   } {
     if (proposal.type === 'Lookup') {
       return {
-        hash: proposal.value.hash,
+        hash: toHexString(proposal.value.hash),
         call: undefined,
         type: 'Lookup',
         len: proposal.value.len,

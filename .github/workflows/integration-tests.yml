@@ -141,7 +141,7 @@ jobs:
     needs: build
 
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         suite:
           - name: polkadot-governance

@@ -27,6 +27,19 @@ use crate::common::port_allocator;
 use crate::common::tool_runner::{ToolArgs, ToolRunner};
 use crate::common::tracks;
 
+/// Panic immediately when the first sub-test failure is detected.
+/// This avoids wasting CI time running remaining sub-tests when a
+/// systemic bug (e.g. broken Lookup hash parsing) causes all of them to fail.
+fn bail_on_first_error(errors: &[String]) {
+    if !errors.is_empty() {
+        panic!(
+            "{} sub-test(s) failed (bailing early):\n{}",
+            errors.len(),
+            errors.join("\n")
+        );
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Polkadot Governance — all 16 tracks + scenario tests
 // ═══════════════════════════════════════════════════════════════════════════
@@ -60,6 +73,7 @@ async fn polkadot_governance_all_tracks() {
                 errors.push(msg);
             }
         }
+        bail_on_first_error(&errors);
 
         match run_gov_bynum_test(&ctx, &runner, track).await {
             Ok(()) => log::info!("PASS: gov_bynum_{}", track.name),
@@ -69,6 +83,7 @@ async fn polkadot_governance_all_tracks() {
                 errors.push(msg);
             }
         }
+        bail_on_first_error(&errors);
     }
 
     // ── Scenario tests ───────────────────────────────────────────────────
@@ -123,14 +138,7 @@ async fn polkadot_governance_all_tracks() {
                 errors.push(msg);
             }
         }
-    }
-
-    if !errors.is_empty() {
-        panic!(
-            "{} sub-test(s) failed:\n{}",
-            errors.len(),
-            errors.join("\n")
-        );
+        bail_on_first_error(&errors);
     }
 }
 
@@ -159,14 +167,7 @@ async fn polkadot_fellowship_tracks_part1() {
 
     for track in &tracks::POLKADOT_FELLOWSHIP_TRACKS[..15] {
         run_polkadot_fellowship_track_pair(&ctx, &runner, track, &mut errors).await;
-    }
-
-    if !errors.is_empty() {
-        panic!(
-            "{} sub-test(s) failed:\n{}",
-            errors.len(),
-            errors.join("\n")
-        );
+        bail_on_first_error(&errors);
     }
 }
 
@@ -191,6 +192,7 @@ async fn polkadot_fellowship_tracks_part2() {
 
     for track in &tracks::POLKADOT_FELLOWSHIP_TRACKS[15..] {
         run_polkadot_fellowship_track_pair(&ctx, &runner, track, &mut errors).await;
+        bail_on_first_error(&errors);
     }
 
     // ── Multi-chain scenario tests ───────────────────────────────────────
@@ -224,14 +226,7 @@ async fn polkadot_fellowship_tracks_part2() {
                 errors.push(msg);
             }
         }
-    }
-
-    if !errors.is_empty() {
-        panic!(
-            "{} sub-test(s) failed:\n{}",
-            errors.len(),
-            errors.join("\n")
-        );
+        bail_on_first_error(&errors);
     }
 }
 
@@ -294,6 +289,7 @@ async fn kusama_governance_all_tracks() {
                 errors.push(msg);
             }
         }
+        bail_on_first_error(&errors);
 
         match run_kusama_gov_bynum_test(&ctx, &runner, track).await {
             Ok(()) => log::info!("PASS: ksm_gov_bynum_{}", track.name),
@@ -303,6 +299,7 @@ async fn kusama_governance_all_tracks() {
                 errors.push(msg);
             }
         }
+        bail_on_first_error(&errors);
     }
 
     // ── Scenario test ────────────────────────────────────────────────────
@@ -319,14 +316,7 @@ async fn kusama_governance_all_tracks() {
             errors.push(msg);
         }
     }
-
-    if !errors.is_empty() {
-        panic!(
-            "{} sub-test(s) failed:\n{}",
-            errors.len(),
-            errors.join("\n")
-        );
-    }
+    bail_on_first_error(&errors);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -362,6 +352,7 @@ async fn kusama_fellowship_all_tracks() {
                 errors.push(msg);
             }
         }
+        bail_on_first_error(&errors);
 
         match run_kusama_fellowship_bynum_test(&ctx, &runner, track).await {
             Ok(()) => log::info!("PASS: ksm_fell_bynum_{}", track.name),
@@ -371,6 +362,7 @@ async fn kusama_fellowship_all_tracks() {
                 errors.push(msg);
             }
         }
+        bail_on_first_error(&errors);
     }
 
     // ── Scenario tests ───────────────────────────────────────────────────
@@ -399,14 +391,7 @@ async fn kusama_fellowship_all_tracks() {
                 errors.push(msg);
             }
         }
-    }
-
-    if !errors.is_empty() {
-        panic!(
-            "{} sub-test(s) failed:\n{}",
-            errors.len(),
-            errors.join("\n")
-        );
+        bail_on_first_error(&errors);
     }
 }
 
