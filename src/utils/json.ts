@@ -5,6 +5,6 @@
 /**
  * Serialize any value to JSON string, handling BigInt values
  */
-export function stringify(value: any, space?: number): string {
+export function stringify(value: unknown, space?: number): string {
   return JSON.stringify(value, (_, v) => (typeof v === 'bigint' ? v.toString() : v), space);
 }

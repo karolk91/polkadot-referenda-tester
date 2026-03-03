@@ -34,7 +34,7 @@ export function parseEndpoint(input: string): ParsedEndpoint {
     const blockStr = parts[1].trim();
 
     const blockNum = parseInt(blockStr, 10);
-    if (isNaN(blockNum) || blockNum < 0) {
+    if (Number.isNaN(blockNum) || blockNum < 0) {
       throw new Error(`Invalid block number: ${blockStr}. Must be a non-negative integer.`);
     }
 
@@ -74,7 +74,7 @@ export function parseMultipleEndpoints(input: string): ParsedEndpoint[] {
       // Check if next part is a block number
       if (i + 1 < parts.length && !parts[i + 1].includes('://')) {
         const blockNum = parseInt(parts[i + 1], 10);
-        if (!isNaN(blockNum) && blockNum >= 0) {
+        if (!Number.isNaN(blockNum) && blockNum >= 0) {
           endpoints.push({ url: part, block: blockNum });
           i += 2; // Skip both URL and block
           continue;

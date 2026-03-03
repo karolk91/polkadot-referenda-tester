@@ -1,8 +1,10 @@
+import { stringify } from './json';
+
 /**
  * Interpret a dispatch result from Scheduler.Dispatched events.
  * Handles multiple polkadot-api result formats (Ok/Err, success/failure, boolean, etc.)
  */
-export function interpretDispatchResult(result: any): {
+export function interpretDispatchResult(result: unknown): {
   outcome: 'success' | 'failure' | 'unknown';
   message?: string;
 } {
@@ -24,53 +26,62 @@ export function interpretDispatchResult(result: any): {
     }
   }
 
-  if (typeof result === 'object') {
-    if ('success' in result && typeof result.success === 'boolean') {
+  if (typeof result === 'object' && result !== null) {
+    const resultRecord = result as Record<string, unknown>;
+
+    if ('success' in resultRecord && typeof resultRecord.success === 'boolean') {
       return {
-        outcome: result.success ? 'success' : 'failure',
-        message: result.success
+        outcome: resultRecord.success ? 'success' : 'failure',
+        message: resultRecord.success
           ? undefined
-          : formatDispatchError(result.value ?? result.error ?? result.err),
+          : formatDispatchError(resultRecord.value ?? resultRecord.error ?? resultRecord.err),
       };
     }
 
-    if ('isOk' in result && typeof (result as any).isOk === 'boolean') {
-      const isOk = (result as any).isOk;
-      if (isOk) {
+    if ('isOk' in resultRecord && typeof resultRecord.isOk === 'boolean') {
+      if (resultRecord.isOk) {
         return { outcome: 'success' };
       }
       const errVal =
-        typeof (result as any).asErr === 'function'
-          ? (result as any).asErr()
-          : (result as any).asErr;
+        typeof resultRecord.asErr === 'function'
+          ? (resultRecord.asErr as () => unknown)()
+          : resultRecord.asErr;
       return { outcome: 'failure', message: formatDispatchError(errVal) };
     }
 
-    if ('ok' in result && typeof (result as any).ok === 'boolean') {
+    if ('ok' in resultRecord && typeof resultRecord.ok === 'boolean') {
       return {
-        outcome: (result as any).ok ? 'success' : 'failure',
-        message: (result as any).ok ? undefined : formatDispatchError((result as any).err),
+        outcome: resultRecord.ok ? 'success' : 'failure',
+        message: resultRecord.ok ? undefined : formatDispatchError(resultRecord.err),
       };
     }
 
-    if ('Ok' in result && result.Ok !== undefined) {
+    if ('Ok' in resultRecord && resultRecord.Ok !== undefined) {
       return { outcome: 'success' };
     }
 
-    if ('Err' in result) {
-      return { outcome: 'failure', message: formatDispatchError(result.Err) };
+    if ('Err' in resultRecord) {
+      return { outcome: 'failure', message: formatDispatchError(resultRecord.Err) };
     }
 
-    const type = (result.type || result.__kind || result.kind || '').toString();
-    if (type) {
-      const loweredType = type.toLowerCase();
-      if (loweredType === 'ok' || loweredType === 'success') {
+    // Extract the enum variant tag used by various polkadot-api result formats
+    const resultTypeTag = (
+      resultRecord.type ||
+      resultRecord.__kind ||
+      resultRecord.kind ||
+      ''
+    ).toString();
+    if (resultTypeTag) {
+      const loweredTag = resultTypeTag.toLowerCase();
+      if (loweredTag === 'ok' || loweredTag === 'success') {
         return { outcome: 'success' };
       }
-      if (['err', 'error', 'fail', 'failure'].includes(loweredType)) {
+      if (['err', 'error', 'fail', 'failure'].includes(loweredTag)) {
         return {
           outcome: 'failure',
-          message: formatDispatchError(result.value ?? result.error ?? result.err),
+          message: formatDispatchError(
+            resultRecord.value ?? resultRecord.error ?? resultRecord.err
+          ),
         };
       }
     }
@@ -79,13 +90,11 @@ export function interpretDispatchResult(result: any): {
   return { outcome: 'unknown' };
 }
 
-const bigintReplacer = (_: string, v: any) => (typeof v === 'bigint' ? v.toString() : v);
-
 /**
  * Format a dispatch error into a human-readable string.
  * Handles nested error structures from polkadot-api (Module errors, Token errors, etc.)
  */
-export function formatDispatchError(error: any): string {
+export function formatDispatchError(error: unknown): string {
   if (error === null || error === undefined) {
     return 'Unknown dispatch error';
   }
@@ -100,35 +109,36 @@ export function formatDispatchError(error: any): string {
 
   if (typeof error === 'object') {
     if (Array.isArray(error)) {
-      return error.map((entry) => formatDispatchError(entry)).join(', ');
+      return error.map((entry: unknown) => formatDispatchError(entry)).join(', ');
     }
 
-    if ('type' in error && typeof (error as any).type === 'string') {
-      const payload =
-        (error as any).value ?? (error as any).error ?? (error as any).err ?? (error as any).data;
+    const errorRecord = error as Record<string, unknown>;
+
+    if ('type' in errorRecord && typeof errorRecord.type === 'string') {
+      const payload = errorRecord.value ?? errorRecord.error ?? errorRecord.err ?? errorRecord.data;
       if (payload !== undefined) {
-        return `${(error as any).type}: ${JSON.stringify(payload, bigintReplacer)}`;
+        return `${errorRecord.type}: ${stringify(payload)}`;
       }
-      return (error as any).type;
+      return errorRecord.type;
     }
 
-    if ('Module' in error) {
-      return `Module error: ${JSON.stringify(error.Module, bigintReplacer)}`;
+    if ('Module' in errorRecord) {
+      return `Module error: ${stringify(errorRecord.Module)}`;
     }
 
-    if ('module' in error) {
-      return `Module error: ${JSON.stringify(error.module, bigintReplacer)}`;
+    if ('module' in errorRecord) {
+      return `Module error: ${stringify(errorRecord.module)}`;
     }
 
-    if ('token' in error) {
-      return `Token error: ${JSON.stringify(error.token)}`;
+    if ('token' in errorRecord) {
+      return `Token error: ${stringify(errorRecord.token)}`;
     }
 
-    if ('value' in error) {
-      return JSON.stringify(error.value, bigintReplacer);
+    if ('value' in errorRecord) {
+      return stringify(errorRecord.value);
     }
 
-    return JSON.stringify(error, bigintReplacer);
+    return stringify(error);
   }
 
   return String(error);

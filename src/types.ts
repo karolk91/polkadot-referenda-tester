@@ -1,3 +1,5 @@
+import type { SS58String } from 'polkadot-api';
+
 export interface TestOptions {
   governanceChainUrl?: string;
   referendum?: string;
@@ -19,10 +21,10 @@ export interface TestOptions {
 export interface ReferendumInfo {
   id: number;
   track: string;
-  origin: any;
+  origin: unknown;
   proposal: {
     hash: string; // Hex string representation
-    call: any;
+    call: unknown;
     type: 'Lookup' | 'Inline';
     len?: number; // Only present for Lookup proposals
   };
@@ -34,11 +36,11 @@ export interface ReferendumInfo {
   };
   submittedAt: number;
   submissionDeposit?: {
-    who: string;
+    who: SS58String;
     amount: bigint;
   };
   decisionDeposit?: {
-    who: string;
+    who: SS58String;
     amount: bigint;
   };
   deciding?: {
@@ -48,13 +50,12 @@ export interface ReferendumInfo {
 }
 
 export interface SimulationResult {
-  success: boolean;
   referendumId: number;
   executionSucceeded: boolean;
   events: Array<{
     section: string;
     method: string;
-    data: any;
+    data: unknown;
   }>;
   errors?: string[];
   blockExecuted?: number;
@@ -66,7 +67,7 @@ export interface ChopsticksConfig {
   block?: number;
   db?: string;
   'build-block-mode'?: 'batch' | 'manual' | 'instant';
-  'import-storage'?: Record<string, any>;
+  'import-storage'?: Record<string, unknown>;
   'mock-signature-host'?: boolean;
   'allow-unresolved-imports'?: boolean;
   'runtime-log-level'?: number;

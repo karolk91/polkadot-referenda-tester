@@ -1,9 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
+  convertAgendaToStorageFormat,
+  convertCallToStorageFormat,
   convertOriginToStorageFormat,
   convertProposalToStorageFormat,
-  convertCallToStorageFormat,
-  convertAgendaToStorageFormat,
 } from '../utils/storage-format-converter';
 
 describe('convertOriginToStorageFormat', () => {
@@ -129,6 +129,7 @@ describe('convertCallToStorageFormat', () => {
 
 describe('convertAgendaToStorageFormat', () => {
   it('handles non-array input', () => {
+    // biome-ignore lint/suspicious/noExplicitAny: intentionally testing invalid input
     expect(convertAgendaToStorageFormat('not-array' as any)).toBe('not-array');
   });
 
