@@ -78,6 +78,10 @@ export class ChainTopologyBuilder {
     return this.fellowshipBlock;
   }
 
+  hasAdditionalChains(): boolean {
+    return this.additionalChainEndpoints.length > 0;
+  }
+
   async detectChainTypes(): Promise<void> {
     this.logger.startSpinner('Detecting chain types...');
 

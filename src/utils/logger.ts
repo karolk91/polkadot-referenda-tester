@@ -35,6 +35,9 @@ export class Logger {
   }
 
   startSpinner(message: string): void {
+    if (this.spinner) {
+      this.spinner.stop();
+    }
     this.spinner = createSpinner(message).start();
   }
 

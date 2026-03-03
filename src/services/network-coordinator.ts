@@ -82,6 +82,17 @@ export class NetworkCoordinator {
       if (!this.topology.getFellowshipEndpoint()) {
         throw new Error('Fellowship chain URL must be provided when testing fellowship referendum');
       }
+
+      if (this.topology.hasAdditionalChains()) {
+        await this.topology.detectChainTypes();
+        return this.runSingleChainWithAdditionalChains(
+          fellowshipReferendumId,
+          true,
+          cleanup,
+          options
+        );
+      }
+
       return this.runSingleChainTest({
         endpoint: this.topology.getFellowshipEndpoint()!,
         block: this.topology.getFellowshipBlock(),
@@ -99,6 +110,12 @@ export class NetworkCoordinator {
       if (!this.topology.getGovernanceEndpoint()) {
         throw new Error('Governance endpoint must be set for single referendum testing');
       }
+
+      if (this.topology.hasAdditionalChains()) {
+        await this.topology.detectChainTypes();
+        return this.runSingleChainWithAdditionalChains(mainReferendumId, false, cleanup, options);
+      }
+
       return this.runSingleChainTest({
         endpoint: this.topology.getGovernanceEndpoint()!,
         block: this.topology.getGovernanceBlock(),
@@ -235,6 +252,148 @@ export class NetworkCoordinator {
         this.logger.info(`\nChopsticks instance still running for inspection`);
         this.logger.info('Press Ctrl+C to exit');
         await chopsticks.pause();
+      }
+    }
+  }
+
+  private async runSingleChainWithAdditionalChains(
+    referendumId: number | undefined,
+    isFellowship: boolean,
+    cleanup: boolean,
+    options?: TestOptions
+  ): Promise<void> {
+    const mainChain = isFellowship
+      ? this.topology.fellowshipChain!
+      : this.topology.governanceChain!;
+    const mainEndpoint = isFellowship
+      ? this.topology.getFellowshipEndpoint()!
+      : this.topology.getGovernanceEndpoint()!;
+    const mainBlock = isFellowship
+      ? this.topology.getFellowshipBlock()
+      : this.topology.getGovernanceBlock();
+    const mainIsRelay = mainChain.kind === 'relay';
+    const label = isFellowship ? 'Fellowship' : 'Governance';
+
+    const mainKey = mainIsRelay
+      ? this.topology.getRelayKey(mainChain.network)
+      : isFellowship
+        ? 'fellowship'
+        : 'governance';
+
+    let storageInjection: 'fellowship' | 'alice-account' | undefined;
+    if (isFellowship && options?.callToCreateFellowshipReferendum) {
+      storageInjection = 'fellowship';
+    } else if (!isFellowship && options?.callToCreateGovernanceReferendum) {
+      storageInjection = 'alice-account';
+    }
+
+    const networkConfig: Record<string, unknown> = {};
+    networkConfig[mainKey] = this.topology.buildConfig(mainEndpoint, mainBlock, storageInjection);
+
+    const { chainToNetworkKey } = this.topology.registerAdditionalChains(
+      networkConfig,
+      new Set([mainEndpoint]),
+      !isFellowship && mainIsRelay,
+      isFellowship && mainIsRelay
+    );
+
+    this.logger.startSpinner('Setting up interconnected chains...');
+    const networks = await setupNetworks(networkConfig as Parameters<typeof setupNetworks>[0]);
+
+    const mainManager = ChopsticksManager.fromExistingContext(
+      this.logger,
+      networks[mainKey] as unknown as ChopsticksContext
+    );
+
+    const additionalManagers = new Map<string, ChopsticksManager>();
+    for (const [chainLabel, networkKey] of chainToNetworkKey) {
+      additionalManagers.set(
+        chainLabel,
+        ChopsticksManager.fromExistingContext(
+          this.logger,
+          networks[networkKey] as unknown as ChopsticksContext
+        )
+      );
+    }
+
+    this.logger.succeedSpinner('Networks ready');
+    this.logger.info(`  ${label}: ${mainManager.getContext().ws.endpoint}`);
+    if (additionalManagers.size > 0) {
+      this.logger.info(
+        `Additional chains connected: ${Array.from(additionalManagers.keys()).join(', ')}`
+      );
+    }
+
+    const mainClient = createPolkadotClient(mainManager.getContext().ws.endpoint);
+
+    try {
+      const api = createApiForChain(mainClient);
+
+      this.logger.startSpinner('Waiting for chain to be ready...');
+      await mainManager.waitForChainReady(api);
+      this.logger.succeedSpinner('Chain is ready');
+
+      const chainInfo = await getChainInfo(api, mainEndpoint);
+      if (isFellowship) {
+        this.topology.fellowshipChain = chainInfo;
+      } else {
+        this.topology.governanceChain = chainInfo;
+      }
+      this.logger.info(`Detected chain: ${chainInfo.label} (${chainInfo.specName})`);
+
+      const callHex = isFellowship
+        ? options?.callToCreateFellowshipReferendum
+        : options?.callToCreateGovernanceReferendum;
+      const preimageHex = isFellowship
+        ? options?.callToNotePreimageForFellowshipReferendum
+        : options?.callToNotePreimageForGovernanceReferendum;
+
+      const createdId = await this.createReferendumIfNeeded({
+        api,
+        chopsticks: mainManager,
+        callHex,
+        preimageHex,
+        isFellowship,
+      });
+      const actualReferendumId = createdId ?? referendumId;
+
+      if (actualReferendumId === undefined) {
+        throw new Error(`${label} referendum ID is required but was not provided or created`);
+      }
+
+      const fetcher = new ReferendaFetcher(this.logger);
+      const referendum = await fetcher.fetchReferendum(api, actualReferendumId, isFellowship);
+
+      if (!referendum) {
+        throw new Error(`Failed to fetch ${label.toLowerCase()} referendum ${actualReferendumId}`);
+      }
+
+      const simulator = new ReferendumSimulator(this.logger, mainManager, api, isFellowship);
+      const result = await simulator.simulate(referendum, {
+        preCall: options?.preCall,
+        preOrigin: options?.preOrigin,
+      });
+
+      this.throwIfFailed(result, `${label} referendum #${actualReferendumId}`);
+      this.logger.success(`\n✓ ${label} referendum #${actualReferendumId} executed successfully!`);
+
+      await this.collectAdditionalChainEvents(additionalManagers);
+    } finally {
+      mainClient.destroy();
+
+      if (cleanup) {
+        await Promise.all([
+          mainManager.cleanup(),
+          ...Array.from(additionalManagers.values()).map((manager) => manager.cleanup()),
+        ]);
+      } else {
+        await this.pauseAllManagers([
+          { label: `${label} (${mainChain.label})`, manager: mainManager },
+          ...Array.from(additionalManagers).map(([chainLabel, manager]) => ({
+            label: chainLabel,
+            manager,
+          })),
+        ]);
       }
     }
   }
