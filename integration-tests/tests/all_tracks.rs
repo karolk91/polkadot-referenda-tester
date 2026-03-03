@@ -52,8 +52,16 @@ async fn polkadot_governance_all_tracks() {
     // ── Per-track tests (create + by-number for each track) ──────────────
 
     for track in tracks::GOVERNANCE_TRACKS {
-        run_and_bail!(errors, format!("gov_create_{}", track.name), run_gov_create_test(&ctx, &runner, track));
-        run_and_bail!(errors, format!("gov_bynum_{}", track.name), run_gov_bynum_test(&ctx, &runner, track));
+        run_and_bail!(
+            errors,
+            format!("gov_create_{}", track.name),
+            run_gov_create_test(&ctx, &runner, track)
+        );
+        run_and_bail!(
+            errors,
+            format!("gov_bynum_{}", track.name),
+            run_gov_bynum_test(&ctx, &runner, track)
+        );
     }
 
     // ── Scenario tests ───────────────────────────────────────────────────
@@ -62,14 +70,46 @@ async fn polkadot_governance_all_tracks() {
         .await
         .expect("failed to refresh fork blocks");
 
-    run_and_bail!(errors, "gov_happy_path", run_governance_happy_path(&ctx, &runner));
-    run_and_bail!(errors, "gov_dispatch_failure", run_governance_dispatch_failure(&ctx, &runner));
-    run_and_bail!(errors, "gov_pre_call_remark", run_governance_with_pre_call(&ctx, &runner));
-    run_and_bail!(errors, "gov_remark_proposal", run_governance_remark_proposal(&ctx, &runner));
-    run_and_bail!(errors, "gov_invalid_hex", run_governance_invalid_hex(&ctx, &runner));
-    run_and_bail!(errors, "gov_pre_call_non_root_origin", run_governance_pre_call_non_root_origin(&ctx, &runner));
-    run_and_bail!(errors, "gov_pre_call_invalid_origin", run_governance_pre_call_invalid_origin(&ctx, &runner));
-    run_and_bail!(errors, "gov_create_no_preimage", run_governance_create_no_preimage(&ctx, &runner));
+    run_and_bail!(
+        errors,
+        "gov_happy_path",
+        run_governance_happy_path(&ctx, &runner)
+    );
+    run_and_bail!(
+        errors,
+        "gov_dispatch_failure",
+        run_governance_dispatch_failure(&ctx, &runner)
+    );
+    run_and_bail!(
+        errors,
+        "gov_pre_call_remark",
+        run_governance_with_pre_call(&ctx, &runner)
+    );
+    run_and_bail!(
+        errors,
+        "gov_remark_proposal",
+        run_governance_remark_proposal(&ctx, &runner)
+    );
+    run_and_bail!(
+        errors,
+        "gov_invalid_hex",
+        run_governance_invalid_hex(&ctx, &runner)
+    );
+    run_and_bail!(
+        errors,
+        "gov_pre_call_non_root_origin",
+        run_governance_pre_call_non_root_origin(&ctx, &runner)
+    );
+    run_and_bail!(
+        errors,
+        "gov_pre_call_invalid_origin",
+        run_governance_pre_call_invalid_origin(&ctx, &runner)
+    );
+    run_and_bail!(
+        errors,
+        "gov_create_no_preimage",
+        run_governance_create_no_preimage(&ctx, &runner)
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -96,13 +136,21 @@ async fn polkadot_fellowship_tracks_part1() {
     let mut errors: Vec<String> = Vec::new();
 
     for track in &tracks::POLKADOT_FELLOWSHIP_TRACKS[..15] {
-        run_and_bail!(errors, format!("fell_create_{}", track.name), run_polkadot_fellowship_create_test(&ctx, &runner, track));
-        run_and_bail!(errors, format!("fell_bynum_{}", track.name), run_polkadot_fellowship_bynum_test(&ctx, &runner, track));
+        run_and_bail!(
+            errors,
+            format!("fell_create_{}", track.name),
+            run_polkadot_fellowship_create_test(&ctx, &runner, track)
+        );
+        run_and_bail!(
+            errors,
+            format!("fell_bynum_{}", track.name),
+            run_polkadot_fellowship_bynum_test(&ctx, &runner, track)
+        );
     }
 }
 
 /// Tracks 21-33 (PromoteTo1Dan through FastPromoteTo3Dan): 9 tracks × 2 = 18 sub-tests
-/// + 4 multi-chain scenario tests = 22 sub-tests total.
+/// + 6 multi-chain scenario tests = 24 sub-tests total.
 #[tokio::test(flavor = "multi_thread")]
 async fn polkadot_fellowship_tracks_part2() {
     env_logger::try_init().ok();
@@ -121,8 +169,16 @@ async fn polkadot_fellowship_tracks_part2() {
     let mut errors: Vec<String> = Vec::new();
 
     for track in &tracks::POLKADOT_FELLOWSHIP_TRACKS[15..] {
-        run_and_bail!(errors, format!("fell_create_{}", track.name), run_polkadot_fellowship_create_test(&ctx, &runner, track));
-        run_and_bail!(errors, format!("fell_bynum_{}", track.name), run_polkadot_fellowship_bynum_test(&ctx, &runner, track));
+        run_and_bail!(
+            errors,
+            format!("fell_create_{}", track.name),
+            run_polkadot_fellowship_create_test(&ctx, &runner, track)
+        );
+        run_and_bail!(
+            errors,
+            format!("fell_bynum_{}", track.name),
+            run_polkadot_fellowship_bynum_test(&ctx, &runner, track)
+        );
     }
 
     // ── Multi-chain scenario tests ───────────────────────────────────────
@@ -131,10 +187,36 @@ async fn polkadot_fellowship_tracks_part2() {
         .await
         .expect("failed to refresh fork blocks");
 
-    run_and_bail!(errors, "multichain_happy_path", run_multichain_happy_path(&ctx, &runner));
-    run_and_bail!(errors, "fellowship_only", run_fellowship_only(&ctx, &runner));
-    run_and_bail!(errors, "nonexistent_referendum", run_nonexistent_referendum(&ctx, &runner));
-    run_and_bail!(errors, "fellowship_create_no_preimage", run_fellowship_create_no_preimage(&ctx, &runner));
+    run_and_bail!(
+        errors,
+        "multichain_happy_path",
+        run_multichain_happy_path(&ctx, &runner)
+    );
+    run_and_bail!(
+        errors,
+        "fellowship_only",
+        run_fellowship_only(&ctx, &runner)
+    );
+    run_and_bail!(
+        errors,
+        "nonexistent_referendum",
+        run_nonexistent_referendum(&ctx, &runner)
+    );
+    run_and_bail!(
+        errors,
+        "fellowship_create_no_preimage",
+        run_fellowship_create_no_preimage(&ctx, &runner)
+    );
+    run_and_bail!(
+        errors,
+        "gov_with_additional_chains",
+        run_governance_with_additional_chains(&ctx, &runner)
+    );
+    run_and_bail!(
+        errors,
+        "fell_with_additional_chains",
+        run_fellowship_with_additional_chains(&ctx, &runner)
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -161,8 +243,16 @@ async fn kusama_governance_all_tracks() {
     // ── Per-track tests (create + by-number for each track) ──────────────
 
     for track in tracks::GOVERNANCE_TRACKS {
-        run_and_bail!(errors, format!("ksm_gov_create_{}", track.name), run_kusama_gov_create_test(&ctx, &runner, track));
-        run_and_bail!(errors, format!("ksm_gov_bynum_{}", track.name), run_kusama_gov_bynum_test(&ctx, &runner, track));
+        run_and_bail!(
+            errors,
+            format!("ksm_gov_create_{}", track.name),
+            run_kusama_gov_create_test(&ctx, &runner, track)
+        );
+        run_and_bail!(
+            errors,
+            format!("ksm_gov_bynum_{}", track.name),
+            run_kusama_gov_bynum_test(&ctx, &runner, track)
+        );
     }
 
     // ── Scenario test ────────────────────────────────────────────────────
@@ -171,7 +261,11 @@ async fn kusama_governance_all_tracks() {
         .await
         .expect("failed to refresh fork blocks");
 
-    run_and_bail!(errors, "ksm_gov_happy_path", run_kusama_governance_happy_path(&ctx, &runner));
+    run_and_bail!(
+        errors,
+        "ksm_gov_happy_path",
+        run_kusama_governance_happy_path(&ctx, &runner)
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -198,8 +292,16 @@ async fn kusama_fellowship_all_tracks() {
     // ── Per-track tests (create + by-number for each track) ──────────────
 
     for track in tracks::KUSAMA_FELLOWSHIP_TRACKS {
-        run_and_bail!(errors, format!("ksm_fell_create_{}", track.name), run_kusama_fellowship_create_test(&ctx, &runner, track));
-        run_and_bail!(errors, format!("ksm_fell_bynum_{}", track.name), run_kusama_fellowship_bynum_test(&ctx, &runner, track));
+        run_and_bail!(
+            errors,
+            format!("ksm_fell_create_{}", track.name),
+            run_kusama_fellowship_create_test(&ctx, &runner, track)
+        );
+        run_and_bail!(
+            errors,
+            format!("ksm_fell_bynum_{}", track.name),
+            run_kusama_fellowship_bynum_test(&ctx, &runner, track)
+        );
     }
 
     // ── Scenario tests ───────────────────────────────────────────────────
@@ -208,8 +310,16 @@ async fn kusama_fellowship_all_tracks() {
         .await
         .expect("failed to refresh fork blocks");
 
-    run_and_bail!(errors, "ksm_multichain_happy_path", run_kusama_multichain_happy_path(&ctx, &runner));
-    run_and_bail!(errors, "ksm_fellowship_on_relay", run_kusama_fellowship_on_relay(&ctx, &runner));
+    run_and_bail!(
+        errors,
+        "ksm_multichain_happy_path",
+        run_kusama_multichain_happy_path(&ctx, &runner)
+    );
+    run_and_bail!(
+        errors,
+        "ksm_fellowship_on_relay",
+        run_kusama_fellowship_on_relay(&ctx, &runner)
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -627,6 +737,65 @@ async fn run_fellowship_only(ctx: &MultiChainTestContext, runner: &ToolRunner) -
 
     output.check_success()?;
     output.check_stdout_contains("executed successfully")?;
+    Ok(())
+}
+
+/// Governance-only + additional chains: governance referendum on AH with relay as additional chain.
+async fn run_governance_with_additional_chains(
+    ctx: &MultiChainTestContext,
+    runner: &ToolRunner,
+) -> Result<()> {
+    log::info!("[gov_with_additional_chains] Starting...");
+    let (preimage_hex, gov_submit_hex) =
+        call_data::generate_governance_call_data(&ctx.ah_client).await?;
+
+    let port = port_allocator::next_port();
+    let output = runner
+        .run_test_referendum(ToolArgs {
+            governance_chain_url: Some(ctx.governance_url_with_block()),
+            additional_chains: Some(ctx.relay_url_with_block()),
+            call_to_create_governance_referendum: Some(gov_submit_hex),
+            call_to_note_preimage_for_governance_referendum: Some(preimage_hex),
+            port: Some(port),
+            verbose: true,
+            ..Default::default()
+        })
+        .await?;
+
+    output.check_success()?;
+    output.check_stdout_contains("executed successfully")?;
+    output.check_stdout_contains("Additional Chain Events")?;
+    output.check_stdout_contains("Block #")?;
+    Ok(())
+}
+
+/// Fellowship-only + additional chains: fellowship referendum on Collectives with relay as additional chain.
+async fn run_fellowship_with_additional_chains(
+    ctx: &MultiChainTestContext,
+    runner: &ToolRunner,
+) -> Result<()> {
+    log::info!("[fell_with_additional_chains] Starting...");
+    let (preimage_hex, submit_hex) =
+        call_data::generate_fellowship_only_call_data(&ctx.coll_client, "FellowshipOrigins")
+            .await?;
+
+    let port = port_allocator::next_port();
+    let output = runner
+        .run_test_referendum(ToolArgs {
+            fellowship_chain_url: Some(ctx.fellowship_url_with_block()),
+            additional_chains: Some(ctx.relay_url_with_block()),
+            call_to_create_fellowship_referendum: Some(submit_hex),
+            call_to_note_preimage_for_fellowship_referendum: Some(preimage_hex),
+            port: Some(port),
+            verbose: true,
+            ..Default::default()
+        })
+        .await?;
+
+    output.check_success()?;
+    output.check_stdout_contains("executed successfully")?;
+    output.check_stdout_contains("Additional Chain Events")?;
+    output.check_stdout_contains("Block #")?;
     Ok(())
 }
 
