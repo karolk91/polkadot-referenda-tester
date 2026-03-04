@@ -39,7 +39,7 @@
     "@types/node": "^22.15.21",
     "ts-node": "^10.9.2",
     "typescript": "^5.8.3",
-    "vitest": "^2.1.8"
+    "vitest": "^4.0.0"
   },
   "scripts": {
     "cli": "ts-node src/cli.ts",
