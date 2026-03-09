@@ -59,8 +59,8 @@ Use this to label chains in the summary:
 - 1000 = Asset Hub
 - 1001 = Collectives (Polkadot) / Encointer (Kusama)
 - 1002 = Bridge Hub
-- 1004 = Coretime
-- 1005 = People
+- 1004 = People
+- 1005 = Coretime
 
 ## Step 3: Build the CLI Command
 

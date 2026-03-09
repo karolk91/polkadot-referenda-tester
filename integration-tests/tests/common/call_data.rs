@@ -553,6 +553,82 @@ pub async fn generate_fellowship_track_call_data(
     Ok((preimage_hex, submit_hex))
 }
 
+/// Generate governance call data with an Inline proposal (no preimage needed).
+///
+/// Uses `System.remark` as a small proposal that fits within the inline size limit.
+/// Returns just the gov_submit_hex since no preimage is required for inline proposals.
+pub async fn generate_governance_inline_call_data(
+    ah_client: &OnlineClient<PolkadotConfig>,
+) -> Result<String> {
+    let remark_call = dynamic::tx(
+        "System",
+        "remark",
+        vec![Value::from_bytes(b"inline-gov-test")],
+    );
+    let remark_bytes = ah_client
+        .tx()
+        .call_data(&remark_call)
+        .context("Failed to encode System.remark")?;
+
+    log::info!("Inline governance proposal: {} bytes", remark_bytes.len());
+
+    let gov_submit_call = dynamic::tx(
+        "Referenda",
+        "submit",
+        vec![
+            Value::unnamed_variant("system", vec![Value::unnamed_variant("Root", vec![])]),
+            Value::unnamed_variant("Inline", vec![Value::from_bytes(remark_bytes)]),
+            Value::unnamed_variant("After", vec![Value::u128(0u128)]),
+        ],
+    );
+    let gov_submit_hex = encode_call_hex(ah_client, &gov_submit_call)
+        .context("Failed to encode Referenda.submit with Inline proposal")?;
+
+    Ok(gov_submit_hex)
+}
+
+/// Generate fellowship call data with an Inline proposal (no preimage needed).
+///
+/// Uses `System.remark` as a small proposal that fits within the inline size limit.
+/// Returns just the submit_hex since no preimage is required for inline proposals.
+///
+/// `fellowship_origin_variant` is the OriginCaller variant name for the fellowship origin:
+/// - `"FellowshipOrigins"` on Polkadot Collectives parachain
+/// - `"Origins"` on Kusama relay chain
+pub async fn generate_fellowship_inline_call_data(
+    client: &OnlineClient<PolkadotConfig>,
+    fellowship_origin_variant: &str,
+) -> Result<String> {
+    let remark_call = dynamic::tx(
+        "System",
+        "remark",
+        vec![Value::from_bytes(b"inline-fell-test")],
+    );
+    let remark_bytes = client
+        .tx()
+        .call_data(&remark_call)
+        .context("Failed to encode System.remark")?;
+
+    log::info!("Inline fellowship proposal: {} bytes", remark_bytes.len());
+
+    let submit_call = dynamic::tx(
+        "FellowshipReferenda",
+        "submit",
+        vec![
+            Value::unnamed_variant(
+                fellowship_origin_variant,
+                vec![Value::unnamed_variant("Fellows", vec![])],
+            ),
+            Value::unnamed_variant("Inline", vec![Value::from_bytes(remark_bytes)]),
+            Value::unnamed_variant("After", vec![Value::u128(0u128)]),
+        ],
+    );
+    let submit_hex = encode_call_hex(client, &submit_call)
+        .context("Failed to encode FellowshipReferenda.submit with Inline proposal")?;
+
+    Ok(submit_hex)
+}
+
 /// Encode a dynamic transaction payload to hex call data bytes.
 fn encode_call_hex<Call: subxt::tx::Payload>(
     client: &OnlineClient<PolkadotConfig>,

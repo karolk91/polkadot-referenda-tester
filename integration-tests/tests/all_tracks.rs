@@ -110,6 +110,16 @@ async fn polkadot_governance_all_tracks() {
         "gov_create_no_preimage",
         run_governance_create_no_preimage(&ctx, &runner)
     );
+    run_and_bail!(
+        errors,
+        "gov_inline_create",
+        run_governance_inline_create(&ctx, &runner)
+    );
+    run_and_bail!(
+        errors,
+        "gov_inline_bynum",
+        run_governance_inline_bynum(&ctx, &runner)
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -217,6 +227,16 @@ async fn polkadot_fellowship_tracks_part2() {
         "fell_with_additional_chains",
         run_fellowship_with_additional_chains(&ctx, &runner)
     );
+    run_and_bail!(
+        errors,
+        "fell_inline_create",
+        run_fellowship_inline_create(&ctx, &runner)
+    );
+    run_and_bail!(
+        errors,
+        "fell_inline_bynum",
+        run_fellowship_inline_bynum(&ctx, &runner)
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -265,6 +285,16 @@ async fn kusama_governance_all_tracks() {
         errors,
         "ksm_gov_happy_path",
         run_kusama_governance_happy_path(&ctx, &runner)
+    );
+    run_and_bail!(
+        errors,
+        "ksm_gov_inline_create",
+        run_kusama_governance_inline_create(&ctx, &runner)
+    );
+    run_and_bail!(
+        errors,
+        "ksm_gov_inline_bynum",
+        run_kusama_governance_inline_bynum(&ctx, &runner)
     );
 }
 
@@ -319,6 +349,16 @@ async fn kusama_fellowship_all_tracks() {
         errors,
         "ksm_fellowship_on_relay",
         run_kusama_fellowship_on_relay(&ctx, &runner)
+    );
+    run_and_bail!(
+        errors,
+        "ksm_fell_inline_create",
+        run_kusama_fellowship_inline_create(&ctx, &runner)
+    );
+    run_and_bail!(
+        errors,
+        "ksm_fell_inline_bynum",
+        run_kusama_fellowship_inline_bynum(&ctx, &runner)
     );
 }
 
@@ -602,6 +642,62 @@ async fn run_governance_create_no_preimage(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Sub-test implementations — Polkadot Governance (inline proposals)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Inline proposal create: submit a governance referendum with Inline (no preimage).
+async fn run_governance_inline_create(
+    ctx: &GovernanceTestContext,
+    runner: &ToolRunner,
+) -> Result<()> {
+    log::info!("[gov_inline_create] Starting...");
+    let gov_submit_hex =
+        call_data::generate_governance_inline_call_data(&ctx.ah_client).await?;
+
+    let port = port_allocator::next_port();
+    let output = runner
+        .run_test_referendum(ToolArgs {
+            governance_chain_url: Some(ctx.governance_url_with_block()),
+            call_to_create_governance_referendum: Some(gov_submit_hex),
+            port: Some(port),
+            verbose: true,
+            ..Default::default()
+        })
+        .await?;
+
+    output.check_success()?;
+    output.check_stdout_contains("executed successfully")?;
+    Ok(())
+}
+
+/// Inline proposal by-number: submit inline referendum on zombienet, then test with --referendum.
+async fn run_governance_inline_bynum(
+    ctx: &GovernanceTestContext,
+    runner: &ToolRunner,
+) -> Result<()> {
+    log::info!("[gov_inline_bynum] Starting...");
+    let submitted =
+        extrinsic_submitter::submit_governance_referendum_inline(&ctx.ah_client).await?;
+
+    let fork_url = format!("{},{}", ctx.asset_hub_ws_uri, submitted.block_number);
+
+    let port = port_allocator::next_port();
+    let output = runner
+        .run_test_referendum(ToolArgs {
+            governance_chain_url: Some(fork_url),
+            referendum: Some(submitted.referendum_id.to_string()),
+            port: Some(port),
+            verbose: true,
+            ..Default::default()
+        })
+        .await?;
+
+    output.check_success()?;
+    output.check_stdout_contains("executed successfully")?;
+    Ok(())
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Sub-test implementations — Polkadot Fellowship (per-track create)
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -799,6 +895,67 @@ async fn run_fellowship_with_additional_chains(
     Ok(())
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Sub-test implementations — Polkadot Fellowship (inline proposals)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Inline fellowship create: submit a fellowship referendum with Inline (no preimage).
+async fn run_fellowship_inline_create(
+    ctx: &MultiChainTestContext,
+    runner: &ToolRunner,
+) -> Result<()> {
+    log::info!("[fell_inline_create] Starting...");
+    let submit_hex =
+        call_data::generate_fellowship_inline_call_data(&ctx.coll_client, "FellowshipOrigins")
+            .await?;
+
+    let port = port_allocator::next_port();
+    let output = runner
+        .run_test_referendum(ToolArgs {
+            fellowship_chain_url: Some(ctx.fellowship_url_with_block()),
+            call_to_create_fellowship_referendum: Some(submit_hex),
+            port: Some(port),
+            verbose: true,
+            ..Default::default()
+        })
+        .await?;
+
+    output.check_success()?;
+    output.check_stdout_contains("executed successfully")?;
+    Ok(())
+}
+
+/// Inline fellowship by-number: submit inline referendum on zombienet, then test with --fellowship.
+async fn run_fellowship_inline_bynum(
+    ctx: &MultiChainTestContext,
+    runner: &ToolRunner,
+) -> Result<()> {
+    log::info!("[fell_inline_bynum] Starting...");
+    let submitted = extrinsic_submitter::submit_fellowship_referendum_inline(
+        &ctx.coll_client,
+        "FellowshipOrigins",
+    )
+    .await?;
+
+    let fellowship_fork_url = format!("{},{}", ctx.collectives_ws_uri, submitted.block_number);
+
+    let port = port_allocator::next_port();
+    let output = runner
+        .run_test_referendum(ToolArgs {
+            governance_chain_url: Some(ctx.governance_url_with_block()),
+            fellowship_chain_url: Some(fellowship_fork_url),
+            fellowship: Some(submitted.referendum_id.to_string()),
+            port: Some(port),
+            verbose: true,
+            ..Default::default()
+        })
+        .await?;
+
+    output.check_success()?;
+    output.check_stdout_contains("executed successfully")?;
+    Ok(())
+}
+
 /// Non-existent referendum: pass --referendum 999 which doesn't exist.
 async fn run_nonexistent_referendum(
     ctx: &MultiChainTestContext,
@@ -942,6 +1099,62 @@ async fn run_kusama_governance_happy_path(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Sub-test implementations — Kusama Governance (inline proposals)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Kusama governance inline create: submit with Inline proposal (no preimage).
+async fn run_kusama_governance_inline_create(
+    ctx: &KusamaTestContext,
+    runner: &ToolRunner,
+) -> Result<()> {
+    log::info!("[ksm_gov_inline_create] Starting...");
+    let gov_submit_hex =
+        call_data::generate_governance_inline_call_data(&ctx.ah_client).await?;
+
+    let port = port_allocator::next_port();
+    let output = runner
+        .run_test_referendum(ToolArgs {
+            governance_chain_url: Some(ctx.governance_url_with_block()),
+            call_to_create_governance_referendum: Some(gov_submit_hex),
+            port: Some(port),
+            verbose: true,
+            ..Default::default()
+        })
+        .await?;
+
+    output.check_success()?;
+    output.check_stdout_contains("executed successfully")?;
+    Ok(())
+}
+
+/// Kusama governance inline by-number: submit inline referendum, then test with --referendum.
+async fn run_kusama_governance_inline_bynum(
+    ctx: &KusamaTestContext,
+    runner: &ToolRunner,
+) -> Result<()> {
+    log::info!("[ksm_gov_inline_bynum] Starting...");
+    let submitted =
+        extrinsic_submitter::submit_governance_referendum_inline(&ctx.ah_client).await?;
+
+    let fork_url = format!("{},{}", ctx.asset_hub_ws_uri, submitted.block_number);
+
+    let port = port_allocator::next_port();
+    let output = runner
+        .run_test_referendum(ToolArgs {
+            governance_chain_url: Some(fork_url),
+            referendum: Some(submitted.referendum_id.to_string()),
+            port: Some(port),
+            verbose: true,
+            ..Default::default()
+        })
+        .await?;
+
+    output.check_success()?;
+    output.check_stdout_contains("executed successfully")?;
+    Ok(())
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Sub-test implementations — Kusama Fellowship (per-track create)
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1034,6 +1247,64 @@ async fn run_kusama_multichain_happy_path(
             call_to_note_preimage_for_governance_referendum: Some(gov_preimage_hex),
             call_to_create_fellowship_referendum: Some(fellowship_submit_hex),
             call_to_note_preimage_for_fellowship_referendum: Some(fellowship_preimage_hex),
+            port: Some(port),
+            verbose: true,
+            ..Default::default()
+        })
+        .await?;
+
+    output.check_success()?;
+    output.check_stdout_contains("executed successfully")?;
+    Ok(())
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Sub-test implementations — Kusama Fellowship (inline proposals)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Kusama fellowship inline create: submit with Inline proposal (no preimage).
+async fn run_kusama_fellowship_inline_create(
+    ctx: &KusamaTestContext,
+    runner: &ToolRunner,
+) -> Result<()> {
+    log::info!("[ksm_fell_inline_create] Starting...");
+    let submit_hex =
+        call_data::generate_fellowship_inline_call_data(&ctx.relay_client, "Origins").await?;
+
+    let port = port_allocator::next_port();
+    let output = runner
+        .run_test_referendum(ToolArgs {
+            fellowship_chain_url: Some(ctx.fellowship_url_with_block()),
+            call_to_create_fellowship_referendum: Some(submit_hex),
+            port: Some(port),
+            verbose: true,
+            ..Default::default()
+        })
+        .await?;
+
+    output.check_success()?;
+    output.check_stdout_contains("executed successfully")?;
+    Ok(())
+}
+
+/// Kusama fellowship inline by-number: submit inline referendum, then test with --fellowship.
+async fn run_kusama_fellowship_inline_bynum(
+    ctx: &KusamaTestContext,
+    runner: &ToolRunner,
+) -> Result<()> {
+    log::info!("[ksm_fell_inline_bynum] Starting...");
+    let submitted =
+        extrinsic_submitter::submit_fellowship_referendum_inline(&ctx.relay_client, "Origins")
+            .await?;
+
+    let fellowship_fork_url = format!("{},{}", ctx.relay_ws_uri, submitted.block_number);
+
+    let port = port_allocator::next_port();
+    let output = runner
+        .run_test_referendum(ToolArgs {
+            governance_chain_url: Some(ctx.governance_url_with_block()),
+            fellowship_chain_url: Some(fellowship_fork_url),
+            fellowship: Some(submitted.referendum_id.to_string()),
             port: Some(port),
             verbose: true,
             ..Default::default()
