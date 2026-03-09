@@ -173,7 +173,8 @@ export class ReferendaFetcher {
     }
 
     // proposal.type === 'Inline' → proposal.value is Binary
-    return { hash: undefined, call: proposal.value, type: 'Inline', len: 0 };
+    const inlineHex = toHexString(proposal.value);
+    return { hash: inlineHex, call: proposal.value, type: 'Inline', len: 0 };
   }
 
   async getLatestBlock(api: SubstrateApi): Promise<number> {
