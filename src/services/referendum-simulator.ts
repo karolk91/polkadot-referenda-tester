@@ -1,6 +1,6 @@
 import type { ReferendumInfo, SimulationResult } from '../types';
 import type { ReferendaPallet, ReferendumOngoing, SubstrateApi } from '../types/substrate-api';
-import { type ParsedEvent, getBlockEvents } from '../utils/event-serializer';
+import { getBlockEvents, type ParsedEvent } from '../utils/event-serializer';
 import { toHexString } from '../utils/hex';
 import { stringify } from '../utils/json';
 import type { Logger } from '../utils/logger';

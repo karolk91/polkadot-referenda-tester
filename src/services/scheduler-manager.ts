@@ -59,7 +59,7 @@ export class SchedulerManager {
 
   /**
    * Move scheduled call to next block.
-   * Returns the block number where the call was scheduled.
+   * Returns the block number and task index where the call was scheduled.
    */
   async moveScheduledCallToNextBlock(
     referendumId: number,
