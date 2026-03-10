@@ -218,15 +218,19 @@ export class ReferendumSimulator {
     await this.chopsticks.newBlock();
     this.logger.succeedSpinner('Referendum nudged');
 
-    this.verifyReferendumApproval(await this.getBlockEvents(
-      Number(await this.api.query.System.Number.getValue())
-    ), referendum.id);
+    this.verifyReferendumApproval(
+      await this.getBlockEvents(Number(await this.api.query.System.Number.getValue())),
+      referendum.id
+    );
 
     this.logger.startSpinner('Moving proposal execution to next block...');
     const proposalHash = referendum.proposal.hash;
     this.logger.debug(`Looking for proposal execution with hash: ${proposalHash}`);
-    const { block: scheduledBlock, taskIndex: scheduledTaskIndex, taskId: scheduledTaskId } =
-      await this.scheduler.moveScheduledCallToNextBlock(referendum.id, 'execute', proposalHash);
+    const {
+      block: scheduledBlock,
+      taskIndex: scheduledTaskIndex,
+      taskId: scheduledTaskId,
+    } = await this.scheduler.moveScheduledCallToNextBlock(referendum.id, 'execute', proposalHash);
     this.logger.succeedSpinner(`Proposal execution scheduled at block ${scheduledBlock}`);
 
     this.logger.startSpinner('Creating block to execute proposal...');
@@ -277,9 +281,7 @@ export class ReferendumSimulator {
       }
     }
 
-    this.logger.info(
-      `\u2713 Referendum #${referendumId} confirmed and approved in nudge block`
-    );
+    this.logger.info(`\u2713 Referendum #${referendumId} confirmed and approved in nudge block`);
   }
 
   private buildPassingReferendumStorage(
