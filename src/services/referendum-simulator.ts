@@ -123,12 +123,14 @@ export class ReferendumSimulator {
 
     try {
       await this.applyPassingState(referendum);
-      const { events, executionBlock, scheduledBlock } =
+      const { events, executionBlock, scheduledBlock, scheduledTaskIndex, scheduledTaskId } =
         await this.scheduleAndExecuteProposal(referendum);
 
       const { executionSucceeded, errors } = this.resultChecker.checkExecutionResults(
         events,
-        scheduledBlock
+        scheduledBlock,
+        scheduledTaskIndex,
+        scheduledTaskId
       );
 
       return {
@@ -205,6 +207,8 @@ export class ReferendumSimulator {
     events: ParsedEvent[];
     executionBlock: number;
     scheduledBlock: number;
+    scheduledTaskIndex: number;
+    scheduledTaskId: Uint8Array | undefined;
   }> {
     this.logger.startSpinner('Moving nudgeReferendum to next block...');
     await this.scheduler.moveScheduledCallToNextBlock(referendum.id, 'nudge');
@@ -214,14 +218,19 @@ export class ReferendumSimulator {
     await this.chopsticks.newBlock();
     this.logger.succeedSpinner('Referendum nudged');
 
+    this.verifyReferendumApproval(
+      await this.getBlockEvents(Number(await this.api.query.System.Number.getValue())),
+      referendum.id
+    );
+
     this.logger.startSpinner('Moving proposal execution to next block...');
     const proposalHash = referendum.proposal.hash;
     this.logger.debug(`Looking for proposal execution with hash: ${proposalHash}`);
-    const scheduledBlock = await this.scheduler.moveScheduledCallToNextBlock(
-      referendum.id,
-      'execute',
-      proposalHash
-    );
+    const {
+      block: scheduledBlock,
+      taskIndex: scheduledTaskIndex,
+      taskId: scheduledTaskId,
+    } = await this.scheduler.moveScheduledCallToNextBlock(referendum.id, 'execute', proposalHash);
     this.logger.succeedSpinner(`Proposal execution scheduled at block ${scheduledBlock}`);
 
     this.logger.startSpinner('Creating block to execute proposal...');
@@ -232,7 +241,47 @@ export class ReferendumSimulator {
 
     const events = await this.getBlockEvents(executionBlock);
 
-    return { events, executionBlock, scheduledBlock };
+    return { events, executionBlock, scheduledBlock, scheduledTaskIndex, scheduledTaskId };
+  }
+
+  /**
+   * Verify that the nudge block produced Confirmed/Approved events for our specific referendum.
+   * This proves the referendum we manipulated was actually approved by the runtime.
+   */
+  private verifyReferendumApproval(nudgeEvents: ParsedEvent[], referendumId: number): void {
+    const palletName = this.getReferendaPalletName();
+
+    const confirmedEvent = nudgeEvents.find(
+      (e) => e.section === palletName && e.method === 'Confirmed'
+    );
+    const approvedEvent = nudgeEvents.find(
+      (e) => e.section === palletName && e.method === 'Approved'
+    );
+
+    if (!confirmedEvent && !approvedEvent) {
+      throw new Error(
+        `Referendum #${referendumId} was not confirmed or approved after nudge. ` +
+          `Expected ${palletName}.Confirmed or ${palletName}.Approved events but found: ` +
+          nudgeEvents.map((e) => `${e.section}.${e.method}`).join(', ')
+      );
+    }
+
+    // Verify the event is for OUR referendum, not some other one
+    for (const event of [confirmedEvent, approvedEvent]) {
+      if (!event) continue;
+      const eventData = event.data as Record<string, unknown> | undefined;
+      if (eventData && 'index' in eventData) {
+        const eventRefId = Number(eventData.index);
+        if (eventRefId !== referendumId) {
+          throw new Error(
+            `${palletName}.${event.method} fired for referendum #${eventRefId}, ` +
+              `but expected referendum #${referendumId}`
+          );
+        }
+      }
+    }
+
+    this.logger.info(`\u2713 Referendum #${referendumId} confirmed and approved in nudge block`);
   }
 
   private buildPassingReferendumStorage(
