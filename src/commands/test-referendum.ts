@@ -84,10 +84,10 @@ export async function testReferendum(options: TestOptions): Promise<void> {
 
     if (cleanupEnabled) {
       logger.success('\n\u2713 Workflow completed');
-      process.exit(0);
+      process.exitCode = 0;
     }
   } catch (error) {
     logger.error('Test execution failed', error as Error);
-    process.exit(1);
+    process.exitCode = 1;
   }
 }

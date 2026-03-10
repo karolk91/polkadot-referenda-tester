@@ -157,6 +157,30 @@ export function parseBlockEvent(event: unknown): ParsedEvent {
 }
 
 /**
+ * Retrieve and parse all events from the current block.
+ * Shared utility used by simulator, creator, and coordinator.
+ */
+export async function getBlockEvents(
+  eventsQuery: { getValue(): Promise<unknown[]> },
+  logger?: Logger
+): Promise<ParsedEvent[]> {
+  try {
+    const events = await eventsQuery.getValue();
+
+    if (!events || events.length === 0) {
+      return [];
+    }
+
+    return events.map((rawEvent) => parseBlockEvent(rawEvent));
+  } catch (error) {
+    if (logger) {
+      logger.warn(`Failed to get block events: ${error}`);
+    }
+    return [];
+  }
+}
+
+/**
  * Display chain events with a label and block number.
  * Shared display logic used by NetworkCoordinator for post-execution event display.
  */

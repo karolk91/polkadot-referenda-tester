@@ -4,94 +4,19 @@ import type { PolkadotSigner } from 'polkadot-api';
 import { getPolkadotSigner } from 'polkadot-api/signer';
 import type { SubstrateApi } from '../types/substrate-api';
 import { formatDispatchError } from '../utils/dispatch-result';
-import { parseBlockEvent } from '../utils/event-serializer';
+import { getBlockEvents } from '../utils/event-serializer';
 import { toHexString } from '../utils/hex';
 import { stringify } from '../utils/json';
 import type { Logger } from '../utils/logger';
+import {
+  ALICE_ACCOUNT_INJECTION,
+  ALICE_ADDRESS,
+  FELLOWSHIP_STORAGE_INJECTION,
+} from '../utils/storage-constants';
 import { getReferendaPallet } from './chain-registry';
 import type { ChopsticksManager } from './chopsticks-manager';
 
-// Alice's address on Substrate-based chains
-export const ALICE_ADDRESS = '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY';
-
-/**
- * Fellowship collective storage to inject for Alice to be recognized as a ranked fellow
- */
-export const FELLOWSHIP_STORAGE_INJECTION = {
-  System: {
-    Account: [
-      [
-        [ALICE_ADDRESS],
-        {
-          providers: 1,
-          data: {
-            free: '10000000000000000000',
-          },
-        },
-      ],
-    ],
-  },
-  FellowshipCollective: {
-    $removePrefix: ['IdToIndex', 'IndexToId', 'MemberCount', 'Members'],
-    IdToIndex: [
-      [[0, ALICE_ADDRESS], 0],
-      [[1, ALICE_ADDRESS], 0],
-      [[2, ALICE_ADDRESS], 0],
-      [[3, ALICE_ADDRESS], 0],
-      [[4, ALICE_ADDRESS], 0],
-      [[5, ALICE_ADDRESS], 0],
-      [[6, ALICE_ADDRESS], 0],
-      [[7, ALICE_ADDRESS], 0],
-      [[8, ALICE_ADDRESS], 0],
-      [[9, ALICE_ADDRESS], 0],
-    ],
-    IndexToId: [
-      [[0, 0], ALICE_ADDRESS],
-      [[1, 0], ALICE_ADDRESS],
-      [[2, 0], ALICE_ADDRESS],
-      [[3, 0], ALICE_ADDRESS],
-      [[4, 0], ALICE_ADDRESS],
-      [[5, 0], ALICE_ADDRESS],
-      [[6, 0], ALICE_ADDRESS],
-      [[7, 0], ALICE_ADDRESS],
-      [[8, 0], ALICE_ADDRESS],
-      [[9, 0], ALICE_ADDRESS],
-    ],
-    MemberCount: [
-      [[0], 1],
-      [[1], 1],
-      [[2], 1],
-      [[3], 1],
-      [[4], 1],
-      [[5], 1],
-      [[6], 1],
-      [[7], 1],
-      [[8], 1],
-      [[9], 1],
-    ],
-    Members: [[[ALICE_ADDRESS], { rank: 9 }]],
-    Voting: [],
-  },
-};
-
-/**
- * Minimal storage injection to fund Alice on any chain (for paying submission deposits, etc.)
- */
-export const ALICE_ACCOUNT_INJECTION = {
-  System: {
-    Account: [
-      [
-        [ALICE_ADDRESS],
-        {
-          providers: 1,
-          data: {
-            free: '10000000000000000000',
-          },
-        },
-      ],
-    ],
-  },
-};
+export { ALICE_ADDRESS, FELLOWSHIP_STORAGE_INJECTION, ALICE_ACCOUNT_INJECTION };
 
 export interface ReferendumCreationResult {
   referendumId: number;
@@ -201,22 +126,17 @@ export class ReferendumCreator {
 
     await this.chopsticks.newBlock({ transactions: [signedSubmitTx] });
 
-    try {
-      const events = await api.query.System.Events.getValue();
-      if (events && Array.isArray(events)) {
-        this.logger.debug(`Submit block events (${events.length} total):`);
-        for (const rawEvent of events) {
-          const parsed = parseBlockEvent(rawEvent);
-          this.logger.debug(`  ${parsed.section}.${parsed.method}`);
-          if (parsed.section === 'System' && parsed.method === 'ExtrinsicFailed') {
-            const errMsg = formatDispatchError(parsed.data);
-            this.logger.error(`Extrinsic dispatch failed: ${errMsg}`);
-            this.logger.error(`Full error data: ${stringify(parsed.data, 2)}`);
-          }
+    const events = await getBlockEvents(api.query.System.Events, this.logger);
+    if (events.length > 0) {
+      this.logger.debug(`Submit block events (${events.length} total):`);
+      for (const parsed of events) {
+        this.logger.debug(`  ${parsed.section}.${parsed.method}`);
+        if (parsed.section === 'System' && parsed.method === 'ExtrinsicFailed') {
+          const errMsg = formatDispatchError(parsed.data);
+          this.logger.error(`Extrinsic dispatch failed: ${errMsg}`);
+          this.logger.error(`Full error data: ${stringify(parsed.data, 2)}`);
         }
       }
-    } catch (eventErr) {
-      this.logger.debug(`Failed to read submit block events: ${eventErr}`);
     }
 
     await this.chopsticks.newBlock();
@@ -240,16 +160,10 @@ export class ReferendumCreator {
     return referendumId;
   }
 
-  /**
-   * Gets the fellowship storage injection object for Alice
-   */
   static getFellowshipStorageInjection(): Record<string, unknown> {
     return FELLOWSHIP_STORAGE_INJECTION;
   }
 
-  /**
-   * Gets a minimal storage injection to fund Alice on any chain
-   */
   static getAliceAccountInjection(): Record<string, unknown> {
     return ALICE_ACCOUNT_INJECTION;
   }

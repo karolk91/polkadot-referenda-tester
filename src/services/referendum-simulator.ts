@@ -1,7 +1,6 @@
 import type { ReferendumInfo, SimulationResult } from '../types';
 import type { ReferendaPallet, ReferendumOngoing, SubstrateApi } from '../types/substrate-api';
-import { formatDispatchError } from '../utils/dispatch-result';
-import { type ParsedEvent, parseBlockEvent } from '../utils/event-serializer';
+import { type ParsedEvent, getBlockEvents } from '../utils/event-serializer';
 import { toHexString } from '../utils/hex';
 import { stringify } from '../utils/json';
 import type { Logger } from '../utils/logger';
@@ -123,12 +122,14 @@ export class ReferendumSimulator {
 
     try {
       await this.applyPassingState(referendum);
-      const { events, executionBlock, scheduledBlock } =
+      const { events, executionBlock, scheduledBlock, scheduledTaskIndex, scheduledTaskId } =
         await this.scheduleAndExecuteProposal(referendum);
 
       const { executionSucceeded, errors } = this.resultChecker.checkExecutionResults(
         events,
-        scheduledBlock
+        scheduledBlock,
+        scheduledTaskIndex,
+        scheduledTaskId
       );
 
       return {
@@ -139,7 +140,7 @@ export class ReferendumSimulator {
       };
     } catch (error) {
       this.logger.failSpinner('Failed to force referendum execution');
-      throw error;
+      throw new Error('Failed to force referendum execution', { cause: error });
     }
   }
 
@@ -205,6 +206,8 @@ export class ReferendumSimulator {
     events: ParsedEvent[];
     executionBlock: number;
     scheduledBlock: number;
+    scheduledTaskIndex: number;
+    scheduledTaskId: Uint8Array | undefined;
   }> {
     this.logger.startSpinner('Moving nudgeReferendum to next block...');
     await this.scheduler.moveScheduledCallToNextBlock(referendum.id, 'nudge');
@@ -214,14 +217,19 @@ export class ReferendumSimulator {
     await this.chopsticks.newBlock();
     this.logger.succeedSpinner('Referendum nudged');
 
+    this.verifyReferendumApproval(
+      await this.fetchBlockEvents(Number(await this.api.query.System.Number.getValue())),
+      referendum.id
+    );
+
     this.logger.startSpinner('Moving proposal execution to next block...');
     const proposalHash = referendum.proposal.hash;
     this.logger.debug(`Looking for proposal execution with hash: ${proposalHash}`);
-    const scheduledBlock = await this.scheduler.moveScheduledCallToNextBlock(
-      referendum.id,
-      'execute',
-      proposalHash
-    );
+    const {
+      block: scheduledBlock,
+      taskIndex: scheduledTaskIndex,
+      taskId: scheduledTaskId,
+    } = await this.scheduler.moveScheduledCallToNextBlock(referendum.id, 'execute', proposalHash);
     this.logger.succeedSpinner(`Proposal execution scheduled at block ${scheduledBlock}`);
 
     this.logger.startSpinner('Creating block to execute proposal...');
@@ -230,9 +238,49 @@ export class ReferendumSimulator {
     const executionBlock = Number(await this.api.query.System.Number.getValue());
     this.logger.succeedSpinner(`Proposal executed at block ${executionBlock}`);
 
-    const events = await this.getBlockEvents(executionBlock);
+    const events = await this.fetchBlockEvents(executionBlock);
 
-    return { events, executionBlock, scheduledBlock };
+    return { events, executionBlock, scheduledBlock, scheduledTaskIndex, scheduledTaskId };
+  }
+
+  /**
+   * Verify that the nudge block produced Confirmed/Approved events for our specific referendum.
+   * This proves the referendum we manipulated was actually approved by the runtime.
+   */
+  private verifyReferendumApproval(nudgeEvents: ParsedEvent[], referendumId: number): void {
+    const palletName = this.getReferendaPalletName();
+
+    const confirmedEvent = nudgeEvents.find(
+      (e) => e.section === palletName && e.method === 'Confirmed'
+    );
+    const approvedEvent = nudgeEvents.find(
+      (e) => e.section === palletName && e.method === 'Approved'
+    );
+
+    if (!confirmedEvent && !approvedEvent) {
+      throw new Error(
+        `Referendum #${referendumId} was not confirmed or approved after nudge. ` +
+          `Expected ${palletName}.Confirmed or ${palletName}.Approved events but found: ` +
+          nudgeEvents.map((e) => `${e.section}.${e.method}`).join(', ')
+      );
+    }
+
+    // Verify the event is for OUR referendum, not some other one
+    for (const event of [confirmedEvent, approvedEvent]) {
+      if (!event) continue;
+      const eventData = event.data as Record<string, unknown> | undefined;
+      if (eventData && 'index' in eventData) {
+        const eventRefId = Number(eventData.index);
+        if (eventRefId !== referendumId) {
+          throw new Error(
+            `${palletName}.${event.method} fired for referendum #${eventRefId}, ` +
+              `but expected referendum #${referendumId}`
+          );
+        }
+      }
+    }
+
+    this.logger.info(`\u2713 Referendum #${referendumId} confirmed and approved in nudge block`);
   }
 
   private buildPassingReferendumStorage(
@@ -340,26 +388,14 @@ export class ReferendumSimulator {
     const executionBlock = Number(await this.api.query.System.Number.getValue());
     this.logger.succeedSpinner(`Pre-call executed at block ${executionBlock}`);
 
-    const events = await this.getBlockEvents(executionBlock);
-    const schedulerDispatched = events.filter(
-      (blockEvent) => blockEvent.section === 'Scheduler' && blockEvent.method === 'Dispatched'
-    );
+    const events = await this.fetchBlockEvents(executionBlock);
+    const { executionSucceeded, errors } = this.resultChecker.checkExecutionResults(events);
 
-    if (schedulerDispatched.length > 0) {
-      const lastDispatch = schedulerDispatched[schedulerDispatched.length - 1];
-      const lastData = lastDispatch.data as Record<string, unknown> | undefined;
-      const lastValue = lastData?.value as Record<string, unknown> | undefined;
-      const dispatchResult = lastValue?.result as Record<string, unknown> | undefined;
-
-      if (dispatchResult?.type === 'Ok') {
-        this.logger.success('Pre-call executed successfully');
-      } else if (dispatchResult?.type === 'Err') {
-        this.logger.warn(`Pre-call dispatch error: ${formatDispatchError(dispatchResult.value)}`);
-      } else {
-        this.logger.warn('Pre-call dispatch result unclear');
-      }
+    if (executionSucceeded) {
+      this.logger.success('Pre-call executed successfully');
     } else {
-      this.logger.warn('No Scheduler.Dispatched event found for pre-call');
+      const errorDetail = errors?.join('; ') || 'unknown error';
+      this.logger.warn(`Pre-call dispatch failed: ${errorDetail}`);
     }
   }
 
@@ -381,20 +417,9 @@ export class ReferendumSimulator {
     return { System: originString };
   }
 
-  private async getBlockEvents(blockNumber: number): Promise<ParsedEvent[]> {
-    try {
-      const events = await this.api.query.System.Events.getValue();
-
-      this.logger.debug(`Raw events count for block ${blockNumber}: ${events?.length || 0}`);
-
-      if (!events || events.length === 0) {
-        return [];
-      }
-
-      return events.map((rawEvent) => parseBlockEvent(rawEvent));
-    } catch (error) {
-      this.logger.warn(`Failed to get events for block ${blockNumber}: ${error}`);
-      return [];
-    }
+  private async fetchBlockEvents(blockNumber: number): Promise<ParsedEvent[]> {
+    const events = await getBlockEvents(this.api.query.System.Events, this.logger);
+    this.logger.debug(`Events count for block ${blockNumber}: ${events.length}`);
+    return events;
   }
 }
