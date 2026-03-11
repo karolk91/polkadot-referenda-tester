@@ -1,7 +1,6 @@
 import type { ReferendumInfo, SimulationResult } from '../types';
 import type { ReferendaPallet, ReferendumOngoing, SubstrateApi } from '../types/substrate-api';
-import { formatDispatchError } from '../utils/dispatch-result';
-import { type ParsedEvent, parseBlockEvent } from '../utils/event-serializer';
+import { getBlockEvents, type ParsedEvent } from '../utils/event-serializer';
 import { toHexString } from '../utils/hex';
 import { stringify } from '../utils/json';
 import type { Logger } from '../utils/logger';
@@ -141,7 +140,7 @@ export class ReferendumSimulator {
       };
     } catch (error) {
       this.logger.failSpinner('Failed to force referendum execution');
-      throw error;
+      throw new Error('Failed to force referendum execution', { cause: error });
     }
   }
 
@@ -219,7 +218,7 @@ export class ReferendumSimulator {
     this.logger.succeedSpinner('Referendum nudged');
 
     this.verifyReferendumApproval(
-      await this.getBlockEvents(Number(await this.api.query.System.Number.getValue())),
+      await this.fetchBlockEvents(Number(await this.api.query.System.Number.getValue())),
       referendum.id
     );
 
@@ -239,7 +238,7 @@ export class ReferendumSimulator {
     const executionBlock = Number(await this.api.query.System.Number.getValue());
     this.logger.succeedSpinner(`Proposal executed at block ${executionBlock}`);
 
-    const events = await this.getBlockEvents(executionBlock);
+    const events = await this.fetchBlockEvents(executionBlock);
 
     return { events, executionBlock, scheduledBlock, scheduledTaskIndex, scheduledTaskId };
   }
@@ -389,26 +388,14 @@ export class ReferendumSimulator {
     const executionBlock = Number(await this.api.query.System.Number.getValue());
     this.logger.succeedSpinner(`Pre-call executed at block ${executionBlock}`);
 
-    const events = await this.getBlockEvents(executionBlock);
-    const schedulerDispatched = events.filter(
-      (blockEvent) => blockEvent.section === 'Scheduler' && blockEvent.method === 'Dispatched'
-    );
+    const events = await this.fetchBlockEvents(executionBlock);
+    const { executionSucceeded, errors } = this.resultChecker.checkExecutionResults(events);
 
-    if (schedulerDispatched.length > 0) {
-      const lastDispatch = schedulerDispatched[schedulerDispatched.length - 1];
-      const lastData = lastDispatch.data as Record<string, unknown> | undefined;
-      const lastValue = lastData?.value as Record<string, unknown> | undefined;
-      const dispatchResult = lastValue?.result as Record<string, unknown> | undefined;
-
-      if (dispatchResult?.type === 'Ok') {
-        this.logger.success('Pre-call executed successfully');
-      } else if (dispatchResult?.type === 'Err') {
-        this.logger.warn(`Pre-call dispatch error: ${formatDispatchError(dispatchResult.value)}`);
-      } else {
-        this.logger.warn('Pre-call dispatch result unclear');
-      }
+    if (executionSucceeded) {
+      this.logger.success('Pre-call executed successfully');
     } else {
-      this.logger.warn('No Scheduler.Dispatched event found for pre-call');
+      const errorDetail = errors?.join('; ') || 'unknown error';
+      this.logger.warn(`Pre-call dispatch failed: ${errorDetail}`);
     }
   }
 
@@ -430,20 +417,9 @@ export class ReferendumSimulator {
     return { System: originString };
   }
 
-  private async getBlockEvents(blockNumber: number): Promise<ParsedEvent[]> {
-    try {
-      const events = await this.api.query.System.Events.getValue();
-
-      this.logger.debug(`Raw events count for block ${blockNumber}: ${events?.length || 0}`);
-
-      if (!events || events.length === 0) {
-        return [];
-      }
-
-      return events.map((rawEvent) => parseBlockEvent(rawEvent));
-    } catch (error) {
-      this.logger.warn(`Failed to get events for block ${blockNumber}: ${error}`);
-      return [];
-    }
+  private async fetchBlockEvents(blockNumber: number): Promise<ParsedEvent[]> {
+    const events = await getBlockEvents(this.api.query.System.Events, this.logger);
+    this.logger.debug(`Events count for block ${blockNumber}: ${events.length}`);
+    return events;
   }
 }

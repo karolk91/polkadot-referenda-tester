@@ -4,6 +4,7 @@ import type { PolkadotClient } from 'polkadot-api';
 import type { TestOptions } from '../types';
 import type { ParsedEndpoint } from '../utils/chain-endpoint-parser';
 import type { Logger } from '../utils/logger';
+import { ALICE_ACCOUNT_INJECTION, FELLOWSHIP_STORAGE_INJECTION } from '../utils/storage-constants';
 import {
   type ChainInfo,
   type ChainNetwork,
@@ -11,7 +12,6 @@ import {
   createPolkadotClient,
   getChainInfo,
 } from './chain-registry';
-import { ReferendumCreator } from './referendum-creator';
 
 export interface TopologyConfig {
   governance?: string;
@@ -289,10 +289,10 @@ export class ChainTopologyBuilder {
     }
 
     if (storageInjection === 'fellowship') {
-      config['import-storage'] = ReferendumCreator.getFellowshipStorageInjection();
+      config['import-storage'] = FELLOWSHIP_STORAGE_INJECTION;
       this.logger.debug('Injecting fellowship storage for Alice account');
     } else if (storageInjection === 'alice-account') {
-      config['import-storage'] = ReferendumCreator.getAliceAccountInjection();
+      config['import-storage'] = ALICE_ACCOUNT_INJECTION;
       this.logger.debug('Injecting Alice account with funds');
     }
 

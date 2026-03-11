@@ -87,7 +87,7 @@ export class ChopsticksManager {
       return this.context;
     } catch (error) {
       this.logger.failSpinner('Failed to start Chopsticks');
-      throw error;
+      throw new Error('Failed to start Chopsticks', { cause: error });
     }
   }
 

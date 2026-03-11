@@ -68,10 +68,16 @@ export class SchedulerManager {
   ): Promise<{ block: number; taskIndex: number; taskId: Uint8Array | undefined }> {
     const { targetBlock } = await this.getSchedulingBlocks();
 
-    const match = await this.findMatchingScheduledCall(referendumId, callType, proposalHash);
+    const { match, searchedBlocks, searchedItems, blockNumbers } =
+      await this.findMatchingScheduledCall(referendumId, callType, proposalHash);
 
     if (!match) {
-      throw new Error(`Scheduled ${callType} call not found for referendum ${referendumId}`);
+      throw new Error(
+        `Scheduled ${callType} call not found for referendum ${referendumId}. ` +
+          `Searched ${searchedBlocks} agenda blocks (${searchedItems} total items) ` +
+          `at blocks: [${blockNumbers.join(', ')}]. ` +
+          `The referendum may not have been nudged yet, or the scheduler state may be inconsistent.`
+      );
     }
 
     const { keyArgs, agendaItems, scheduledEntry, matchIndex } = match;
@@ -127,15 +133,23 @@ export class SchedulerManager {
     callType: 'nudge' | 'execute',
     proposalHash?: string
   ): Promise<{
-    keyArgs: unknown[];
-    agendaItems: ScheduledEntry[];
-    scheduledEntry: ScheduledEntry;
-    matchIndex: number;
-  } | null> {
+    match: {
+      keyArgs: unknown[];
+      agendaItems: ScheduledEntry[];
+      scheduledEntry: ScheduledEntry;
+      matchIndex: number;
+    } | null;
+    searchedBlocks: number;
+    searchedItems: number;
+    blockNumbers: unknown[];
+  }> {
     this.logger.debug(`Searching for ${callType} call (referendum ${referendumId}) in scheduler`);
 
     const agendaEntries = await this.api.query.Scheduler.Agenda.getEntries();
     this.logger.debug(`Found ${agendaEntries.length} total agenda entries`);
+
+    const blockNumbers = agendaEntries.map((e) => e.keyArgs[0]);
+    const searchedItems = agendaEntries.reduce((sum, e) => sum + (e.value?.length ?? 0), 0);
 
     for (const entry of agendaEntries) {
       const { keyArgs, value: agendaItems } = entry;
@@ -154,12 +168,22 @@ export class SchedulerManager {
             : this.isProposalExecutionCall(scheduledEntry.call, proposalHash);
 
         if (isMatch) {
-          return { keyArgs, agendaItems, scheduledEntry, matchIndex: i };
+          return {
+            match: { keyArgs, agendaItems, scheduledEntry, matchIndex: i },
+            searchedBlocks: agendaEntries.length,
+            searchedItems,
+            blockNumbers,
+          };
         }
       }
     }
 
-    return null;
+    return {
+      match: null,
+      searchedBlocks: agendaEntries.length,
+      searchedItems,
+      blockNumbers,
+    };
   }
 
   private getCallInfo(call: ScheduledCall): { type: string; hex?: string; hash?: string } {
