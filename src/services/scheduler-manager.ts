@@ -58,6 +58,34 @@ export class SchedulerManager {
   }
 
   /**
+   * Find a scheduled call without moving it.
+   * Returns the block number, task index, and task ID where the call is scheduled.
+   */
+  async findScheduledCall(
+    referendumId: number,
+    callType: 'nudge' | 'execute',
+    proposalHash?: string
+  ): Promise<{ scheduledBlock: number; taskIndex: number; taskId: Uint8Array | undefined }> {
+    const { match, searchedBlocks, searchedItems, blockNumbers } =
+      await this.findMatchingScheduledCall(referendumId, callType, proposalHash);
+
+    if (!match) {
+      throw new Error(
+        `Scheduled ${callType} call not found for referendum ${referendumId}. ` +
+          `Searched ${searchedBlocks} agenda blocks (${searchedItems} total items) ` +
+          `at blocks: [${blockNumbers.join(', ')}]. ` +
+          `The referendum may not have been nudged yet, or the scheduler state may be inconsistent.`
+      );
+    }
+
+    return {
+      scheduledBlock: match.keyArgs[0] as number,
+      taskIndex: match.matchIndex,
+      taskId: match.scheduledEntry.maybeId,
+    };
+  }
+
+  /**
    * Move scheduled call to next block.
    * Returns the block number and task index where the call was scheduled.
    */

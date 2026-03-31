@@ -90,9 +90,16 @@ export class SimulationRunner {
       params.api,
       params.isFellowship
     );
+
+    // Extract raw preimage bytes from the notePreimage call for Lookup proposals
+    const rawPreimageHex = params.createPreimageHex
+      ? SimulationRunner.extractPreimageBytesFromNoteCall(params.createPreimageHex)
+      : undefined;
+
     const result = await simulator.simulate(referendum, {
       preCall: params.preCall,
       preOrigin: params.preOrigin,
+      rawPreimageHex,
     });
 
     this.throwIfFailed(result, `${label} referendum #${actualReferendumId}`);
@@ -220,6 +227,43 @@ export class SimulationRunner {
         }
       }
       throw new Error(`${label} execution failed`);
+    }
+  }
+
+  /**
+   * Extract raw preimage bytes from a Preimage.notePreimage(bytes) call.
+   * The call format is: [pallet_idx][call_idx][compact_len][bytes...]
+   * Returns the raw bytes as a hex string, or undefined if extraction fails.
+   */
+  private static extractPreimageBytesFromNoteCall(noteCallHex: string): string | undefined {
+    try {
+      const hex = noteCallHex.startsWith('0x') ? noteCallHex.slice(2) : noteCallHex;
+      // Skip pallet index (1 byte = 2 hex) + call index (1 byte = 2 hex) = 4 hex chars
+      let offset = 4;
+
+      // Decode SCALE compact length
+      const firstByte = parseInt(hex.slice(offset, offset + 2), 16);
+      const mode = firstByte & 0x03;
+      let dataOffset: number;
+
+      if (mode === 0) {
+        // Single byte compact (values 0-63)
+        dataOffset = offset + 2;
+      } else if (mode === 1) {
+        // Two byte compact (values 64-16383)
+        dataOffset = offset + 4;
+      } else if (mode === 2) {
+        // Four byte compact (values 16384+)
+        dataOffset = offset + 8;
+      } else {
+        // Big integer mode - not expected for preimage lengths
+        return undefined;
+      }
+
+      const rawBytes = hex.slice(dataOffset);
+      return rawBytes.length > 0 ? `0x${rawBytes}` : undefined;
+    } catch {
+      return undefined;
     }
   }
 }
