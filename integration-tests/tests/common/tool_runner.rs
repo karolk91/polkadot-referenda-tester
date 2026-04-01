@@ -82,6 +82,21 @@ impl ToolOutput {
         );
         Ok(())
     }
+
+    /// Check neither stdout nor stderr contains a substring (case-insensitive).
+    pub fn check_any_output_not_contains(&self, pattern: &str) -> Result<()> {
+        let lower_pattern = pattern.to_lowercase();
+        let in_stdout = self.stdout.to_lowercase().contains(&lower_pattern);
+        let in_stderr = self.stderr.to_lowercase().contains(&lower_pattern);
+        anyhow::ensure!(
+            !in_stdout && !in_stderr,
+            "Expected output NOT to contain '{}', but it was found.\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            pattern,
+            self.stdout,
+            self.stderr,
+        );
+        Ok(())
+    }
 }
 
 // ── Test suite infrastructure ────────────────────────────────────────────────

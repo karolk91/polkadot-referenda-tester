@@ -120,6 +120,11 @@ async fn polkadot_governance_all_tracks() {
         "gov_inline_bynum",
         run_governance_inline_bynum(&ctx, &runner)
     );
+    run_and_bail!(
+        errors,
+        "gov_bynum_lookup_execution",
+        run_governance_bynum_lookup_execution(&ctx, &runner)
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -694,6 +699,56 @@ async fn run_governance_inline_bynum(
 
     output.check_success()?;
     output.check_stdout_contains("executed successfully")?;
+    Ok(())
+}
+
+/// By-number test with a Lookup proposal on the Root track.
+///
+/// This test specifically validates that the scheduler can execute Lookup proposals
+/// when the scheduler entry is moved via storage manipulation. On parachains, the
+/// execute call is scheduled at relay_block + min_enactment_period, which may be
+/// far in the future. Moving this Lookup entry via `dev.setStorage` can cause
+/// `Scheduler.CallUnavailable` if the preimage lookup breaks during the move.
+///
+/// The test submits a referendum with a Lookup proposal (preimage-based) on the Root
+/// track, then runs the tool by referendum ID and verifies:
+/// 1. The tool succeeds (exit code 0)
+/// 2. Output contains "executed successfully"
+/// 3. Output does NOT contain "CallUnavailable"
+async fn run_governance_bynum_lookup_execution(
+    ctx: &GovernanceTestContext,
+    runner: &ToolRunner,
+) -> Result<()> {
+    log::info!("[gov_bynum_lookup_execution] Starting...");
+
+    // Use Root track — it has the largest min_enactment_period, making the scheduler
+    // move most significant and most likely to trigger preimage lookup issues.
+    let root_track = tracks::GOVERNANCE_TRACKS
+        .iter()
+        .find(|t| t.is_root)
+        .expect("Root track must exist in GOVERNANCE_TRACKS");
+
+    let submitted =
+        extrinsic_submitter::submit_governance_referendum(&ctx.ah_client, root_track, "Origins")
+            .await?;
+
+    let fork_url = format!("{},{}", ctx.asset_hub_ws_uri, submitted.block_number);
+
+    let port = port_allocator::next_port();
+    let output = runner
+        .run_test_referendum(ToolArgs {
+            governance_chain_url: Some(fork_url),
+            referendum: Some(submitted.referendum_id.to_string()),
+            port: Some(port),
+            verbose: true,
+            ..Default::default()
+        })
+        .await?;
+
+    output.check_success()?;
+    output.check_stdout_contains("executed successfully")?;
+    output.check_any_output_not_contains("CallUnavailable")?;
+    log::info!("[gov_bynum_lookup_execution] PASSED");
     Ok(())
 }
 
