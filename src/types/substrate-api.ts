@@ -127,6 +127,9 @@ export interface SubstrateApi {
     ParachainSystem?: {
       LastRelayChainBlockNumber: StorageValue<number>;
     };
+    Preimage?: {
+      PreimageFor: StorageMap<[string, number], Binary>;
+    };
   };
   constants: {
     System: {

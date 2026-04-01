@@ -86,6 +86,15 @@ export class SchedulerManager {
       `Found ${callType} call at block ${keyArgs[0]} index ${matchIndex}, moving to block ${targetBlock}`
     );
 
+    // For Lookup calls, convert to Inline by fetching the preimage bytes.
+    // Chopsticks can't correctly handle the Preimage.PreimageFor Identity-hashed
+    // tuple key when writing scheduler entries, which causes Scheduler.CallUnavailable.
+    // By inlining the call data, the scheduler has the bytes directly and never
+    // needs a preimage lookup during execution.
+    if (callType === 'execute' && scheduledEntry.call.type === 'Lookup') {
+      await this.convertLookupToInline(scheduledEntry, agendaItems, matchIndex);
+    }
+
     const callInfo = this.getCallInfo(scheduledEntry.call);
     this.logger.info(`\u{1F4CB} Scheduling ${callType} call:`);
     this.logger.info(`   From block: ${keyArgs[0]}`);
@@ -126,6 +135,44 @@ export class SchedulerManager {
     }
 
     return { block: targetBlock, taskIndex: matchIndex, taskId: scheduledEntry.maybeId };
+  }
+
+  /**
+   * Convert a Lookup scheduler entry to Inline by fetching the preimage bytes.
+   * This avoids Chopsticks issues with Preimage.PreimageFor Identity-hashed keys.
+   */
+  private async convertLookupToInline(
+    scheduledEntry: ScheduledEntry,
+    agendaItems: ScheduledEntry[],
+    matchIndex: number
+  ): Promise<void> {
+    const lookupValue = scheduledEntry.call.value as { hash: unknown; len: number };
+    const hash = toHexString(lookupValue.hash) ?? String(lookupValue.hash);
+    const len = lookupValue.len;
+
+    this.logger.debug(`Converting Lookup call to Inline (hash: ${hash}, len: ${len})`);
+
+    const preimageQuery = this.api.query.Preimage?.PreimageFor;
+    if (!preimageQuery) {
+      this.logger.warn('Preimage pallet not available — cannot convert Lookup to Inline');
+      return;
+    }
+
+    const preimageData = await preimageQuery.getValue([hash, len]);
+    if (!preimageData) {
+      this.logger.warn(`Preimage not found for hash ${hash} len ${len} — keeping Lookup`);
+      return;
+    }
+
+    // Replace the call in both the entry and the agenda array
+    const inlineCall: ScheduledCall = {
+      type: 'Inline',
+      value: preimageData,
+    };
+    scheduledEntry.call = inlineCall;
+    agendaItems[matchIndex] = scheduledEntry;
+
+    this.logger.info(`Converted Lookup call to Inline (${len} bytes)`);
   }
 
   private async findMatchingScheduledCall(
