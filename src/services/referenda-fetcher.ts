@@ -162,9 +162,7 @@ export class ReferendaFetcher {
     const taskName = FixedSizeBinary.fromBytes(getEnactmentTaskName(referendumId));
     let lookup: [number, number] | undefined;
     try {
-      lookup = await api.query.Scheduler.Lookup.getValue(
-        taskName as unknown as Uint8Array
-      );
+      lookup = await api.query.Scheduler.Lookup.getValue(taskName as unknown as Uint8Array);
     } catch (error) {
       this.logger.warn(
         `Failed to read Scheduler.Lookup for referendum #${referendumId}: ${(error as Error).message}`

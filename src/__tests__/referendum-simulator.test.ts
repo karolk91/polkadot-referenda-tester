@@ -114,7 +114,9 @@ describe('ReferendumSimulator', () => {
       const scheduleAndExecute = vi
         .spyOn(simulator as any, 'scheduleAndExecuteProposal')
         .mockResolvedValue({
-          events: [{ section: 'Scheduler', method: 'Dispatched', data: { result: { success: true } } }],
+          events: [
+            { section: 'Scheduler', method: 'Dispatched', data: { result: { success: true } } },
+          ],
           executionBlock: 200,
           scheduledBlock: 199,
           scheduledTaskIndex: 0,
