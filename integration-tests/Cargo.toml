@@ -15,6 +15,10 @@ path = "tests/tests.rs"
 name = "generate_chain_specs"
 path = "tests/generate_chain_specs.rs"
 
+[[test]]
+name = "approved_future_enactment"
+path = "tests/approved_future_enactment.rs"
+
 [dependencies]
 anyhow = "1"
 env_logger = "0.11"

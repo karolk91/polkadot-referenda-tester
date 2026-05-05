@@ -159,6 +159,15 @@ pub fn kusama_asset_hub_runtime_url() -> String {
 ///
 /// Lighter config for governance-only tests (no Collectives needed).
 pub fn build_polkadot_with_asset_hub() -> anyhow::Result<NetworkConfig> {
+    build_polkadot_with_asset_hub_raw_override(raw_storage::ah_migrator_override())
+}
+
+/// Variant of [`build_polkadot_with_asset_hub`] that takes a custom raw spec override
+/// for Asset Hub. Use this to bake additional state (e.g. an Approved referendum with
+/// future enactment) into AH's genesis.
+pub fn build_polkadot_with_asset_hub_raw_override(
+    ah_raw_override: serde_json::Value,
+) -> anyhow::Result<NetworkConfig> {
     let relay_binary = get_polkadot_binary_path();
     let para_binary = get_parachain_binary_path();
 
@@ -209,7 +218,7 @@ pub fn build_polkadot_with_asset_hub() -> anyhow::Result<NetworkConfig> {
                 p.with_chain_spec_runtime(url.as_str(), None)
                     .with_genesis_overrides(parachain_genesis_overrides())
             };
-            p.with_raw_spec_override(raw_storage::ah_migrator_override())
+            p.with_raw_spec_override(ah_raw_override.clone())
                 .cumulus_based(true)
                 .with_collator(|c| {
                     c.with_name("asset-hub-collator")
