@@ -77,13 +77,18 @@ function makeReferendum(overrides: Partial<ReferendumInfo> = {}): ReferendumInfo
 
 describe('ReferendumSimulator', () => {
   describe('simulate()', () => {
-    it('returns success immediately for already-approved referendum', async () => {
+    it('returns success immediately when already-approved referendum has no scheduled enactment left', async () => {
       const logger = createSilentLogger();
       const chopsticks = createMockChopsticks();
       const api = createMockApi();
 
       const simulator = new ReferendumSimulator(logger, chopsticks, api, false);
-      const referendum = makeReferendum({ status: 'approved' });
+      // hash 'unknown' indicates the fetcher could not locate a future scheduled enactment
+      // (i.e. the call has already been dispatched on-chain).
+      const referendum = makeReferendum({
+        status: 'approved',
+        proposal: { type: 'Lookup', hash: 'unknown', call: undefined },
+      });
 
       const result = await simulator.simulate(referendum);
 
@@ -94,6 +99,43 @@ describe('ReferendumSimulator', () => {
       // Should NOT have interacted with chopsticks at all
       expect(chopsticks.newBlock).not.toHaveBeenCalled();
       expect(chopsticks.setStorageBatch).not.toHaveBeenCalled();
+    });
+
+    it('skips applyPassingState and the nudge step when status is approved with a known proposal hash', async () => {
+      const logger = createSilentLogger();
+      const chopsticks = createMockChopsticks();
+      const api = createMockApi();
+      const simulator = new ReferendumSimulator(logger, chopsticks, api, false);
+
+      // Stub out the heavy machinery: we only want to verify which sub-steps fire.
+      const applyPassingState = vi
+        .spyOn(simulator as any, 'applyPassingState')
+        .mockResolvedValue(undefined);
+      const scheduleAndExecute = vi
+        .spyOn(simulator as any, 'scheduleAndExecuteProposal')
+        .mockResolvedValue({
+          events: [
+            { section: 'Scheduler', method: 'Dispatched', data: { result: { success: true } } },
+          ],
+          executionBlock: 200,
+          scheduledBlock: 199,
+          scheduledTaskIndex: 0,
+          scheduledTaskId: undefined,
+        });
+
+      const referendum = makeReferendum({
+        status: 'approved',
+        // hash !== 'unknown' indicates the fetcher located the future scheduled enactment
+        proposal: { type: 'Lookup', hash: '0xdeadbeef', call: undefined, len: 10 },
+      });
+
+      await simulator.simulate(referendum);
+
+      // applyPassingState must be skipped — the referendum is already approved on-chain
+      expect(applyPassingState).not.toHaveBeenCalled();
+      // scheduleAndExecuteProposal must be called with skipNudge=true (its second arg)
+      expect(scheduleAndExecute).toHaveBeenCalledTimes(1);
+      expect(scheduleAndExecute.mock.calls[0][1]).toBe(true);
     });
 
     it('catches thrown errors and returns them in result', async () => {

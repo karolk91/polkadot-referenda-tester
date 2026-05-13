@@ -1,3 +1,4 @@
+import { FixedSizeBinary } from '@polkadot-api/substrate-bindings';
 import type { ReferendumInfo } from '../types';
 import type {
   ReferendumOngoing,
@@ -8,6 +9,7 @@ import type {
 import { toHexString } from '../utils/hex';
 import { stringify } from '../utils/json';
 import type { Logger } from '../utils/logger';
+import { getEnactmentTaskName } from '../utils/scheduler-task-name';
 import { getReferendaPallet, getReferendaPalletName } from './chain-registry';
 
 interface BuildReferendumInfoParams {
@@ -49,21 +51,7 @@ export class ReferendaFetcher {
 
     if (refInfo.type !== 'Ongoing') {
       if (refInfo.type === 'Approved') {
-        this.logger.info(
-          `Referendum #${referendumId} is already approved - calls have been executed`
-        );
-        return {
-          id: referendumId,
-          track: 'unknown',
-          origin: null,
-          proposal: {
-            hash: 'unknown',
-            call: undefined,
-            type: 'Lookup' as const,
-          },
-          status,
-          submittedAt: 0,
-        };
+        return await this.buildApprovedReferendumInfo(api, referendumId, status);
       }
 
       this.logger.warn(`Referendum #${referendumId} is not ongoing (status: ${status})`);
@@ -154,6 +142,80 @@ export class ReferendaFetcher {
           }
         : undefined,
       deciding,
+    };
+  }
+
+  private async buildApprovedReferendumInfo(
+    api: SubstrateApi,
+    referendumId: number,
+    status: ReferendumInfo['status']
+  ): Promise<ReferendumInfo> {
+    const stub: ReferendumInfo = {
+      id: referendumId,
+      track: 'unknown',
+      origin: null,
+      proposal: { hash: 'unknown', call: undefined, type: 'Lookup' },
+      status,
+      submittedAt: 0,
+    };
+
+    const taskName = FixedSizeBinary.fromBytes(getEnactmentTaskName(referendumId));
+    let lookup: [number, number] | undefined;
+    try {
+      lookup = await api.query.Scheduler.Lookup.getValue(taskName as unknown as Uint8Array);
+    } catch (error) {
+      this.logger.warn(
+        `Failed to read Scheduler.Lookup for referendum #${referendumId}: ${(error as Error).message}`
+      );
+      return stub;
+    }
+
+    if (!lookup) {
+      this.logger.info(
+        `Referendum #${referendumId} is approved and its scheduled enactment has already executed`
+      );
+      return stub;
+    }
+
+    const [scheduledBlock, agendaIndex] = lookup;
+    let agenda: Awaited<ReturnType<typeof api.query.Scheduler.Agenda.getValue>>;
+    try {
+      agenda = await api.query.Scheduler.Agenda.getValue(scheduledBlock);
+    } catch (error) {
+      this.logger.warn(
+        `Failed to read Scheduler.Agenda[${scheduledBlock}] for referendum #${referendumId}: ${(error as Error).message}`
+      );
+      return stub;
+    }
+    const entry = agenda?.[agendaIndex];
+
+    if (!entry?.call) {
+      this.logger.warn(
+        `Referendum #${referendumId} is approved with a scheduler lookup at block ${scheduledBlock} index ${agendaIndex}, but no agenda entry was found there`
+      );
+      return stub;
+    }
+
+    const { hash, call, type, len } = this.parseProposal(entry.call);
+    const currentBlock = await this.getLatestBlock(api);
+
+    this.logger.info(
+      `Referendum #${referendumId} is approved with scheduled enactment at block ${scheduledBlock} (current block ${currentBlock})`
+    );
+    this.logger.debug(`Scheduled enactment proposal type: ${type}, hash: ${hash ?? 'inline'}`);
+
+    return {
+      id: referendumId,
+      track: 'unknown',
+      origin: null,
+      proposal: {
+        hash: hash ?? 'inline',
+        call,
+        type,
+        len: type === 'Lookup' ? len : undefined,
+      },
+      status,
+      submittedAt: 0,
     };
   }
 

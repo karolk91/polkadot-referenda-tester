@@ -77,8 +77,10 @@ export class ReferendumSimulator {
     };
 
     try {
-      if (referendum.status === 'approved') {
-        this.logger.info(`Referendum #${referendum.id} is already approved - skipping simulation`);
+      if (referendum.status === 'approved' && referendum.proposal.hash === 'unknown') {
+        this.logger.info(
+          `Referendum #${referendum.id} is approved and its scheduled enactment has already executed - skipping simulation`
+        );
         return {
           referendumId: referendum.id,
           executionSucceeded: true,
@@ -87,7 +89,12 @@ export class ReferendumSimulator {
         };
       }
 
-      this.logger.section('Simulating Referendum Execution (Force Approval Strategy)');
+      const isAlreadyApproved = referendum.status === 'approved';
+      this.logger.section(
+        isAlreadyApproved
+          ? 'Simulating Referendum Execution (Pre-Approved, Move Enactment Forward)'
+          : 'Simulating Referendum Execution (Force Approval Strategy)'
+      );
 
       const executionResult = await this.forceReferendumExecution(referendum, preExecutionOptions);
 
@@ -121,9 +128,12 @@ export class ReferendumSimulator {
     }
 
     try {
-      await this.applyPassingState(referendum);
+      const isAlreadyApproved = referendum.status === 'approved';
+      if (!isAlreadyApproved) {
+        await this.applyPassingState(referendum);
+      }
       const { events, executionBlock, scheduledBlock, scheduledTaskIndex, scheduledTaskId } =
-        await this.scheduleAndExecuteProposal(referendum);
+        await this.scheduleAndExecuteProposal(referendum, isAlreadyApproved);
 
       const { executionSucceeded, errors } = this.resultChecker.checkExecutionResults(
         events,
@@ -202,25 +212,34 @@ export class ReferendumSimulator {
     await this.verifyReferendumModification(referendum.id);
   }
 
-  private async scheduleAndExecuteProposal(referendum: ReferendumInfo): Promise<{
+  private async scheduleAndExecuteProposal(
+    referendum: ReferendumInfo,
+    skipNudge: boolean = false
+  ): Promise<{
     events: ParsedEvent[];
     executionBlock: number;
     scheduledBlock: number;
     scheduledTaskIndex: number;
     scheduledTaskId: Uint8Array | undefined;
   }> {
-    this.logger.startSpinner('Moving nudgeReferendum to next block...');
-    await this.scheduler.moveScheduledCallToNextBlock(referendum.id, 'nudge');
-    this.logger.succeedSpinner('nudgeReferendum moved');
+    if (!skipNudge) {
+      this.logger.startSpinner('Moving nudgeReferendum to next block...');
+      await this.scheduler.moveScheduledCallToNextBlock(referendum.id, 'nudge');
+      this.logger.succeedSpinner('nudgeReferendum moved');
 
-    this.logger.startSpinner('Creating block to trigger referendum nudge...');
-    await this.chopsticks.newBlock();
-    this.logger.succeedSpinner('Referendum nudged');
+      this.logger.startSpinner('Creating block to trigger referendum nudge...');
+      await this.chopsticks.newBlock();
+      this.logger.succeedSpinner('Referendum nudged');
 
-    this.verifyReferendumApproval(
-      await this.fetchBlockEvents(Number(await this.api.query.System.Number.getValue())),
-      referendum.id
-    );
+      this.verifyReferendumApproval(
+        await this.fetchBlockEvents(Number(await this.api.query.System.Number.getValue())),
+        referendum.id
+      );
+    } else {
+      this.logger.info(
+        `Referendum #${referendum.id} is already approved on-chain - skipping nudge and moving the existing scheduled enactment forward`
+      );
+    }
 
     this.logger.startSpinner('Moving proposal execution to next block...');
     const proposalHash = referendum.proposal.hash;
