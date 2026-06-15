@@ -2026,6 +2026,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@types/js-yaml@npm:^4.0.9":
+  version: 4.0.9
+  resolution: "@types/js-yaml@npm:4.0.9"
+  checksum: 10c0/24de857aa8d61526bbfbbaa383aa538283ad17363fcd5bb5148e2c7f604547db36646440e739d78241ed008702a8920665d1add5618687b6743858fae00da211
+  languageName: node
+  linkType: hard
+
 "@types/node@npm:*, @types/node@npm:^22.15.21, @types/node@npm:^22.15.30":
   version: 22.16.4
   resolution: "@types/node@npm:22.16.4"
@@ -3864,7 +3871,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"js-yaml@npm:^4.1.1":
+"js-yaml@npm:^4.1.0, js-yaml@npm:^4.1.1":
   version: 4.2.0
   resolution: "js-yaml@npm:4.2.0"
   dependencies:
@@ -4889,10 +4896,12 @@ __metadata:
     "@biomejs/biome": "npm:^2.0.0"
     "@polkadot/keyring": "npm:^13.0.0"
     "@tsconfig/node20": "npm:^20.1.9"
+    "@types/js-yaml": "npm:^4.0.9"
     "@types/node": "npm:^22.15.21"
     chalk: "npm:^4.1.2"
     cli-table3: "npm:^0.6.5"
     commander: "npm:^14.0.1"
+    js-yaml: "npm:^4.1.0"
     nanospinner: "npm:^1.1.0"
     polkadot-api: "npm:^1.14.1"
     ts-node: "npm:^10.9.2"

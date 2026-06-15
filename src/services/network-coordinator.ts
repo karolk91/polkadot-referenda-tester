@@ -1,8 +1,24 @@
 import { setupNetworks } from '@acala-network/chopsticks-testing';
 import type { PolkadotClient } from 'polkadot-api';
 import type { ChopsticksConfig, TestOptions } from '../types';
+import { type ParsedEvent, serializeEventData } from '../utils/event-serializer';
 import type { Logger } from '../utils/logger';
 import { FELLOWSHIP_STORAGE_INJECTION } from '../utils/storage-constants';
+import {
+  type BridgeChain,
+  BridgeConnector,
+  type BridgeKusamaSide,
+  type BridgePolkadotSide,
+  collectOutboundXcmIds,
+  type DownstreamSettleResult,
+} from './bridge-connector';
+import {
+  BridgeTopologyBuilder,
+  type BridgeTopologyConfig,
+  KUSAMA_SIDE_KEYS,
+  POLKADOT_SIDE_KEYS,
+} from './bridge-topology-builder';
+import { BridgeVerifier } from './bridge-verifier';
 import { createApiForChain, createPolkadotClient, getChainInfo } from './chain-registry';
 import { ChainTopologyBuilder, type TopologyConfig } from './chain-topology-builder';
 import { type ChopsticksContext, ChopsticksManager } from './chopsticks-manager';
@@ -556,6 +572,307 @@ export class NetworkCoordinator {
         ]);
       }
     }
+  }
+
+  /**
+   * Test a fellowship referendum whose proposal sends an XCM that ultimately executes on
+   * a chain in a different consensus (across a bridge).
+   *
+   * Phase 1 scope (current): spawn both sides (Polkadot: relay + Collectives + AHP + BHP,
+   * Kusama: relay + AHK + BHK), drive the fellowship referendum on Collectives, and run a
+   * read-only BridgeConnector that decodes and reports any outbound bridge messages
+   * emitted on BHP. NO Kusama-side delivery happens yet — that arrives in Phase 4.
+   */
+  async testFellowshipBridged(
+    fellowshipReferendumId: number | undefined,
+    mainReferendumId: number | undefined,
+    cleanup: boolean,
+    options: TestOptions,
+    bridgeEndpoints: BridgeTopologyConfig
+  ): Promise<void> {
+    // The second-half AHK governance referendum runs either from a create-call (new
+    // referendum) or from an existing referendum ID (`-r`). Either way it dispatches
+    // the bridged whitelisted call; without it, only the bridge crossing is exercised.
+    const runAhkPublicReferendum =
+      !!options.callToCreateGovernanceReferendum || mainReferendumId !== undefined;
+    const builder = new BridgeTopologyBuilder(this.logger, {
+      ...bridgeEndpoints,
+      injectFellowshipStorage:
+        bridgeEndpoints.injectFellowshipStorage ?? !!options.callToCreateFellowshipReferendum,
+      // Alice on AHK is only needed when *creating* a referendum (she signs notePreimage
+      // + submit). An existing referendum is force-approved via storage, so no signer.
+      injectAliceOnAssetHubKusama:
+        bridgeEndpoints.injectAliceOnAssetHubKusama ?? !!options.callToCreateGovernanceReferendum,
+      // Alice signs receive_messages_proof on BHK — always fund her there.
+      injectAliceOnBridgeHubKusama: bridgeEndpoints.injectAliceOnBridgeHubKusama ?? true,
+    });
+
+    const polkadotSide = builder.buildPolkadotSide();
+    const kusamaSide = builder.buildKusamaSide();
+
+    this.logger.section('Setting Up Bridged Multi-Chain Environment');
+    this.logger.info(`Polkadot-side keys: ${Object.values(POLKADOT_SIDE_KEYS).join(', ')}`);
+    this.logger.info(`Kusama-side keys: ${Object.values(KUSAMA_SIDE_KEYS).join(', ')}`);
+
+    this.logger.startSpinner('Spawning Polkadot-side chopsticks fork...');
+    const polkadotNetworks = await setupNetworks(
+      polkadotSide.networkConfig as Parameters<typeof setupNetworks>[0]
+    );
+    this.logger.succeedSpinner('Polkadot-side network ready');
+
+    this.logger.startSpinner('Spawning Kusama-side chopsticks fork...');
+    const kusamaNetworks = await setupNetworks(
+      kusamaSide.networkConfig as Parameters<typeof setupNetworks>[0]
+    );
+    this.logger.succeedSpinner('Kusama-side network ready');
+
+    const polkadotChains: Record<string, BridgeChain> = {};
+    const kusamaChains: Record<string, BridgeChain> = {};
+    const clientsToDestroy: PolkadotClient[] = [];
+    // Hoisted so the finally-block can tear down the bridge subscription + the
+    // polkadot.js ApiPromise instances it owns, even if the bridge work throws.
+    let bridgeConnector: BridgeConnector | null = null;
+
+    try {
+      for (const [key, ctx] of Object.entries(polkadotNetworks)) {
+        const chain = await this.adoptBridgeChain(key, ctx as unknown as ChopsticksContext);
+        polkadotChains[key] = chain;
+        clientsToDestroy.push(chain.client);
+      }
+      for (const [key, ctx] of Object.entries(kusamaNetworks)) {
+        const chain = await this.adoptBridgeChain(key, ctx as unknown as ChopsticksContext);
+        kusamaChains[key] = chain;
+        clientsToDestroy.push(chain.client);
+      }
+
+      // Everything adopted under a non-core key (relay `polkadot`/`kusama` or `extra_<n>`)
+      // came from --additional-chains; hand them to the connector so the pump advances them.
+      const polkadotCoreKeys = new Set<string>(Object.values(POLKADOT_SIDE_KEYS));
+      const kusamaCoreKeys = new Set<string>(Object.values(KUSAMA_SIDE_KEYS));
+      const polkadotExtras = Object.entries(polkadotChains)
+        .filter(([key]) => !polkadotCoreKeys.has(key))
+        .map(([, chain]) => chain);
+      const kusamaExtras = Object.entries(kusamaChains)
+        .filter(([key]) => !kusamaCoreKeys.has(key))
+        .map(([, chain]) => chain);
+
+      const polkadotSideForConnector: BridgePolkadotSide = {
+        collectives: polkadotChains[POLKADOT_SIDE_KEYS.collectives],
+        ahp: polkadotChains[POLKADOT_SIDE_KEYS.assetHub],
+        bhp: polkadotChains[POLKADOT_SIDE_KEYS.bridgeHub],
+        extras: polkadotExtras,
+      };
+      const kusamaSideForConnector: BridgeKusamaSide = {
+        ahk: kusamaChains[KUSAMA_SIDE_KEYS.assetHub],
+        bhk: kusamaChains[KUSAMA_SIDE_KEYS.bridgeHub],
+        extras: kusamaExtras,
+      };
+
+      this.logger.section('Fellowship Referendum Simulation (Collectives)');
+      await this.runner.fetchAndSimulate({
+        api: polkadotSideForConnector.collectives.api,
+        chopsticks: polkadotSideForConnector.collectives.manager,
+        referendumId: fellowshipReferendumId,
+        isFellowship: true,
+        createCallHex: options.callToCreateFellowshipReferendum,
+        createPreimageHex: options.callToNotePreimageForFellowshipReferendum,
+        preCall: options.preCall,
+        preOrigin: options.preOrigin,
+        label: 'Fellowship',
+      });
+
+      const pumpRounds = options.bridgePumpRounds
+        ? parseInt(options.bridgePumpRounds, 10)
+        : undefined;
+      bridgeConnector = new BridgeConnector(
+        this.logger,
+        polkadotSideForConnector,
+        kusamaSideForConnector,
+        pumpRounds !== undefined ? { maxRounds: pumpRounds } : undefined
+      );
+      const connector = bridgeConnector;
+
+      this.logger.section('Bridge Pump (observe BHP outbound + prepare BHK)');
+      const report = await connector.pumpUntilQuiet();
+      this.logger.info(
+        `Bridge pump observed ${report.totalSeen} outbound message(s) across ${report.byLane.size} lane(s) over ${report.rounds} round(s); prepared ${report.prepared.length} for delivery`
+      );
+
+      if (report.prepared.length > 0) {
+        this.logger.section('Bridge Delivery (Phase 4: submit receive_messages_proof on BHK)');
+        const deliveryResult = await connector.deliverPrepared(report);
+        this.logger.info(
+          `Delivered ${deliveryResult.delivered}/${report.prepared.length} bridge message(s); ${deliveryResult.failed} failure(s)`
+        );
+
+        // Phase 4 end-to-end verification: confirm BHP MessageAccepted, BHK
+        // MessagesReceived, AHK MessageQueue.Processed{success:true} all fired.
+        const verifier = new BridgeVerifier(this.logger, {
+          outboundPalletName: 'BridgeKusamaMessages',
+          destMessagesPalletName: 'BridgePolkadotMessages',
+        });
+        const verification = await verifier.verify(
+          polkadotSideForConnector,
+          kusamaSideForConnector,
+          connector.getCollectedEvents()
+        );
+        if (!verification.overallPass) {
+          throw new Error(
+            `Bridge end-to-end verification FAILED: ${verification.failureReasons.join('; ')}`
+          );
+        }
+      } else {
+        this.logger.info(
+          'No bridge messages prepared for delivery (fellowship referendum may not have produced one, or BHK not in topology).'
+        );
+      }
+
+      // Second half of the full end-to-end scenario: now that the fellowship
+      // referendum has bridged Whitelist.whitelist_call(hash) into AHK, run an AHK
+      // public referendum on the WhitelistedCaller track whose proposal is
+      // Whitelist.dispatch_whitelisted_call_with_preimage(call_X). Approval +
+      // scheduler dispatch then actually executes call_X on AHK.
+      if (runAhkPublicReferendum) {
+        this.logger.section('Bridged-Target Public Referendum (AHK whitelistedcaller)');
+        const ahkResult = await this.runner.fetchAndSimulate({
+          api: kusamaSideForConnector.ahk.api,
+          chopsticks: kusamaSideForConnector.ahk.manager,
+          // Existing AHK governance referendum (`-r`), or undefined when creating one.
+          referendumId: mainReferendumId,
+          isFellowship: false,
+          createCallHex: options.callToCreateGovernanceReferendum,
+          createPreimageHex: options.callToNotePreimageForGovernanceReferendum,
+          label: 'AHK Public',
+        });
+
+        // The dispatched call may fan XCM out to the other Kusama chains (e.g. a
+        // network-wide `authorize_upgrade`). AHK has already queued those messages on
+        // each target's inbound queue; build blocks on every other Kusama-side chain
+        // until each one actually *processes* the fan-out message addressed to it, then
+        // report what each one did.
+        const downstream = Object.values(kusamaChains).filter(
+          (chain) => chain !== kusamaSideForConnector.ahk
+        );
+        if (downstream.length > 0) {
+          this.logger.section('Downstream Fan-Out Settlement (Kusama system chains)');
+          // Identifiers of the XCM the AHK referendum dispatched outward. settleDownstream
+          // waits until each target processes one of these (a `MessageQueue.Processed`
+          // whose `id` is in this set) — a call-agnostic completion signal, instead of
+          // advancing a fixed number of blocks and racing the cross-chain delivery.
+          const expectedMessageIds = collectOutboundXcmIds(ahkResult.events);
+          const settleResults = await connector.settleDownstream(downstream, expectedMessageIds);
+          // Report only the fan-out targets; AHK is the source and its own
+          // UpgradeAuthorized is already surfaced during the public-referendum simulation.
+          this.reportDownstreamFanOut(connector, downstream, settleResults);
+        }
+      }
+    } finally {
+      // Tear down the bridge subscription + its polkadot.js ApiPromise instances
+      // BEFORE we shut down chopsticks; otherwise the ApiPromise sockets observe a
+      // server disconnect and log noisy errors during cleanup.
+      if (bridgeConnector) {
+        try {
+          await bridgeConnector.teardown();
+        } catch (error) {
+          this.logger.debug(`bridge teardown failed (best-effort): ${(error as Error).message}`);
+        }
+      }
+
+      for (const client of clientsToDestroy) {
+        try {
+          client.destroy();
+        } catch {
+          // ignore — best-effort
+        }
+      }
+
+      const allManagers = [
+        ...Object.entries(polkadotChains).map(([label, c]) => ({
+          label: `Polkadot/${label} (${c.label})`,
+          manager: c.manager,
+        })),
+        ...Object.entries(kusamaChains).map(([label, c]) => ({
+          label: `Kusama/${label} (${c.label})`,
+          manager: c.manager,
+        })),
+      ];
+
+      if (cleanup) {
+        await Promise.all(allManagers.map(({ manager }) => manager.cleanup()));
+      } else {
+        await this.pauseAllManagers(allManagers);
+      }
+    }
+  }
+
+  /**
+   * Summarise, per chain, what the AHK fan-out actually did downstream: whether the chain
+   * *processed* the fan-out message addressed to it (the call-agnostic settlement signal,
+   * from `settleResults`) and — if the carried call was a runtime upgrade — which code hash
+   * it authorized (`System.UpgradeAuthorized`). Reads events from the connector's
+   * accumulated log, which `settleDownstream` has just topped up.
+   */
+  private reportDownstreamFanOut(
+    connector: BridgeConnector,
+    chains: BridgeChain[],
+    settleResults: Map<string, DownstreamSettleResult>
+  ): void {
+    const collected = connector.getCollectedEvents();
+    let anyUpgrade = false;
+    for (const chain of chains) {
+      const events = collected.get(chain.label) ?? [];
+      const settle = settleResults.get(chain.label);
+      const upgrades = events.filter(
+        (e) => e.section === 'System' && e.method === 'UpgradeAuthorized'
+      );
+      if (settle && !settle.matched) {
+        // The fan-out message never showed up as processed within the round cap — an
+        // honest timeout, not a silent pass. (Storage may still settle a block later;
+        // bump --bridge-pump-rounds if this recurs.)
+        this.logger.warn(
+          `  ${chain.label}: fan-out message NOT observed processed within ${settle.rounds} round(s) — possible delivery lag`
+        );
+        continue;
+      }
+      if (upgrades.length > 0) {
+        anyUpgrade = true;
+        for (const ev of upgrades) {
+          // getBlockEvents leaves `data` as raw decoded values (code_hash is a Binary
+          // object); serializeEventData hex-encodes it the same way the verbose display does.
+          const data = serializeEventData(ev.data) as { code_hash?: string };
+          this.logger.success(
+            `  ${chain.label}: System.UpgradeAuthorized — code_hash=${data?.code_hash ?? 'unknown'}`
+          );
+        }
+      } else {
+        // Message processed, but the carried call didn't authorize an upgrade here. That's
+        // expected for non-upgrade referenda (spends, config changes, …).
+        this.logger.info(
+          `  ${chain.label}: fan-out message processed (no UpgradeAuthorized — call was not an upgrade for this chain)`
+        );
+      }
+    }
+    if (!anyUpgrade) {
+      this.logger.info(
+        '  No downstream UpgradeAuthorized observed — the dispatched call did not authorize an upgrade on these chains.'
+      );
+    }
+  }
+
+  private async adoptBridgeChain(label: string, ctx: ChopsticksContext): Promise<BridgeChain> {
+    const manager = ChopsticksManager.fromExistingContext(this.logger, ctx);
+    const client = createPolkadotClient(manager.getContext().ws.endpoint);
+    const api = createApiForChain(client);
+    await manager.waitForChainReady(api);
+    let chainLabel = label;
+    try {
+      const info = await getChainInfo(api, manager.getContext().ws.endpoint);
+      chainLabel = info.label;
+    } catch (error) {
+      this.logger.debug(`Could not detect chain info for ${label}: ${(error as Error).message}`);
+    }
+    this.logger.info(`  ${label} ready: ${chainLabel} at ${manager.getContext().ws.endpoint}`);
+    return { manager, api, client, label: chainLabel };
   }
 
   private async pauseAllManagers(

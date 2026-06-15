@@ -21,6 +21,12 @@ pub struct ToolArgs {
     pub call_to_note_preimage_for_governance_referendum: Option<String>,
     pub call_to_create_fellowship_referendum: Option<String>,
     pub call_to_note_preimage_for_fellowship_referendum: Option<String>,
+    // Bridge-scenario chain URLs (only relevant when fellowship is on Polkadot
+    // Collectives and governance is on Kusama Asset Hub).
+    pub asset_hub_polkadot_url: Option<String>,
+    pub bridge_hub_polkadot_url: Option<String>,
+    pub asset_hub_kusama_url: Option<String>,
+    pub bridge_hub_kusama_url: Option<String>,
     pub verbose: bool,
 }
 
@@ -173,11 +179,28 @@ impl ToolRunner {
             cmd.arg("--call-to-note-preimage-for-fellowship-referendum")
                 .arg(hex);
         }
+        if let Some(ref url) = args.asset_hub_polkadot_url {
+            cmd.arg("--asset-hub-polkadot-url").arg(url);
+        }
+        if let Some(ref url) = args.bridge_hub_polkadot_url {
+            cmd.arg("--bridge-hub-polkadot-url").arg(url);
+        }
+        if let Some(ref url) = args.asset_hub_kusama_url {
+            cmd.arg("--asset-hub-kusama-url").arg(url);
+        }
+        if let Some(ref url) = args.bridge_hub_kusama_url {
+            cmd.arg("--bridge-hub-kusama-url").arg(url);
+        }
         if args.verbose {
             cmd.arg("--verbose");
         }
 
-        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        // `kill_on_drop` reaps the child yarn process if the run times out or the
+        // test task is dropped — otherwise a leaked yarn holds the chopsticks port
+        // (9000+) and breaks subsequent runs. tokio defaults to `false`.
+        cmd.stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
 
         log::info!("Running tool: {cmd:?}");
 
