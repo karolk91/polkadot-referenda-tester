@@ -24,6 +24,7 @@ use crate::common::context::{GovernanceTestContext, KusamaTestContext, MultiChai
 use crate::common::extrinsic_submitter;
 use crate::common::network::{initialize_network, verify_binaries};
 use crate::common::port_allocator;
+use crate::common::raw_storage;
 use crate::common::run_and_bail;
 use crate::common::tool_runner::{ToolArgs, ToolRunner};
 use crate::common::tracks;
@@ -236,6 +237,11 @@ async fn polkadot_fellowship_tracks_part2() {
         errors,
         "fell_inline_bynum",
         run_fellowship_inline_bynum(&ctx, &runner)
+    );
+    run_and_bail!(
+        errors,
+        "fell_core_approve_existing_member",
+        run_fellowship_core_approve_existing_member(&ctx, &runner)
     );
 }
 
@@ -953,6 +959,52 @@ async fn run_fellowship_inline_bynum(
 
     output.check_success()?;
     output.check_stdout_contains("executed successfully")?;
+    Ok(())
+}
+
+/// Regression: a fellowship referendum whose proposal calls
+/// `FellowshipCore::approve(Bob, 2)` on a *pre-existing* fellow.
+///
+/// `FellowshipCore::approve` reads Bob's rank from `FellowshipCollective`. The tool's
+/// storage injection must register Alice (the submitter) *additively*, leaving Bob's
+/// collective membership untouched. The earlier injection wiped all collective members
+/// before re-adding only Alice, which desynced `FellowshipCollective` from
+/// `FellowshipCore` and made the proposal fail at enactment with `FellowshipCore::Unranked`.
+///
+/// Bob is seeded into genesis (both pallets) by `raw_storage::fellowship_collective_override`.
+async fn run_fellowship_core_approve_existing_member(
+    ctx: &MultiChainTestContext,
+    runner: &ToolRunner,
+) -> Result<()> {
+    log::info!("[fell_core_approve_existing_member] Starting...");
+
+    // RetainAt2Dan is the track/origin authorized to approve a rank-2 member.
+    let submit_hex = call_data::generate_fellowship_core_approve_call_data(
+        &ctx.coll_client,
+        raw_storage::BOB_ACCOUNT_ID,
+        raw_storage::EXISTING_FELLOW_RANK,
+        "RetainAt2Dan",
+        "FellowshipOrigins",
+    )
+    .await?;
+
+    let port = port_allocator::next_port();
+    let output = runner
+        .run_test_referendum(ToolArgs {
+            fellowship_chain_url: Some(ctx.fellowship_url_with_block()),
+            call_to_create_fellowship_referendum: Some(submit_hex),
+            port: Some(port),
+            verbose: true,
+            ..Default::default()
+        })
+        .await?;
+
+    // With the additive injection Bob stays ranked, so approve succeeds and the
+    // referendum executes. With the old `$removePrefix` wipe this fails with
+    // `FellowshipCore.Unranked`.
+    output.check_success()?;
+    output.check_stdout_contains("executed successfully")?;
+    output.check_stdout_does_not_contain("Unranked")?;
     Ok(())
 }
 
