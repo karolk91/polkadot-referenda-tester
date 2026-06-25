@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  ALICE_ADDRESS,
-  FELLOWSHIP_STORAGE_INJECTION,
-} from '../utils/storage-constants';
+import { ALICE_ADDRESS, FELLOWSHIP_STORAGE_INJECTION } from '../utils/storage-constants';
 
 /**
  * Regression tests for the fellowship storage injection.
@@ -19,10 +16,7 @@ import {
  * the forked chain's existing fellowship members.
  */
 describe('FELLOWSHIP_STORAGE_INJECTION', () => {
-  const fellowship = FELLOWSHIP_STORAGE_INJECTION.FellowshipCollective as Record<
-    string,
-    unknown
-  >;
+  const fellowship = FELLOWSHIP_STORAGE_INJECTION.FellowshipCollective as Record<string, unknown>;
 
   it('does not wipe existing FellowshipCollective storage ($removePrefix)', () => {
     // The wipe is what desynced FellowshipCollective from FellowshipCore and
@@ -30,9 +24,7 @@ describe('FELLOWSHIP_STORAGE_INJECTION', () => {
     expect(fellowship).not.toHaveProperty('$removePrefix');
 
     // Belt-and-braces: no key anywhere in the injection requests a prefix removal.
-    expect(JSON.stringify(FELLOWSHIP_STORAGE_INJECTION)).not.toContain(
-      '$removePrefix'
-    );
+    expect(JSON.stringify(FELLOWSHIP_STORAGE_INJECTION)).not.toContain('$removePrefix');
   });
 
   it('additively registers Alice as a high-rank fellow', () => {
