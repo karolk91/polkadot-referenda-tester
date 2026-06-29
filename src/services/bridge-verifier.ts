@@ -57,9 +57,9 @@ export interface BridgeVerifierOptions {
 }
 
 /**
- * Reads events from BHP / BHK / AHK after a bridge delivery and reports whether the
- * happy-path markers fired. Designed to run AFTER `BridgeConnector.deliverPrepared()`
- * has completed (so BHK has dispatched and AHK has processed the inbound XCMP).
+ * Reads events from BHP / BHK / AHK after the bridge pump has delivered its messages
+ * and reports whether the happy-path markers fired (so BHK has dispatched and AHK has
+ * processed the inbound XCMP).
  */
 export class BridgeVerifier {
   private readonly logger: Logger;
@@ -187,23 +187,6 @@ export class BridgeVerifier {
       for (const reason of result.failureReasons) this.logger.error(`  - ${reason}`);
     }
   }
-}
-
-function countMarkers(
-  events: ParsedEvent[],
-  outboundPalletName: string,
-  destMessagesPalletName: string
-): BridgeMarkers {
-  const m: BridgeMarkers = {
-    messageAccepted: 0,
-    messagesReceived: 0,
-    xcmpMessageSent: 0,
-    messageQueueProcessedSuccess: 0,
-    messageQueueProcessedFailure: 0,
-    extrinsicFailed: 0,
-  };
-  accumulateMarkers(m, events, outboundPalletName, destMessagesPalletName);
-  return m;
 }
 
 function accumulateMarkers(

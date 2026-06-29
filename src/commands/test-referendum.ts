@@ -10,6 +10,24 @@ import {
 } from '../utils/chain-endpoint-parser';
 import { Logger } from '../utils/logger';
 
+const networkResolutionCache = new Map<string, Promise<ChainNetwork>>();
+
+/**
+ * Memoized {@link resolveNetworkUncached}. `isBridgedScenario`, `isCrossNetworkScenario`,
+ * `validateOptions`, and `testReferendum` all resolve the same fellowship + governance URLs,
+ * so without caching a single run repeats the (potentially WebSocket-backed) lookup several
+ * times per URL. Resolution is deterministic for a URL within a run, so caching the in-flight
+ * promise is safe and collapses those repeats to one lookup each.
+ */
+function resolveNetwork(input: string): Promise<ChainNetwork> {
+  let cached = networkResolutionCache.get(input);
+  if (cached === undefined) {
+    cached = resolveNetworkUncached(input);
+    networkResolutionCache.set(input, cached);
+  }
+  return cached;
+}
+
 /**
  * Resolve a chain's network the cheapest way possible: first try URL substring
  * inference (no I/O, works for mainnet `*.polkadot.io` hostnames), and fall back to
@@ -29,7 +47,7 @@ import { Logger } from '../utils/logger';
  * actually depend on the resolution should surface the resulting `'unknown'` as a
  * validation error.
  */
-async function resolveNetwork(input: string): Promise<ChainNetwork> {
+async function resolveNetworkUncached(input: string): Promise<ChainNetwork> {
   let bareUrl: string;
   try {
     bareUrl = parseEndpoint(input).url;

@@ -1,4 +1,5 @@
 import { type BridgeHandle, connectBridgeHubs } from '@acala-network/chopsticks-testing';
+import { fromHex, toHex } from '@polkadot-api/utils';
 import { ApiPromise, WsProvider } from '@polkadot/api';
 import { Keyring } from '@polkadot/keyring';
 import type { PolkadotClient } from 'polkadot-api';
@@ -69,19 +70,14 @@ export interface SeenBridgeMessage {
 }
 
 /**
- * Report returned by `pumpUntilQuiet`. `prepared` lists messages that the chopsticks
- * bridge handle delivered to BHK in the background while we drove Polkadot-side blocks.
- *
- * Kept for backward compat with the original prepare/deliver split; with chopsticks's
- * built-in connector, delivery happens automatically inside the pump and `prepared`
- * is the list of delivered messages.
+ * Report returned by `pumpUntilQuiet`. The chopsticks bridge handle delivers messages
+ * to BHK in the background while we drive Polkadot-side blocks, so every message counted
+ * here (`totalSeen`, grouped in `byLane`) was both observed on BHP and delivered to BHK.
  */
 export interface BridgePumpReport {
   totalSeen: number;
   rounds: number;
   byLane: Map<string, SeenBridgeMessage[]>;
-  /** Messages that were observed on BHP and (implicitly) delivered to BHK. */
-  prepared: SeenBridgeMessage[];
 }
 
 /**
@@ -214,22 +210,22 @@ export class BridgeConnector {
         Account: [[[alice.address], { providers: 1, data: { free: ALICE_DEFAULT_BALANCE } }]],
       },
     };
-    await this.kusama.bhk.manager.setStorageBatch(fundAlice);
-    await this.polkadot.bhp.manager.setStorageBatch(fundAlice);
+    await Promise.all([
+      this.kusama.bhk.manager.setStorageBatch(fundAlice),
+      this.polkadot.bhp.manager.setStorageBatch(fundAlice),
+    ]);
 
     // connectBridgeHubs expects polkadot.js ApiPromise instances. Construct them
     // against the chopsticks WS endpoints we already have.
     const bhpUrl = this.polkadot.bhp.manager.getContext().ws.endpoint;
     const bhkUrl = this.kusama.bhk.manager.getContext().ws.endpoint;
     this.logger.startSpinner('Connecting bridge relayer (Polkadot → Kusama)...');
-    this.bhpApi = await ApiPromise.create({
-      provider: new WsProvider(bhpUrl, 3_000),
-      noInitWarn: true,
-    });
-    this.bhkApi = await ApiPromise.create({
-      provider: new WsProvider(bhkUrl, 3_000),
-      noInitWarn: true,
-    });
+    const [bhpApi, bhkApi] = await Promise.all([
+      ApiPromise.create({ provider: new WsProvider(bhpUrl, 3_000), noInitWarn: true }),
+      ApiPromise.create({ provider: new WsProvider(bhkUrl, 3_000), noInitWarn: true }),
+    ]);
+    this.bhpApi = bhpApi;
+    this.bhkApi = bhkApi;
     this.bridgeHandle = await connectBridgeHubs(this.bhpApi, this.bhkApi, { signer: alice });
     this.logger.succeedSpinner(`Bridge relayer connected (signer=${alice.address})`);
   }
@@ -243,7 +239,6 @@ export class BridgeConnector {
     if (this.payloadCodec === null) await this.setUp();
 
     const byLane = new Map<string, SeenBridgeMessage[]>();
-    const prepared: SeenBridgeMessage[] = [];
     let totalSeen = 0;
     let consecutiveQuiet = 0;
     let round = 0;
@@ -303,21 +298,10 @@ export class BridgeConnector {
         list.push(msg);
         byLane.set(msg.laneHex, list);
         this.logOne(msg);
-        prepared.push(msg);
       }
     }
 
-    return { totalSeen, rounds: round + 1, byLane, prepared };
-  }
-
-  /**
-   * Backward-compat shim: in the previous architecture, callers ran a separate
-   * `deliverPrepared(report)` step after `pumpUntilQuiet()`. With chopsticks's
-   * built-in relayer, delivery happens automatically inside the pump; this method
-   * just reports the count.
-   */
-  async deliverPrepared(report: BridgePumpReport): Promise<{ delivered: number; failed: number }> {
-    return { delivered: report.prepared.length, failed: 0 };
+    return { totalSeen, rounds: round + 1, byLane };
   }
 
   /** Per-chain ParsedEvent log accumulated across every block the connector built. */
@@ -511,7 +495,7 @@ export class BridgeConnector {
 
   private makeSeen(laneHex: string, nonce: bigint, payload: unknown): SeenBridgeMessage {
     const rawBytes = extractPayloadBytes(payload);
-    const rawPayloadHex = toHex(rawBytes);
+    const rawPayloadHex = rawBytes ? toHex(rawBytes) : '0x';
     const seen: SeenBridgeMessage = { laneHex, nonce, rawPayloadHex };
     if (!this.payloadCodec) {
       seen.decodeError = 'payload codec not initialized';
@@ -558,20 +542,6 @@ function stringifyLane(laneId: unknown): string | null {
 function extractPayloadBytes(payload: unknown): Uint8Array | null {
   if (payload instanceof Uint8Array) return payload;
   if (payload && typeof (payload as any).asBytes === 'function') return (payload as any).asBytes();
-  if (typeof payload === 'string' && payload.startsWith('0x')) return hexToBytes(payload);
+  if (typeof payload === 'string' && payload.startsWith('0x')) return fromHex(payload);
   return null;
-}
-
-function toHex(bytes: Uint8Array | null): string {
-  if (!bytes) return '0x';
-  let s = '0x';
-  for (const b of bytes) s += b.toString(16).padStart(2, '0');
-  return s;
-}
-
-function hexToBytes(hex: string): Uint8Array {
-  const clean = hex.startsWith('0x') ? hex.slice(2) : hex;
-  const bytes = new Uint8Array(clean.length / 2);
-  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
-  return bytes;
 }

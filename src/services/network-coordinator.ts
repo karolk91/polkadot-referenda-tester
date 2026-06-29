@@ -692,21 +692,17 @@ export class NetworkCoordinator {
       );
       const connector = bridgeConnector;
 
-      this.logger.section('Bridge Pump (observe BHP outbound + prepare BHK)');
+      this.logger.section('Bridge Pump (observe BHP outbound, deliver to BHK)');
       const report = await connector.pumpUntilQuiet();
       this.logger.info(
-        `Bridge pump observed ${report.totalSeen} outbound message(s) across ${report.byLane.size} lane(s) over ${report.rounds} round(s); prepared ${report.prepared.length} for delivery`
+        `Bridge pump observed ${report.totalSeen} outbound message(s) across ${report.byLane.size} lane(s) over ${report.rounds} round(s)`
       );
 
-      if (report.prepared.length > 0) {
-        this.logger.section('Bridge Delivery (Phase 4: submit receive_messages_proof on BHK)');
-        const deliveryResult = await connector.deliverPrepared(report);
-        this.logger.info(
-          `Delivered ${deliveryResult.delivered}/${report.prepared.length} bridge message(s); ${deliveryResult.failed} failure(s)`
-        );
-
-        // Phase 4 end-to-end verification: confirm BHP MessageAccepted, BHK
-        // MessagesReceived, AHK MessageQueue.Processed{success:true} all fired.
+      if (report.totalSeen > 0) {
+        // The chopsticks connector delivered the messages to BHK during the pump above.
+        // Verify the end-to-end happy path: BHP MessageAccepted, BHK MessagesReceived,
+        // AHK MessageQueue.Processed{success:true} all fired.
+        this.logger.section('Bridge Delivery Verification');
         const verifier = new BridgeVerifier(this.logger, {
           outboundPalletName: 'BridgeKusamaMessages',
           destMessagesPalletName: 'BridgePolkadotMessages',
@@ -723,7 +719,7 @@ export class NetworkCoordinator {
         }
       } else {
         this.logger.info(
-          'No bridge messages prepared for delivery (fellowship referendum may not have produced one, or BHK not in topology).'
+          'No bridge messages observed (fellowship referendum may not have produced one, or BHK not in topology).'
         );
       }
 

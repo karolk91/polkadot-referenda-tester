@@ -1,10 +1,8 @@
-import { BuildBlockMode } from '@acala-network/chopsticks-core';
-import * as path from 'path';
 import type { PolkadotClient } from 'polkadot-api';
 import type { TestOptions } from '../types';
 import type { ParsedEndpoint } from '../utils/chain-endpoint-parser';
+import { buildChopsticksChainConfig, type StorageInjection } from '../utils/chopsticks-config';
 import type { Logger } from '../utils/logger';
-import { ALICE_ACCOUNT_INJECTION, FELLOWSHIP_STORAGE_INJECTION } from '../utils/storage-constants';
 import {
   type ChainInfo,
   type ChainNetwork,
@@ -295,45 +293,15 @@ export class ChainTopologyBuilder {
   buildConfig(
     endpoint: string,
     block?: number,
-    storageInjection?: 'fellowship' | 'alice-account',
+    storageInjection?: StorageInjection,
     userBaseConfig?: Record<string, unknown>
   ): Record<string, unknown> {
-    // Layering: tool defaults → user YAML overrides → tool mandatory settings →
-    // endpoint/block (always win). See bridge-topology-builder.ts for the same
-    // pattern with rationale comments.
-    const toolDefaults: Record<string, unknown> = {
-      db: path.join(process.cwd(), '.chopsticks-db'),
-      'runtime-log-level': 0,
-    };
-    const mandatory: Record<string, unknown> = {
-      endpoint,
-      'build-block-mode': BuildBlockMode.Manual,
-      'mock-signature-host': true,
-      'allow-unresolved-imports': true,
-    };
-    if (block !== undefined) {
-      mandatory.block = block;
-    }
-
-    const config: Record<string, unknown> = {
-      ...toolDefaults,
-      ...(userBaseConfig ?? {}),
-      ...mandatory,
-    };
-
     if (storageInjection === 'fellowship') {
-      const existing =
-        (userBaseConfig?.['import-storage'] as Record<string, unknown> | undefined) ?? {};
-      config['import-storage'] = { ...existing, ...FELLOWSHIP_STORAGE_INJECTION };
       this.logger.debug('Injecting fellowship storage for Alice account');
     } else if (storageInjection === 'alice-account') {
-      const existing =
-        (userBaseConfig?.['import-storage'] as Record<string, unknown> | undefined) ?? {};
-      config['import-storage'] = { ...existing, ...ALICE_ACCOUNT_INJECTION };
       this.logger.debug('Injecting Alice account with funds');
     }
-
-    return config;
+    return buildChopsticksChainConfig(endpoint, block, storageInjection, userBaseConfig, 0);
   }
 
   getRelayKey(network: ChainNetwork): string {

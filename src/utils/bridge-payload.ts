@@ -63,13 +63,6 @@ export class BridgePayloadCodec {
     const [universalDest, message] = this.codec.dec(bytes);
     return { universalDest, message };
   }
-
-  /**
-   * Encode a decoded payload back to the wire format. Round-trip stable.
-   */
-  encode(value: DecodedBridgeMessage): Uint8Array {
-    return this.codec.enc([value.universalDest, value.message]);
-  }
 }
 
 /**

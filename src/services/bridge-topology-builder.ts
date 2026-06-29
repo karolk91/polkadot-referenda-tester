@@ -1,8 +1,6 @@
-import { BuildBlockMode } from '@acala-network/chopsticks-core';
-import * as path from 'path';
 import type { ParsedEndpoint } from '../utils/chain-endpoint-parser';
+import { buildChopsticksChainConfig, type StorageInjection } from '../utils/chopsticks-config';
 import type { Logger } from '../utils/logger';
-import { ALICE_ACCOUNT_INJECTION, FELLOWSHIP_STORAGE_INJECTION } from '../utils/storage-constants';
 import { type ChainInfo, type ChainKind, fetchChainInfoFromEndpoint } from './chain-registry';
 
 /**
@@ -192,78 +190,20 @@ export class BridgeTopologyBuilder {
   }
 
   /**
-   * Per-chain Chopsticks config. Mirrors `ChainTopologyBuilder.buildConfig` with
-   * the same defaults; bridge-specific tests don't need anything different yet.
+   * Per-chain Chopsticks config. Uses {@link buildChopsticksChainConfig} (shared with
+   * `ChainTopologyBuilder`) with `runtime-log-level: 4` so the fellows debug runtime
+   * surfaces `log::*`. To use that debug runtime, point the corresponding `--*-url` at a
+   * chopsticks YAML config that sets
+   * `wasm-override: ./runtimes/debug/<chain>_runtime.compact.compressed.wasm`.
    */
   buildConfig(
     endpoint: string,
     block?: number,
-    storageInjection?: 'fellowship' | 'alice-account',
+    storageInjection?: StorageInjection,
     userBaseConfig?: Record<string, unknown>
   ): Record<string, unknown> {
-    // Layer order (highest precedence last wins):
-    //   1. tool defaults — db, runtime-log-level
-    //   2. user's YAML baseConfig — runtime-log-level override, wasm-override, etc.
-    //   3. tool-mandatory test-harness settings — build-block-mode/mock-signature-host
-    //      cannot be disabled by the user
-    //   4. explicit endpoint / block from the URL flag (always win)
-    //   5. import-storage — deep-merged: user's + tool's storage-injection combined
-    //
-    // To use the fellows debug runtime (so `runtime-log-level=4` surfaces `log::*`),
-    // point the corresponding `--*-url` at a chopsticks YAML config that sets
-    // `wasm-override: ./runtimes/debug/<chain>_runtime.compact.compressed.wasm`.
-    const toolDefaults: Record<string, unknown> = {
-      db: path.join(process.cwd(), '.chopsticks-db'),
-      'runtime-log-level': 4,
-    };
-
-    const mandatory: Record<string, unknown> = {
-      endpoint,
-      'build-block-mode': BuildBlockMode.Manual,
-      'mock-signature-host': true,
-      'allow-unresolved-imports': true,
-    };
-    if (block !== undefined) {
-      mandatory.block = block;
-    }
-
-    const config: Record<string, unknown> = {
-      ...toolDefaults,
-      ...(userBaseConfig ?? {}),
-      ...mandatory,
-    };
-
-    // Storage-injection merges with whatever the user's YAML put under import-storage.
-    const injected =
-      storageInjection === 'fellowship'
-        ? FELLOWSHIP_STORAGE_INJECTION
-        : storageInjection === 'alice-account'
-          ? ALICE_ACCOUNT_INJECTION
-          : undefined;
-    if (injected) {
-      const existing =
-        (userBaseConfig?.['import-storage'] as Record<string, unknown> | undefined) ?? {};
-      config['import-storage'] = mergeImportStorage(existing, injected as Record<string, unknown>);
-    }
-
-    return config;
+    return buildChopsticksChainConfig(endpoint, block, storageInjection, userBaseConfig, 4);
   }
-}
-
-/**
- * Shallow-merge two `import-storage` blocks (pallet-name → value). When both inputs
- * have the same pallet, the tool's injection wins for that pallet (so test mechanics
- * — e.g. funding Alice — are never silently disabled by a user-provided YAML).
- *
- * Deeper field-level merges (e.g. multiple entries on the same `Account` map) aren't
- * attempted — if the user needs richer control, they can put everything in their YAML
- * and skip the tool's `storageInjection`.
- */
-function mergeImportStorage(
-  user: Record<string, unknown>,
-  tool: Record<string, unknown>
-): Record<string, unknown> {
-  return { ...user, ...tool };
 }
 
 /**
