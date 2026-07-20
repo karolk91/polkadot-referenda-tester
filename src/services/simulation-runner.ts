@@ -1,4 +1,4 @@
-import type { SimulationResult, TestOptions } from '../types';
+import type { SimulationResult } from '../types';
 import type { SubstrateApi } from '../types/substrate-api';
 import type { Logger } from '../utils/logger';
 import type { ChopsticksManager } from './chopsticks-manager';

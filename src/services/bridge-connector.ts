@@ -1,7 +1,7 @@
 import { type BridgeHandle, connectBridgeHubs } from '@acala-network/chopsticks-testing';
-import { fromHex, toHex } from '@polkadot-api/utils';
 import { ApiPromise, WsProvider } from '@polkadot/api';
 import { Keyring } from '@polkadot/keyring';
+import { fromHex, toHex } from '@polkadot-api/utils';
 import type { PolkadotClient } from 'polkadot-api';
 import type { SubstrateApi } from '../types/substrate-api';
 import {

@@ -1,7 +1,7 @@
 import { setupNetworks } from '@acala-network/chopsticks-testing';
 import type { PolkadotClient } from 'polkadot-api';
 import type { ChopsticksConfig, TestOptions } from '../types';
-import { type ParsedEvent, serializeEventData } from '../utils/event-serializer';
+import { serializeEventData } from '../utils/event-serializer';
 import type { Logger } from '../utils/logger';
 import { FELLOWSHIP_STORAGE_INJECTION } from '../utils/storage-constants';
 import {

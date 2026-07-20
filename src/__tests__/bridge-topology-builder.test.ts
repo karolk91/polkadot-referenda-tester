@@ -195,7 +195,7 @@ describe('BridgeTopologyBuilder', () => {
           'extra_1',
         ].sort()
       );
-      expect((networkConfig['kusama'] as Record<string, unknown>).endpoint).toBe(
+      expect((networkConfig.kusama as Record<string, unknown>).endpoint).toBe(
         'wss://kusama-rpc.example'
       );
     });
