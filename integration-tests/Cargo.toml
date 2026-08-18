@@ -19,6 +19,10 @@ path = "tests/generate_chain_specs.rs"
 name = "approved_future_enactment"
 path = "tests/approved_future_enactment.rs"
 
+[[test]]
+name = "bake_raw_overrides"
+path = "tests/bake_raw_overrides.rs"
+
 [dependencies]
 anyhow = "1"
 env_logger = "0.11"
