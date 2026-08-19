@@ -230,6 +230,49 @@ describe('ReferendumSimulator', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════════
+  // verifyReferendumApprovalWithRetry() - postponed-nudge tolerance
+  // ═══════════════════════════════════════════════════════════════════════
+
+  describe('verifyReferendumApprovalWithRetry()', () => {
+    function makeSimulator(eventsPerBlock: Array<Array<{ section: string; method: string }>>) {
+      const logger = createSilentLogger();
+      const chopsticks = createMockChopsticks();
+      const api = createMockApi();
+      const simulator = new ReferendumSimulator(logger, chopsticks, api, false);
+      const fetchMock = vi.fn();
+      for (const events of eventsPerBlock) {
+        fetchMock.mockResolvedValueOnce(events);
+      }
+      (simulator as any).fetchBlockEvents = fetchMock;
+      return { simulator, chopsticks, fetchMock };
+    }
+
+    const confirmed = [{ section: 'Referenda', method: 'Confirmed', data: { index: 42 } }];
+    const sessionOnly = [{ section: 'Session', method: 'NewSession', data: {} }];
+
+    it('resolves without extra blocks when the nudge block confirms', async () => {
+      const { simulator, chopsticks } = makeSimulator([confirmed]);
+      await (simulator as any).verifyReferendumApprovalWithRetry(42);
+      expect(chopsticks.newBlock).not.toHaveBeenCalled();
+    });
+
+    it('builds extra blocks when the scheduler postponed the nudge past a session change', async () => {
+      // Block 1: session-change events only (nudge postponed), block 2: confirmation.
+      const { simulator, chopsticks } = makeSimulator([sessionOnly, confirmed]);
+      await (simulator as any).verifyReferendumApprovalWithRetry(42);
+      expect(chopsticks.newBlock).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws after exhausting the extra blocks when no confirmation appears', async () => {
+      const { simulator, chopsticks } = makeSimulator([sessionOnly, sessionOnly, sessionOnly]);
+      await expect((simulator as any).verifyReferendumApprovalWithRetry(42)).rejects.toThrow(
+        'was not confirmed or approved after nudge'
+      );
+      expect(chopsticks.newBlock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
   // parseOriginString() - origin format parsing
   // ═══════════════════════════════════════════════════════════════════════
 
