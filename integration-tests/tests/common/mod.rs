@@ -33,6 +33,7 @@ pub mod call_data;
 pub mod config;
 pub mod context;
 pub mod extrinsic_submitter;
+pub mod hrmp;
 pub mod network;
 pub mod port_allocator;
 pub mod raw_storage;

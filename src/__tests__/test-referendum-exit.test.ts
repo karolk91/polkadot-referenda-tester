@@ -2,10 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mockTestWithFellowship = vi.fn();
 
+// `new vi.fn(...)` requires a constructible function — arrow functions throw.
+// Declare a named function so biome's useArrowFunction rule doesn't try to rewrite it.
+function MockNetworkCoordinator() {
+  return { testWithFellowship: mockTestWithFellowship };
+}
+
 vi.mock('../services/network-coordinator', () => ({
-  NetworkCoordinator: vi.fn(function () {
-    return { testWithFellowship: mockTestWithFellowship };
-  }),
+  NetworkCoordinator: vi.fn(MockNetworkCoordinator),
 }));
 
 vi.mock('../utils/chain-endpoint-parser', () => ({

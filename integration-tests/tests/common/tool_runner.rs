@@ -21,6 +21,12 @@ pub struct ToolArgs {
     pub call_to_note_preimage_for_governance_referendum: Option<String>,
     pub call_to_create_fellowship_referendum: Option<String>,
     pub call_to_note_preimage_for_fellowship_referendum: Option<String>,
+    // Bridge-scenario chain URLs (only relevant when fellowship is on Polkadot
+    // Collectives and governance is on Kusama Asset Hub).
+    pub asset_hub_polkadot_url: Option<String>,
+    pub bridge_hub_polkadot_url: Option<String>,
+    pub asset_hub_kusama_url: Option<String>,
+    pub bridge_hub_kusama_url: Option<String>,
     pub verbose: bool,
 }
 
@@ -130,8 +136,25 @@ impl ToolRunner {
         Self { project_dir }
     }
 
-    /// Run `yarn cli test` with the given arguments.
+    /// Run `yarn cli test` with the given arguments and the default timeout.
     pub async fn run_test_referendum(&self, args: ToolArgs) -> Result<ToolOutput> {
+        self.run_test_referendum_with_timeout(
+            args,
+            Duration::from_secs(TOOL_EXECUTION_TIMEOUT_SECS),
+        )
+        .await
+    }
+
+    /// Run `yarn cli test` with the given arguments and an explicit timeout.
+    ///
+    /// The bridged scenario forks five chains and pumps the bridge to
+    /// delivery, which can exceed the default single-network budget — callers
+    /// pass a larger timeout there.
+    pub async fn run_test_referendum_with_timeout(
+        &self,
+        args: ToolArgs,
+        timeout: Duration,
+    ) -> Result<ToolOutput> {
         let mut cmd = tokio::process::Command::new("yarn");
         cmd.current_dir(&self.project_dir).arg("cli").arg("test");
 
@@ -173,23 +196,37 @@ impl ToolRunner {
             cmd.arg("--call-to-note-preimage-for-fellowship-referendum")
                 .arg(hex);
         }
+        if let Some(ref url) = args.asset_hub_polkadot_url {
+            cmd.arg("--asset-hub-polkadot-url").arg(url);
+        }
+        if let Some(ref url) = args.bridge_hub_polkadot_url {
+            cmd.arg("--bridge-hub-polkadot-url").arg(url);
+        }
+        if let Some(ref url) = args.asset_hub_kusama_url {
+            cmd.arg("--asset-hub-kusama-url").arg(url);
+        }
+        if let Some(ref url) = args.bridge_hub_kusama_url {
+            cmd.arg("--bridge-hub-kusama-url").arg(url);
+        }
         if args.verbose {
             cmd.arg("--verbose");
         }
 
-        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        // `kill_on_drop` reaps the child yarn process if the run times out or the
+        // test task is dropped — otherwise a leaked yarn holds the chopsticks port
+        // (9000+) and breaks subsequent runs. tokio defaults to `false`.
+        cmd.stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
 
         log::info!("Running tool: {cmd:?}");
 
         let child = cmd.spawn().context("Failed to spawn yarn cli process")?;
 
-        let output = tokio::time::timeout(
-            Duration::from_secs(TOOL_EXECUTION_TIMEOUT_SECS),
-            child.wait_with_output(),
-        )
-        .await
-        .context("Tool execution timed out")?
-        .context("Tool process failed")?;
+        let output = tokio::time::timeout(timeout, child.wait_with_output())
+            .await
+            .context("Tool execution timed out")?
+            .context("Tool process failed")?;
 
         let tool_output = ToolOutput {
             exit_code: output.status.code().unwrap_or(-1),

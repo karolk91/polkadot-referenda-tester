@@ -6,6 +6,10 @@
 //! tests load these cached specs via `with_chain_spec_path()` and skip the
 //! expensive WASM execution + raw conversion (~3-5 min per chain).
 //!
+//! The network builders in `common::config` prefer cached specs when present,
+//! so regenerating (e.g. after a runtime bump) requires deleting the files in
+//! `chain-specs/` first — otherwise this test re-saves the stale cache.
+//!
 //! Usage:
 //!   POLKADOT_BINARY_PATH=../bin/polkadot \
 //!   POLKADOT_PARACHAIN_BINARY_PATH=../bin/polkadot-parachain \
@@ -81,10 +85,13 @@ async fn generate_chain_specs() {
 
     log::info!("Output directory: {}", out_dir.display());
 
-    // ── Polkadot (relay + Asset Hub + Collectives) ──────────────────────
+    // ── Polkadot (relay + Asset Hub + Collectives + Bridge Hub) ─────────
+    // The superset network is used so the cached relay spec registers every
+    // parachain any test needs; tests that don't spawn the Bridge Hub
+    // leave para 1002 idle.
     log::info!("Spawning Polkadot network to generate chain specs...");
-    let polkadot_config = config::build_polkadot_with_system_parachains()
-        .expect("failed to build Polkadot network config");
+    let polkadot_config =
+        config::build_polkadot_bridged().expect("failed to build Polkadot network config");
     let polkadot_network = initialize_network(polkadot_config)
         .await
         .expect("failed to spawn Polkadot network");
@@ -111,15 +118,22 @@ async fn generate_chain_specs() {
         &out_dir,
     )
     .expect("failed to save Collectives spec");
+    save_spec(
+        base_dir,
+        "bridge-hub-polkadot-local",
+        "bridge-hub-polkadot-local",
+        &out_dir,
+    )
+    .expect("failed to save Bridge Hub Polkadot spec");
 
     // Drop Polkadot network before spawning Kusama
     drop(polkadot_network);
     log::info!("Polkadot network dropped.");
 
-    // ── Kusama (relay + Asset Hub) ──────────────────────────────────────
+    // ── Kusama (relay + Asset Hub + Bridge Hub) ─────────────────────────
     log::info!("Spawning Kusama network to generate chain specs...");
     let kusama_config =
-        config::build_kusama_with_asset_hub().expect("failed to build Kusama network config");
+        config::build_kusama_bridged().expect("failed to build Kusama network config");
     let kusama_network = initialize_network(kusama_config)
         .await
         .expect("failed to spawn Kusama network");
@@ -139,6 +153,13 @@ async fn generate_chain_specs() {
         &out_dir,
     )
     .expect("failed to save Kusama Asset Hub spec");
+    save_spec(
+        base_dir,
+        "bridge-hub-kusama-local",
+        "bridge-hub-kusama-local",
+        &out_dir,
+    )
+    .expect("failed to save Bridge Hub Kusama spec");
 
     drop(kusama_network);
     log::info!("Kusama network dropped.");

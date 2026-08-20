@@ -1,10 +1,8 @@
-import { BuildBlockMode } from '@acala-network/chopsticks-core';
-import * as path from 'path';
 import type { PolkadotClient } from 'polkadot-api';
 import type { TestOptions } from '../types';
 import type { ParsedEndpoint } from '../utils/chain-endpoint-parser';
+import { buildChopsticksChainConfig, type StorageInjection } from '../utils/chopsticks-config';
 import type { Logger } from '../utils/logger';
-import { ALICE_ACCOUNT_INJECTION, FELLOWSHIP_STORAGE_INJECTION } from '../utils/storage-constants';
 import {
   type ChainInfo,
   type ChainNetwork,
@@ -16,8 +14,11 @@ import {
 export interface TopologyConfig {
   governance?: string;
   governanceBlock?: number;
+  /** Extra chopsticks config from a YAML file for the governance chain (wasm-override, …). */
+  governanceBaseConfig?: Record<string, unknown>;
   fellowship?: string;
   fellowshipBlock?: number;
+  fellowshipBaseConfig?: Record<string, unknown>;
   additionalChains?: ParsedEndpoint[];
 }
 
@@ -25,8 +26,10 @@ export class ChainTopologyBuilder {
   private logger: Logger;
   private governanceEndpoint?: string;
   private governanceBlock?: number;
+  private governanceBaseConfig?: Record<string, unknown>;
   private fellowshipEndpoint?: string;
   private fellowshipBlock?: number;
+  private fellowshipBaseConfig?: Record<string, unknown>;
   private additionalChainEndpoints: ParsedEndpoint[];
 
   private _governanceChain?: ChainInfo;
@@ -37,8 +40,10 @@ export class ChainTopologyBuilder {
     this.logger = logger;
     this.governanceEndpoint = config.governance;
     this.governanceBlock = config.governanceBlock;
+    this.governanceBaseConfig = config.governanceBaseConfig;
     this.fellowshipEndpoint = config.fellowship;
     this.fellowshipBlock = config.fellowshipBlock;
+    this.fellowshipBaseConfig = config.fellowshipBaseConfig;
     this.additionalChainEndpoints = config.additionalChains || [];
   }
 
@@ -187,12 +192,14 @@ export class ChainTopologyBuilder {
       networkConfig[governanceKey] = this.buildConfig(
         this._governanceChain.endpoint,
         this.governanceBlock,
-        governanceInjection
+        governanceInjection,
+        this.governanceBaseConfig
       );
       networkConfig[fellowshipKey] = this.buildConfig(
         this._fellowshipChain.endpoint,
         this.fellowshipBlock,
-        fellowshipInjection
+        fellowshipInjection,
+        this.fellowshipBaseConfig
       );
     } else {
       const relayChain = governanceIsRelay ? this._governanceChain : this._fellowshipChain;
@@ -200,6 +207,12 @@ export class ChainTopologyBuilder {
 
       const relayBlock = governanceIsRelay ? this.governanceBlock : this.fellowshipBlock;
       const parachainBlock = governanceIsRelay ? this.fellowshipBlock : this.governanceBlock;
+      const relayBaseConfig = governanceIsRelay
+        ? this.governanceBaseConfig
+        : this.fellowshipBaseConfig;
+      const parachainBaseConfig = governanceIsRelay
+        ? this.fellowshipBaseConfig
+        : this.governanceBaseConfig;
 
       const relayKey = this.getRelayKey(relayChain.network);
       const parachainKey = governanceIsRelay ? 'fellowship' : 'governance';
@@ -210,11 +223,17 @@ export class ChainTopologyBuilder {
       const relayInjection = governanceIsRelay ? governanceInjection : fellowshipInjection;
       const parachainInjection = governanceIsRelay ? fellowshipInjection : governanceInjection;
 
-      networkConfig[relayKey] = this.buildConfig(relayChain.endpoint, relayBlock, relayInjection);
+      networkConfig[relayKey] = this.buildConfig(
+        relayChain.endpoint,
+        relayBlock,
+        relayInjection,
+        relayBaseConfig
+      );
       networkConfig[parachainKey] = this.buildConfig(
         parachain.endpoint,
         parachainBlock,
-        parachainInjection
+        parachainInjection,
+        parachainBaseConfig
       );
     }
 
@@ -259,7 +278,8 @@ export class ChainTopologyBuilder {
       }
 
       const block = this.additionalChainEndpoints[chainIndex]?.block;
-      networkConfig[key] = this.buildConfig(chain.endpoint, block);
+      const baseConfig = this.additionalChainEndpoints[chainIndex]?.baseConfig;
+      networkConfig[key] = this.buildConfig(chain.endpoint, block, undefined, baseConfig);
       usedEndpoints.add(chain.endpoint);
       chainToNetworkKey.set(chain.label, key);
       this.logger.debug(
@@ -273,30 +293,15 @@ export class ChainTopologyBuilder {
   buildConfig(
     endpoint: string,
     block?: number,
-    storageInjection?: 'fellowship' | 'alice-account'
+    storageInjection?: StorageInjection,
+    userBaseConfig?: Record<string, unknown>
   ): Record<string, unknown> {
-    const config: Record<string, unknown> = {
-      endpoint,
-      db: path.join(process.cwd(), '.chopsticks-db'),
-      'build-block-mode': BuildBlockMode.Manual,
-      'mock-signature-host': true,
-      'allow-unresolved-imports': true,
-      'runtime-log-level': 0,
-    };
-
-    if (block !== undefined) {
-      config.block = block;
-    }
-
     if (storageInjection === 'fellowship') {
-      config['import-storage'] = FELLOWSHIP_STORAGE_INJECTION;
       this.logger.debug('Injecting fellowship storage for Alice account');
     } else if (storageInjection === 'alice-account') {
-      config['import-storage'] = ALICE_ACCOUNT_INJECTION;
       this.logger.debug('Injecting Alice account with funds');
     }
-
-    return config;
+    return buildChopsticksChainConfig(endpoint, block, storageInjection, userBaseConfig, 0);
   }
 
   getRelayKey(network: ChainNetwork): string {
