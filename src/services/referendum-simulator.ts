@@ -150,7 +150,9 @@ export class ReferendumSimulator {
       };
     } catch (error) {
       this.logger.failSpinner('Failed to force referendum execution');
-      throw new Error('Failed to force referendum execution', { cause: error });
+      throw new Error(`Failed to force referendum execution: ${(error as Error).message}`, {
+        cause: error,
+      });
     }
   }
 
@@ -231,10 +233,7 @@ export class ReferendumSimulator {
       await this.chopsticks.newBlock();
       this.logger.succeedSpinner('Referendum nudged');
 
-      this.verifyReferendumApproval(
-        await this.fetchBlockEvents(Number(await this.api.query.System.Number.getValue())),
-        referendum.id
-      );
+      await this.verifyReferendumApprovalWithRetry(referendum.id);
     } else {
       this.logger.info(
         `Referendum #${referendum.id} is already approved on-chain - skipping nudge and moving the existing scheduled enactment forward`
@@ -263,9 +262,33 @@ export class ReferendumSimulator {
   }
 
   /**
-   * Verify that the nudge block produced Confirmed/Approved events for our specific referendum.
+   * Verify that nudging produced Confirmed/Approved events for our specific referendum.
    * This proves the referendum we manipulated was actually approved by the runtime.
+   *
+   * When the nudge block coincides with a session change, the scheduler can run
+   * out of `on_initialize` weight and silently postpone the nudge task to a
+   * later block, so a few extra blocks are built before giving up.
    */
+  private async verifyReferendumApprovalWithRetry(referendumId: number): Promise<void> {
+    const maxExtraBlocks = 2;
+    let events = await this.fetchBlockEvents(Number(await this.api.query.System.Number.getValue()));
+
+    for (let extra = 0; extra <= maxExtraBlocks; extra++) {
+      try {
+        this.verifyReferendumApproval(events, referendumId);
+        return;
+      } catch (error) {
+        if (extra === maxExtraBlocks) throw error;
+        this.logger.info(
+          `Referendum #${referendumId} not yet confirmed in this block ` +
+            `(scheduler may have postponed the nudge past a session change) — building another block`
+        );
+        await this.chopsticks.newBlock();
+        events = await this.fetchBlockEvents(Number(await this.api.query.System.Number.getValue()));
+      }
+    }
+  }
+
   private verifyReferendumApproval(nudgeEvents: ParsedEvent[], referendumId: number): void {
     const palletName = this.getReferendaPalletName();
 

@@ -145,12 +145,16 @@ export function parseBlockEvent(event: unknown): ParsedEvent {
     }
   }
 
-  // Final fallback: direct section/method properties
+  // Final fallback: direct section/method/data properties (used by tests + some
+  // older format paths that surface flat {section, method, data} records).
   if (section === 'unknown' && eventRecord.section) {
     section = String(eventRecord.section);
   }
   if (method === 'unknown' && eventRecord.method) {
     method = String(eventRecord.method);
+  }
+  if (data === null && 'data' in eventRecord) {
+    data = eventRecord.data;
   }
 
   return { section, method, data };

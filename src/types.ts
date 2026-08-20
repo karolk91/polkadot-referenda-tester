@@ -16,6 +16,17 @@ export interface TestOptions {
   callToNotePreimageForGovernanceReferendum?: string; // Hex string of call to note preimage for governance referendum
   callToCreateFellowshipReferendum?: string; // Hex string of call to create fellowship referendum
   callToNotePreimageForFellowshipReferendum?: string; // Hex string of call to note preimage for fellowship referendum
+  // Bridge options. The bridged scenario is auto-detected from URL networks:
+  //   --fellowship-chain-url on Polkadot + --governance-chain-url on Kusama → bridged.
+  // When bridged, the AHK URL defaults from --governance-chain-url; explicit override below.
+  //
+  // Relays (and any other observable chains) go in --additional-chains; the tool
+  // auto-classifies each entry's network + relay-ness from the URL.
+  assetHubPolkadotUrl?: string; // AHP — required when bridged
+  bridgeHubPolkadotUrl?: string; // BHP — required when bridged
+  assetHubKusamaUrl?: string; // AHK override; defaults from --governance-chain-url when bridged
+  bridgeHubKusamaUrl?: string; // BHK — required when bridged
+  bridgePumpRounds?: string; // Max rounds the bridge connector pumps before giving up
 }
 
 export interface ReferendumInfo {

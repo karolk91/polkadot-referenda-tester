@@ -110,27 +110,36 @@ jobs:
           shared-key: integration-tests
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Compile integration test binary
+      - name: Compile integration test binaries
         run: |
           cd integration-tests
-          cargo test --no-run --test tests --message-format=json 2>build.log | \
-            jq -r 'select(.reason == "compiler-artifact" and .target.name == "tests" and .executable != null) | .executable' | \
-            tail -1 > binary_path.txt
+          compile_test() {
+            local target="$1" output="$2"
+            cargo test --no-run --test "${target}" --message-format=json 2>>build.log | \
+              jq -r --arg t "${target}" 'select(.reason == "compiler-artifact" and .target.name == $t and .executable != null) | .executable' | \
+              tail -1 > binary_path.txt
+            local binary_path
+            binary_path=$(cat binary_path.txt)
+            if [ -z "${binary_path}" ] || [ ! -f "${binary_path}" ]; then
+              echo "ERROR: Failed to find ${target} test binary"
+              cat build.log
+              exit 1
+            fi
+            echo "${target} binary: ${binary_path}"
+            ls -lh "${binary_path}"
+            cp "${binary_path}" "${output}"
+          }
+          compile_test tests test-binary
+          compile_test bridged bridged-test-binary
           cat build.log
-          BINARY_PATH=$(cat binary_path.txt)
-          if [ -z "${BINARY_PATH}" ] || [ ! -f "${BINARY_PATH}" ]; then
-            echo "ERROR: Failed to find test binary"
-            exit 1
-          fi
-          echo "Test binary: ${BINARY_PATH}"
-          ls -lh "${BINARY_PATH}"
-          cp "${BINARY_PATH}" test-binary
 
-      - name: Upload test binary
+      - name: Upload test binaries
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: test-binary
-          path: integration-tests/test-binary
+          path: |
+            integration-tests/test-binary
+            integration-tests/bridged-test-binary
           retention-days: 1
           compression-level: 6
 
@@ -141,7 +150,9 @@ jobs:
     needs: build
 
     strategy:
-      fail-fast: true
+      # Let every suite reach its own verdict — a single failing suite
+      # cancelling the rest hides whether the others pass.
+      fail-fast: false
       matrix:
         suite:
           - name: polkadot-governance
@@ -154,6 +165,12 @@ jobs:
             filter: kusama_governance_all_tracks
           - name: kusama-fellowship
             filter: kusama_fellowship_all_tracks
+          # Polkadot->Kusama bridged scenario: spawns both ecosystems
+          # locally (relay + AH + Collectives + BH / relay + AH + BH), no
+          # public RPCs. Lives in its own test target, hence its own binary.
+          - name: bridged
+            filter: bridged_fellowship_by_id
+            binary: bridged-test-binary
 
     name: ${{ matrix.suite.name }}
 
@@ -211,9 +228,10 @@ jobs:
       # --- Run tests (using pre-compiled binary + committed chain specs) ---
       - name: Run ${{ matrix.suite.name }} tests
         run: |
-          chmod +x integration-tests/test-binary
-          integration-tests/test-binary "${TEST_FILTER}" --nocapture
+          chmod +x "integration-tests/${TEST_BINARY}"
+          "integration-tests/${TEST_BINARY}" "${TEST_FILTER}" --nocapture
         env:
+          TEST_BINARY: ${{ matrix.suite.binary || 'test-binary' }}
           TEST_FILTER: ${{ matrix.suite.filter }}
           POLKADOT_BINARY_PATH: ${{ env.BIN_DIR }}/polkadot
           POLKADOT_PARACHAIN_BINARY_PATH: ${{ env.BIN_DIR }}/polkadot-parachain
