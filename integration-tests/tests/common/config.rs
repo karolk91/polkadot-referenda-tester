@@ -544,15 +544,20 @@ fn build_kusama_network(with_bridge_hub: bool) -> anyhow::Result<NetworkConfig> 
                 r.with_chain_spec_runtime(url.as_str(), None)
                     .with_genesis_overrides(relay_genesis_overrides())
             };
+            // Node names must be unique ACROSS networks, not just within one:
+            // zombienet derives each node's libp2p key from its name, so a
+            // Kusama "alice" running next to a Polkadot "alice" gets the same
+            // peer id and the two networks poison each other's peer discovery
+            // (nodes stall at 0 peers). Hence the -kusama suffixes here.
             r.with_raw_spec_override(raw_storage::fellowship_collective_override())
                 .with_validator(|node| {
-                    node.with_name("alice").with_args(vec![Arg::Option(
+                    node.with_name("alice-kusama").with_args(vec![Arg::Option(
                         "--state-pruning".into(),
                         "archive".into(),
                     )])
                 })
                 .with_validator(|node| {
-                    node.with_name("bob").with_args(vec![Arg::Option(
+                    node.with_name("bob-kusama").with_args(vec![Arg::Option(
                         "--state-pruning".into(),
                         "archive".into(),
                     )])
@@ -560,7 +565,7 @@ fn build_kusama_network(with_bridge_hub: bool) -> anyhow::Result<NetworkConfig> 
                 // See the Polkadot relay: one validator per parachain core, or
                 // the extra core never gets a backing group.
                 .with_validator(|node| {
-                    node.with_name("charlie").with_args(vec![Arg::Option(
+                    node.with_name("charlie-kusama").with_args(vec![Arg::Option(
                         "--state-pruning".into(),
                         "archive".into(),
                     )])
@@ -583,7 +588,7 @@ fn build_kusama_network(with_bridge_hub: bool) -> anyhow::Result<NetworkConfig> 
             p.with_raw_spec_override(raw_storage::ah_migrator_override())
                 .cumulus_based(true)
                 .with_collator(|c| {
-                    c.with_name("asset-hub-collator")
+                    c.with_name("asset-hub-kusama-collator")
                         .with_command(para_binary.as_str())
                         .with_args(vec![
                             Arg::Option("--authoring".into(), "slot-based".into()),

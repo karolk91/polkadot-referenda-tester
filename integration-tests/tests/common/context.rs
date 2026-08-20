@@ -186,13 +186,13 @@ pub struct KusamaTestContext {
 impl KusamaTestContext {
     /// Build context from a running Kusama zombienet network.
     pub async fn from_network(network: &Network<LocalFileSystem>) -> Result<Self> {
-        let alice = network.get_node("alice")?;
+        let alice = network.get_node("alice-kusama")?;
         alice
             .wait_metric(BEST_BLOCK_METRIC, |b| b > 5.0)
             .await
             .map_err(|e| anyhow::anyhow!("Kusama relay not producing blocks: {e}"))?;
 
-        let ah_collator = network.get_node("asset-hub-collator")?;
+        let ah_collator = network.get_node("asset-hub-kusama-collator")?;
         ah_collator
             .wait_metric(BEST_BLOCK_METRIC, |b| b > 5.0)
             .await

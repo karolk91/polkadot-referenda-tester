@@ -120,8 +120,8 @@ impl BridgedContext {
             node_ready(polkadot, "asset-hub-collator"),
             node_ready(polkadot, "collectives-collator"),
             node_ready(polkadot, "bridge-hub-polkadot-collator"),
-            node_ready(kusama, "alice"),
-            node_ready(kusama, "asset-hub-collator"),
+            node_ready(kusama, "alice-kusama"),
+            node_ready(kusama, "asset-hub-kusama-collator"),
             node_ready(kusama, "bridge-hub-kusama-collator"),
         )?;
 
@@ -140,7 +140,7 @@ impl BridgedContext {
             .await
             .map_err(|e| anyhow::anyhow!("subxt connect to Polkadot relay failed: {e}"))?;
         let kusama_relay_client = kusama
-            .get_node("alice")?
+            .get_node("alice-kusama")?
             .wait_client::<PolkadotConfig>()
             .await
             .map_err(|e| anyhow::anyhow!("subxt connect to Kusama relay failed: {e}"))?;

@@ -150,7 +150,9 @@ jobs:
     needs: build
 
     strategy:
-      fail-fast: true
+      # Let every suite reach its own verdict — a single failing suite
+      # cancelling the rest hides whether the others pass.
+      fail-fast: false
       matrix:
         suite:
           - name: polkadot-governance
