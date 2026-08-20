@@ -18,6 +18,10 @@ const FELLOWSHIP_PASSING_BARE_AYES = 100;
 /** High rank-weighted support for fellowship passing tally */
 const FELLOWSHIP_PASSING_AYES = 1000;
 
+function isSchedulerDispatched(event: ParsedEvent): boolean {
+  return event.section === 'Scheduler' && event.method === 'Dispatched';
+}
+
 /** Known governance origin variants */
 const GOVERNANCE_ORIGINS = new Set([
   'WhitelistedCaller',
@@ -253,10 +257,26 @@ export class ReferendumSimulator {
     this.logger.startSpinner('Creating block to execute proposal...');
     await this.chopsticks.newBlock();
 
-    const executionBlock = Number(await this.api.query.System.Number.getValue());
-    this.logger.succeedSpinner(`Proposal executed at block ${executionBlock}`);
+    let executionBlock = Number(await this.api.query.System.Number.getValue());
+    const events = [...(await this.fetchBlockEvents(executionBlock))];
 
-    const events = await this.fetchBlockEvents(executionBlock);
+    // Same session-change hazard as the nudge (see
+    // `verifyReferendumApprovalWithRetry`): when the execution block coincides
+    // with a session change, the session/era processing can starve the
+    // scheduler of `on_initialize` weight and the relocated task is silently
+    // postponed, so the `Scheduler.Dispatched` event lands in a later block.
+    const maxExtraBlocks = 2;
+    for (let extra = 0; extra < maxExtraBlocks && !events.some(isSchedulerDispatched); extra++) {
+      this.logger.info(
+        'No Scheduler.Dispatched event in the execution block ' +
+          '(scheduler may have postponed the task past a session change) — building another block'
+      );
+      await this.chopsticks.newBlock();
+      executionBlock = Number(await this.api.query.System.Number.getValue());
+      events.push(...(await this.fetchBlockEvents(executionBlock)));
+    }
+
+    this.logger.succeedSpinner(`Proposal executed at block ${executionBlock}`);
 
     return { events, executionBlock, scheduledBlock, scheduledTaskIndex, scheduledTaskId };
   }

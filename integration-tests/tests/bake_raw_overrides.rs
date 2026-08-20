@@ -10,7 +10,13 @@
 //! So every key an override injects must already be present in the committed spec with
 //! the same value. This tool keeps them in sync: it applies the same override maps the
 //! network builders in `common::config` use, per spec, and rewrites the spec in place.
-//! Re-run it whenever a `raw_storage` override gains or changes a key.
+//!
+//! For PARACHAIN specs this must be a no-op: the cached relay spec registers each
+//! parachain's genesis head, so mutating a parachain spec after generation desyncs it
+//! from the relay and the parachain never produces blocks ("Failed to get header for
+//! included block" in the collator log). When a `raw_storage` override gains or changes
+//! a key, regenerate all specs via `generate_chain_specs` (which applies the overrides
+//! before the relay registration is computed) and then re-run this tool as a check.
 //!
 //! Unlike `generate_chain_specs`, this needs no binaries and spawns no network.
 //!

@@ -273,6 +273,67 @@ describe('ReferendumSimulator', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════════
+  // scheduleAndExecuteProposal() - postponed-enactment tolerance
+  // ═══════════════════════════════════════════════════════════════════════
+
+  describe('scheduleAndExecuteProposal()', () => {
+    function makeSimulator(eventsPerBlock: Array<Array<{ section: string; method: string }>>) {
+      const logger = createSilentLogger();
+      const chopsticks = createMockChopsticks();
+      const api = createMockApi();
+      const simulator = new ReferendumSimulator(logger, chopsticks, api, false);
+      (simulator as any).scheduler = {
+        moveScheduledCallToNextBlock: vi
+          .fn()
+          .mockResolvedValue({ block: 121, taskIndex: 0, taskId: undefined }),
+      };
+      const fetchMock = vi.fn();
+      for (const events of eventsPerBlock) {
+        fetchMock.mockResolvedValueOnce(events);
+      }
+      (simulator as any).fetchBlockEvents = fetchMock;
+      return { simulator, chopsticks };
+    }
+
+    // Factories, not shared arrays: the production code accumulates events by
+    // pushing into the fetched array, so a shared fixture would leak state
+    // between tests.
+    const dispatched = () => [{ section: 'Scheduler', method: 'Dispatched', data: {} }];
+    const sessionOnly = () => [{ section: 'Session', method: 'NewSession', data: {} }];
+
+    it('returns the execution block events when the task dispatches immediately', async () => {
+      const { simulator, chopsticks } = makeSimulator([dispatched()]);
+      const result = await (simulator as any).scheduleAndExecuteProposal(
+        makeReferendum(),
+        true // skipNudge — enactment phase only
+      );
+      expect(chopsticks.newBlock).toHaveBeenCalledTimes(1);
+      expect(result.events).toHaveLength(1);
+    });
+
+    it('builds extra blocks when the scheduler postponed the enactment past a session change', async () => {
+      const { simulator, chopsticks } = makeSimulator([sessionOnly(), dispatched()]);
+      const result = await (simulator as any).scheduleAndExecuteProposal(makeReferendum(), true);
+      expect(chopsticks.newBlock).toHaveBeenCalledTimes(2);
+      const sections = result.events.map((e: any) => e.section);
+      expect(sections).toContain('Scheduler');
+    });
+
+    it('stops after the bounded extra blocks even without a dispatch', async () => {
+      const { simulator, chopsticks } = makeSimulator([
+        sessionOnly(),
+        sessionOnly(),
+        sessionOnly(),
+      ]);
+      const result = await (simulator as any).scheduleAndExecuteProposal(makeReferendum(), true);
+      // 1 execution block + 2 extra blocks; the result checker downstream
+      // reports the missing dispatch as the failure.
+      expect(chopsticks.newBlock).toHaveBeenCalledTimes(3);
+      expect(result.events.every((e: any) => e.section !== 'Scheduler')).toBe(true);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
   // parseOriginString() - origin format parsing
   // ═══════════════════════════════════════════════════════════════════════
 
