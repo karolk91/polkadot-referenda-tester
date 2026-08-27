@@ -52,7 +52,7 @@ Recognize this from the user's request when they mention: "bridge", "bridged", "
 - Governance: `wss://asset-hub-polkadot-rpc.n.dwellir.com`
 - Fellowship: `wss://polkadot-collectives-rpc.polkadot.io`
 - All additional chains value:
-  `wss://polkadot-rpc.n.dwellir.com,wss://asset-hub-polkadot-rpc.n.dwellir.com,wss://polkadot-bridge-hub-rpc.polkadot.io,wss://polkadot-collectives-rpc.polkadot.io,wss://polkadot-coretime-rpc.polkadot.io,wss://polkadot-people-rpc.polkadot.io`
+  `wss://polkadot-rpc.n.dwellir.com,wss://asset-hub-polkadot-rpc.n.dwellir.com,wss://polkadot-bridge-hub-rpc.polkadot.io,wss://polkadot-collectives-rpc.polkadot.io,wss://polkadot-coretime-rpc.polkadot.io,wss://polkadot-people-rpc.polkadot.io,wss://bulletin-rpc.polkadot.io`
 
 ### Kusama
 - Governance: `wss://asset-hub-kusama-rpc.n.dwellir.com`
@@ -79,6 +79,7 @@ Use this to label chains in the summary:
 - 1002 = Bridge Hub
 - 1004 = People
 - 1005 = Coretime
+- 1010 = Bulletin (Polkadot)
 
 ## Step 3: Build the CLI Command
 
