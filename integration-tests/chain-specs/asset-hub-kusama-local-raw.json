@@ -1,6 +1,6 @@
 {
   "bootNodes": [
-    "/ip4/127.0.0.1/tcp/53800/ws/p2p/12D3KooWR8oJizQeaB9Hykn7xtidnEHKqhozaDtpaEmGBvDqd4pf"
+    "/ip4/127.0.0.1/tcp/58088/ws/p2p/12D3KooWR8oJizQeaB9Hykn7xtidnEHKqhozaDtpaEmGBvDqd4pf"
   ],
   "chainType": "Local",
   "codeSubstitutes": {},

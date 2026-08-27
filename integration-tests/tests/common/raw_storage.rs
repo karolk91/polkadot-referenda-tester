@@ -3,6 +3,9 @@
 //! Computes hex-encoded storage keys and SCALE-encoded values for:
 //! - `AhMigrator::AhMigrationStage` → `MigrationDone` (unlocks BaseCallFilter on Asset Hub)
 //! - `FellowshipCollective::{Members, IdToIndex, IndexToId, MemberCount}` (registers Alice as fellow)
+//! - A second "existing fellow" (Bob) registered in both `FellowshipCollective` AND
+//!   `FellowshipCore::Member`, used to regression-test that the tool's storage injection
+//!   does not wipe pre-existing fellows (see `fellowship_collective_override`).
 //!
 //! These are injected into `genesis.raw.top` so that by-number tests can submit
 //! referenda directly to live zombienet nodes.
@@ -16,8 +19,23 @@ const ALICE_ACCOUNT_ID: [u8; 32] = [
     0x82, 0x2c, 0x85, 0x58, 0x85, 0x4c, 0xcd, 0xe3, 0x9a, 0x56, 0x84, 0xe7, 0xa5, 0x6d, 0xa2, 0x7d,
 ];
 
+/// Bob's raw AccountId (Sr25519 public key bytes).
+///
+/// Seeded as a *pre-existing* fellow (rank 2) so a referendum proposal can target
+/// him via `FellowshipCore::approve`. The tool's old storage injection wiped all
+/// `FellowshipCollective` members before re-adding only Alice, which desynced the
+/// collective from `FellowshipCore` and made Bob `Unranked` at enactment.
+pub const BOB_ACCOUNT_ID: [u8; 32] = [
+    0x8e, 0xaf, 0x04, 0x15, 0x16, 0x87, 0x73, 0x63, 0x26, 0xc9, 0xfe, 0xa1, 0x7e, 0x25, 0xfc, 0x52,
+    0x87, 0x61, 0x36, 0x93, 0xc9, 0x12, 0x90, 0x9c, 0xb2, 0x26, 0xaa, 0x47, 0x94, 0xf2, 0x6a, 0x48,
+];
+
 /// The rank to assign Alice in FellowshipCollective (covers all tracks up to Fellowship9Dan).
 const ALICE_FELLOWSHIP_RANK: u16 = 9;
+
+/// The rank to assign the pre-existing fellow (Bob). Matches the `RetainAt2Dan` /
+/// `FellowshipCore::approve(who, 2)` regression scenario.
+pub const EXISTING_FELLOW_RANK: u16 = 2;
 
 // ─── Storage key primitives ──────────────────────────────────────────────────
 
@@ -255,10 +273,16 @@ pub fn ah_approved_governance_referendum_override(
 
 // ─── FellowshipCollective ────────────────────────────────────────────────────
 
-/// Raw spec override: register Alice as a rank-9 fellow in `FellowshipCollective`.
+/// Raw spec override: register Alice as a rank-9 fellow in `FellowshipCollective`,
+/// plus Bob as a pre-existing rank-2 fellow tracked in both `FellowshipCollective`
+/// and `FellowshipCore`.
 ///
 /// Injects storage entries for `Members`, `MemberCount`, `IdToIndex`, and `IndexToId`
 /// for ranks 0 through 9 (a rank-N fellow is also a member at all lower ranks).
+///
+/// Bob exists so a referendum proposal can call `FellowshipCore::approve(Bob, 2)`:
+/// the tool's injection must leave Bob's collective membership intact (additive),
+/// otherwise enactment fails with `FellowshipCore::Unranked`.
 pub fn fellowship_collective_override() -> Value {
     let mut top = serde_json::Map::new();
 
@@ -270,11 +294,11 @@ pub fn fellowship_collective_override() -> Value {
         Value::String(to_hex(&ALICE_FELLOWSHIP_RANK.to_le_bytes())),
     );
 
-    // For each rank 0..=9:
+    // For each rank 0..=9 (Alice is member index 0 at every rank):
     for rank in 0..=ALICE_FELLOWSHIP_RANK {
         let rank_encoded = rank.to_le_bytes(); // u16 LE
 
-        // MemberCount[rank] = 1u32
+        // MemberCount[rank] = 1u32 (Alice only; Bob bumps the low ranks below)
         let count_key = storage_map_key("FellowshipCollective", "MemberCount", &rank_encoded);
         top.insert(count_key, Value::String(to_hex(&1u32.to_le_bytes())));
 
@@ -297,5 +321,58 @@ pub fn fellowship_collective_override() -> Value {
         top.insert(idx_to_id_key, Value::String(to_hex(&ALICE_ACCOUNT_ID)));
     }
 
+    seed_existing_fellow(&mut top);
+
     build_raw_override(top)
+}
+
+/// Seed Bob as a pre-existing rank-2 fellow, consistent across both pallets.
+///
+/// In `FellowshipCollective` Bob is member index 1 at ranks 0..=2 (Alice is index 0),
+/// so `MemberCount` for those ranks becomes 2. In `FellowshipCore` Bob is an active
+/// tracked member, which is required for `FellowshipCore::approve(Bob, 2)` to reach
+/// the rank check (otherwise it fails earlier with `NotTracked`).
+fn seed_existing_fellow(top: &mut serde_json::Map<String, Value>) {
+    // FellowshipCollective::Members[Bob] = MemberRecord { rank: 2 }
+    let members_key = storage_map_key("FellowshipCollective", "Members", &BOB_ACCOUNT_ID);
+    top.insert(
+        members_key,
+        Value::String(to_hex(&EXISTING_FELLOW_RANK.to_le_bytes())),
+    );
+
+    // Bob is a member at ranks 0..=2, occupying member index 1 (after Alice at index 0).
+    for rank in 0..=EXISTING_FELLOW_RANK {
+        let rank_encoded = rank.to_le_bytes();
+
+        // MemberCount[rank] = 2 (Alice + Bob)
+        let count_key = storage_map_key("FellowshipCollective", "MemberCount", &rank_encoded);
+        top.insert(count_key, Value::String(to_hex(&2u32.to_le_bytes())));
+
+        // IdToIndex[rank, Bob] = 1
+        let id_to_idx_key = storage_double_map_key(
+            "FellowshipCollective",
+            "IdToIndex",
+            &rank_encoded,
+            &BOB_ACCOUNT_ID,
+        );
+        top.insert(id_to_idx_key, Value::String(to_hex(&1u32.to_le_bytes())));
+
+        // IndexToId[rank, 1] = Bob
+        let idx_to_id_key = storage_double_map_key(
+            "FellowshipCollective",
+            "IndexToId",
+            &rank_encoded,
+            &1u32.to_le_bytes(),
+        );
+        top.insert(idx_to_id_key, Value::String(to_hex(&BOB_ACCOUNT_ID)));
+    }
+
+    // FellowshipCore::Member[Bob] = MemberStatus { is_active: true, last_promotion: 0, last_proof: 0 }
+    // SCALE: bool (1 byte) ++ u32 LE ++ u32 LE.
+    let mut member_status = Vec::with_capacity(9);
+    member_status.push(0x01); // is_active = true
+    member_status.extend_from_slice(&0u32.to_le_bytes()); // last_promotion
+    member_status.extend_from_slice(&0u32.to_le_bytes()); // last_proof
+    let core_member_key = storage_map_key("FellowshipCore", "Member", &BOB_ACCOUNT_ID);
+    top.insert(core_member_key, Value::String(to_hex(&member_status)));
 }
