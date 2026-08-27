@@ -629,6 +629,66 @@ pub async fn generate_fellowship_inline_call_data(
     Ok(submit_hex)
 }
 
+/// Generate a fellowship referendum that, when enacted, calls
+/// `FellowshipCore::approve(who, at_rank)` on a pre-existing fellow.
+///
+/// This mirrors a real-world fellowship referendum that retains/proves an existing
+/// member. `FellowshipCore::approve` reads the member's rank from `FellowshipCollective`,
+/// so it fails with `FellowshipCore::Unranked` if the tool's storage injection wiped
+/// that member out of the collective. The proposal is submitted on the `RetainAt2Dan`
+/// track (the origin authorized to approve a rank-2 member), inline (no preimage).
+///
+/// `who` is the target fellow's raw 32-byte AccountId (e.g. `raw_storage::BOB_ACCOUNT_ID`).
+/// `fellowship_origin_variant` is the outer OriginCaller variant
+/// (`"FellowshipOrigins"` on Polkadot Collectives).
+///
+/// Returns the inline submit_hex.
+pub async fn generate_fellowship_core_approve_call_data(
+    client: &OnlineClient<PolkadotConfig>,
+    who: [u8; 32],
+    at_rank: u16,
+    track_origin_variant: &str,
+    fellowship_origin_variant: &str,
+) -> Result<String> {
+    // Inner proposal: FellowshipCore.approve(who, at_rank).
+    // `who` is a bare AccountId32; `at_rank` is a u16 Rank.
+    let approve_call = dynamic::tx(
+        "FellowshipCore",
+        "approve",
+        vec![
+            Value::from_bytes(who),
+            Value::u128(at_rank as u128),
+        ],
+    );
+    let approve_bytes = client
+        .tx()
+        .call_data(&approve_call)
+        .context("Failed to encode FellowshipCore.approve")?;
+
+    log::info!(
+        "FellowshipCore.approve(at_rank={}) inline proposal: {} bytes",
+        at_rank,
+        approve_bytes.len()
+    );
+
+    let submit_call = dynamic::tx(
+        "FellowshipReferenda",
+        "submit",
+        vec![
+            Value::unnamed_variant(
+                fellowship_origin_variant,
+                vec![Value::unnamed_variant(track_origin_variant, vec![])],
+            ),
+            Value::unnamed_variant("Inline", vec![Value::from_bytes(approve_bytes)]),
+            Value::unnamed_variant("After", vec![Value::u128(0u128)]),
+        ],
+    );
+    let submit_hex = encode_call_hex(client, &submit_call)
+        .context("Failed to encode FellowshipReferenda.submit for FellowshipCore.approve")?;
+
+    Ok(submit_hex)
+}
+
 /// Encode a dynamic transaction payload to hex call data bytes.
 fn encode_call_hex<Call: subxt::tx::Payload>(
     client: &OnlineClient<PolkadotConfig>,

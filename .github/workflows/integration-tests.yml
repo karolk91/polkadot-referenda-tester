@@ -237,11 +237,21 @@ jobs:
           POLKADOT_PARACHAIN_BINARY_PATH: ${{ env.BIN_DIR }}/polkadot-parachain
           TOOL_PROJECT_DIR: ${{ github.workspace }}
           CHAIN_SPECS_DIR: ${{ github.workspace }}/integration-tests/chain-specs
-          RUST_LOG: info
+          # `chain_spec=error` silences zombienet's raw-spec override warnings. When a
+          # `with_raw_spec_override()` key is missing from the loaded spec it logs a WARN
+          # that dumps the whole `genesis.raw.top` map on ONE line — megabytes per key.
+          # That stalls Actions log ingestion, backs up this process's stdout pipe, and
+          # the job hangs until `timeout-minutes` kills it. `bake_raw_overrides` keeps the
+          # committed specs in sync so the warning should never fire; this is the backstop
+          # (and covers overrides that are parameterized per run and cannot be pre-baked).
+          RUST_LOG: info,zombienet_orchestrator::generators::chain_spec=error
 
-      # --- Collect logs on failure ---
-      - name: Upload zombienet logs on failure
-        if: failure()
+      # --- Collect logs on failure or timeout ---
+      # `cancelled()` matters: a `timeout-minutes` breach cancels the job rather than
+      # failing it, and `failure()` alone would skip the upload exactly when a hang
+      # leaves us with nothing to debug from.
+      - name: Upload zombienet logs
+        if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: zombienet-logs-${{ matrix.suite.name }}-${{ github.run_id }}

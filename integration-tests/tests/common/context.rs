@@ -4,10 +4,39 @@
 //! This avoids duplicating the wait-for-readiness + subxt-connect boilerplate.
 
 use anyhow::Result;
+use std::time::Duration;
 use subxt::{OnlineClient, PolkadotConfig};
 use zombienet_sdk::{LocalFileSystem, Network};
 
 use super::config::BEST_BLOCK_METRIC;
+
+/// Wait until the chain's best block, as reported over the node's RPC, reaches
+/// `min_height`, and return the current height.
+///
+/// The prometheus-based `wait_metric` readiness gate has been observed to pass
+/// while the same node's RPC still reports block #0 (a parachain before its
+/// first relay session change). A fork block captured at that moment is
+/// unusable — chopsticks cannot fork block #0 because genesis has no
+/// relay-parent validation data — so the fork point must be confirmed over the
+/// same RPC connection it is read from.
+async fn wait_for_rpc_height(
+    client: &OnlineClient<PolkadotConfig>,
+    name: &str,
+    min_height: u32,
+) -> Result<u32> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(300);
+    loop {
+        let height = client.blocks().at_latest().await?.number();
+        if height >= min_height {
+            return Ok(height);
+        }
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "{name} RPC best block stuck at #{height} (expected >= {min_height})"
+        );
+        tokio::time::sleep(Duration::from_secs(3)).await;
+    }
+}
 
 /// Shared context for governance-only test suites (relay + Asset Hub).
 pub struct GovernanceTestContext {
@@ -43,7 +72,7 @@ impl GovernanceTestContext {
             .await
             .map_err(|e| anyhow::anyhow!("subxt connect to Asset Hub failed: {e}"))?;
 
-        let ah_fork_block = ah_client.blocks().at_latest().await?.number();
+        let ah_fork_block = wait_for_rpc_height(&ah_client, "Asset Hub", 6).await?;
         log::info!("Asset Hub fork block: #{ah_fork_block}");
 
         Ok(Self {
@@ -120,9 +149,9 @@ impl MultiChainTestContext {
             .await
             .map_err(|e| anyhow::anyhow!("subxt connect to relay failed: {e}"))?;
 
-        let ah_fork_block = ah_client.blocks().at_latest().await?.number();
-        let coll_fork_block = coll_client.blocks().at_latest().await?.number();
-        let relay_fork_block = relay_client.blocks().at_latest().await?.number();
+        let ah_fork_block = wait_for_rpc_height(&ah_client, "Asset Hub", 6).await?;
+        let coll_fork_block = wait_for_rpc_height(&coll_client, "Collectives", 6).await?;
+        let relay_fork_block = wait_for_rpc_height(&relay_client, "Relay", 6).await?;
 
         log::info!(
             "Fork blocks: AH=#{ah_fork_block}, Coll=#{coll_fork_block}, Relay=#{relay_fork_block}"
@@ -212,8 +241,8 @@ impl KusamaTestContext {
             .await
             .map_err(|e| anyhow::anyhow!("subxt connect to Kusama Asset Hub failed: {e}"))?;
 
-        let mut relay_fork_block = relay_client.blocks().at_latest().await?.number();
-        let ah_fork_block = ah_client.blocks().at_latest().await?.number();
+        let mut relay_fork_block = wait_for_rpc_height(&relay_client, "Kusama relay", 6).await?;
+        let ah_fork_block = wait_for_rpc_height(&ah_client, "Kusama Asset Hub", 6).await?;
 
         // Avoid forking at a session boundary block. Chopsticks has issues with
         // preimage availability when the fork point is exactly on a session boundary

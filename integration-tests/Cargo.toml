@@ -20,6 +20,10 @@ name = "approved_future_enactment"
 path = "tests/approved_future_enactment.rs"
 
 [[test]]
+name = "bake_raw_overrides"
+path = "tests/bake_raw_overrides.rs"
+
+[[test]]
 name = "bridged"
 path = "tests/bridged.rs"
 
