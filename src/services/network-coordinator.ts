@@ -19,10 +19,16 @@ import {
   POLKADOT_SIDE_KEYS,
 } from './bridge-topology-builder';
 import { BridgeVerifier } from './bridge-verifier';
-import { createApiForChain, createPolkadotClient, getChainInfo } from './chain-registry';
+import {
+  createApiForChain,
+  createPolkadotClient,
+  fetchChainInfoFromEndpoint,
+  getChainInfo,
+} from './chain-registry';
 import { ChainTopologyBuilder, type TopologyConfig } from './chain-topology-builder';
 import { type ChopsticksContext, ChopsticksManager } from './chopsticks-manager';
 import { EventCollector } from './event-collector';
+import { type PostTestChain, type PostTestContext, runPostTest } from './post-test-runner';
 import { SimulationRunner } from './simulation-runner';
 
 interface SingleChainTestConfig {
@@ -170,6 +176,58 @@ export class NetworkCoordinator {
     return this.testMultiChain(mainReferendumId, fellowshipReferendumId, cleanup, options);
   }
 
+  /**
+   * Describe a live forked chain for a post-test. Reads `spec_name` via the same one-shot legacy
+   * RPC as pre-fork detection (chopsticks forks serve it too); only called when `--post-test` is set.
+   */
+  private async describePostTestChain(
+    label: string,
+    manager: ChopsticksManager
+  ): Promise<PostTestChain> {
+    const context = manager.getContext();
+    const wsEndpoint = context.ws.endpoint;
+    // The live chopsticks-core Blockchain, for in-process block building (see PostTestChain.chain).
+    const chain = (context as unknown as { chain?: unknown }).chain;
+    try {
+      const info = await fetchChainInfoFromEndpoint(wsEndpoint);
+      return {
+        label: info.label,
+        specName: info.specName,
+        network: info.network,
+        kind: info.kind,
+        wsEndpoint,
+        chain,
+      };
+    } catch {
+      return { label, specName: 'unknown', network: 'unknown', kind: 'unknown', wsEndpoint, chain };
+    }
+  }
+
+  /**
+   * Run the optional `--post-test` module against the live post-referendum network. `mainLabel`
+   * names the chain the referendum executed on. Rethrows on failure so the caller exits non-zero.
+   */
+  private async maybeRunPostTest(
+    options: TestOptions | undefined,
+    mainLabel: string,
+    managers: Map<string, ChopsticksManager>
+  ): Promise<void> {
+    if (!options?.postTest) return;
+    const chains: PostTestChain[] = [];
+    for (const [label, manager] of managers) {
+      chains.push(await this.describePostTestChain(label, manager));
+    }
+    const main = chains.find((c) => c.label === mainLabel) ?? chains[0];
+    if (!main) throw new Error('No chains available for the post-test');
+    const context: PostTestContext = {
+      main,
+      chains,
+      args: undefined,
+      verbose: !!options.verbose,
+    };
+    await runPostTest(this.logger, options.postTest, context, options.postTestArgs);
+  }
+
   private async runSingleChainTest(config: SingleChainTestConfig): Promise<void> {
     const label = config.isFellowship ? 'Fellowship' : 'Governance';
     this.logger.startSpinner(`Starting Chopsticks for ${label.toLowerCase()} chain...`);
@@ -219,6 +277,12 @@ export class NetworkCoordinator {
         preCall: config.options?.preCall,
         preOrigin: config.options?.preOrigin,
       });
+
+      await this.maybeRunPostTest(
+        config.options,
+        chainInfo.label,
+        new Map([[chainInfo.label, chopsticks]])
+      );
     } finally {
       if (client) {
         client.destroy();
@@ -334,6 +398,12 @@ export class NetworkCoordinator {
       });
 
       await this.eventCollector.collectAdditionalChainEvents(additionalManagers);
+
+      const postTestManagers = new Map<string, ChopsticksManager>([
+        [chainInfo.label, mainManager],
+        ...additionalManagers,
+      ]);
+      await this.maybeRunPostTest(options, chainInfo.label, postTestManagers);
     } finally {
       mainClient.destroy();
 
@@ -456,6 +526,13 @@ export class NetworkCoordinator {
         actualFellowshipId,
         actualMainId
       );
+
+      // Post-test against the shared chain (governance == fellowship here; no additional chains).
+      const sharedLabel =
+        this.topology.governanceChain?.label ??
+        this.topology.fellowshipChain?.label ??
+        'Governance';
+      await this.maybeRunPostTest(options, sharedLabel, new Map([[sharedLabel, chopsticks]]));
     } finally {
       if (client) {
         client.destroy();
@@ -548,6 +625,19 @@ export class NetworkCoordinator {
         governanceLabel: this.topology.governanceChain!.label,
         fellowshipLabel: this.topology.fellowshipChain!.label,
       });
+
+      // Run the post-referendum test against every fork (governance + fellowship + additional).
+      // The referendum executed on the governance chain, so that is `main` for the post-test.
+      const postTestManagers = new Map<string, ChopsticksManager>([
+        [this.topology.governanceChain!.label, governanceManager],
+        [this.topology.fellowshipChain!.label, fellowshipManager],
+        ...additionalManagers,
+      ]);
+      await this.maybeRunPostTest(
+        options,
+        this.topology.governanceChain!.label,
+        postTestManagers
+      );
     } finally {
       governanceClient.destroy();
       fellowshipClient.destroy();

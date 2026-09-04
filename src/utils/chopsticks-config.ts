@@ -1,9 +1,30 @@
 import { BuildBlockMode } from '@acala-network/chopsticks-core';
+import { mkdirSync } from 'fs';
 import * as path from 'path';
 import { ALICE_ACCOUNT_INJECTION, FELLOWSHIP_STORAGE_INJECTION } from './storage-constants';
 
 /** Which canned storage override (if any) to merge into a chain's `import-storage`. */
 export type StorageInjection = 'fellowship' | 'alice-account';
+
+/**
+ * Per-chain SQLite cache path. Each forked chain needs its OWN db file: when several chains are
+ * forked together (e.g. governance + `--additional-chains`), sharing one file makes the concurrent
+ * opens collide with `SQLITE_CANTOPEN`. Deriving the filename from the endpoint keeps the storage
+ * cache warm across runs (same endpoint → same file) while giving distinct chains distinct files.
+ */
+export function defaultDbPath(endpoint: string): string {
+  const dir = path.join(process.cwd(), '.chopsticks-db');
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch {
+    // best-effort; setup will surface a real failure if the directory is unusable
+  }
+  const slug = endpoint
+    .replace(/[^a-zA-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 120);
+  return path.join(dir, `${slug || 'chain'}.sqlite`);
+}
 
 /**
  * Build a single chain's Chopsticks config with the tool's standard precedence layering
@@ -28,7 +49,7 @@ export function buildChopsticksChainConfig(
   runtimeLogLevel: number
 ): Record<string, unknown> {
   const toolDefaults: Record<string, unknown> = {
-    db: path.join(process.cwd(), '.chopsticks-db'),
+    db: defaultDbPath(endpoint),
     'runtime-log-level': runtimeLogLevel,
   };
 

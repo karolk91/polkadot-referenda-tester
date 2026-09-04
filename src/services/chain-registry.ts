@@ -113,21 +113,18 @@ export async function fetchNetworkFromEndpoint(endpoint: string): Promise<ChainN
 }
 
 /**
- * Open a transient client, read runtime metadata, and return the full {@link ChainInfo}
- * (network + kind + label). Always destroys the client, even on error. Used by the
- * bridged-scenario path to classify `--additional-chains` (network for side-routing,
- * kind to skip relays, label for identity-based dedup against the core bridge chains).
+ * Read the full {@link ChainInfo} (network + kind + label) for an endpoint from its runtime
+ * `spec_name`, via a single legacy `state_getRuntimeVersion` RPC ({@link fetchRuntimeSpecName})
+ * instead of a full polkadot-api client. That makes it safe against full nodes, chopsticks forks,
+ * and legacy-only endpoints alike — e.g. a subway caching/failover proxy that speaks the old
+ * JSON-RPC but not the new `chainHead_*` API that `createClient` requires. Used by all pre-fork
+ * chain detection and by the bridged-scenario path to classify `--additional-chains`.
  *
- * @throws if the endpoint cannot be reached or the metadata read fails.
+ * @throws if the endpoint cannot be reached or the runtime-version read fails.
  */
 export async function fetchChainInfoFromEndpoint(endpoint: string): Promise<ChainInfo> {
-  const client = createPolkadotClient(endpoint);
-  try {
-    const api = createApiForChain(client);
-    return await getChainInfo(api, endpoint);
-  } finally {
-    client.destroy();
-  }
+  const specName = await fetchRuntimeSpecName(endpoint);
+  return buildChainInfoFromSpecName(specName, endpoint);
 }
 
 /**
@@ -147,6 +144,62 @@ export function createApiForChain(client: PolkadotClient): SubstrateApi {
   }
 
   throw new Error('Unable to create unsafe API instance from client');
+}
+
+/**
+ * Read a chain's runtime `specName` via a single legacy `state_getRuntimeVersion` JSON-RPC
+ * call over a bare polkadot-api ws provider — deliberately NOT `createClient`. `createClient`
+ * speaks the new `chainHead_*`/`chainSpec_*` JSON-RPC spec; a legacy-only endpoint (e.g. a
+ * subway caching/failover proxy) returns "Method not found" for `chainHead_v1_follow`, which
+ * sends `createClient` into a tight no-backoff reconnect loop. The old `state_getRuntimeVersion`
+ * is universally supported, so this is safe against full nodes, chopsticks forks, and proxies
+ * alike. The socket is always torn down before the promise settles.
+ *
+ * @throws if the endpoint cannot be reached, the RPC errors, or no response arrives in time.
+ */
+export function fetchRuntimeSpecName(endpoint: string, timeoutMs = 20000): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    let settled = false;
+    let connection: { disconnect: () => void } | undefined;
+    const finish = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        connection?.disconnect();
+      } catch {
+        // ignore teardown errors
+      }
+      fn();
+    };
+    const timer = setTimeout(
+      () => finish(() => reject(new Error(`Timed out reading runtime version from ${endpoint}`))),
+      timeoutMs
+    );
+    try {
+      const provider = getWsProvider(endpoint);
+      const conn = provider((raw: string) => {
+        let msg: { id?: number; error?: { message?: string }; result?: { specName?: string } };
+        try {
+          msg = JSON.parse(raw);
+        } catch {
+          return;
+        }
+        if (msg.id !== 1) return;
+        if (msg.error) {
+          finish(() => reject(new Error(msg.error?.message || 'state_getRuntimeVersion failed')));
+        } else {
+          finish(() => resolve(String(msg.result?.specName ?? 'unknown')));
+        }
+      });
+      connection = conn;
+      conn.send(
+        JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'state_getRuntimeVersion', params: [] })
+      );
+    } catch (error) {
+      finish(() => reject(error as Error));
+    }
+  });
 }
 
 /**

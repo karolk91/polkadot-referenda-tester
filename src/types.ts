@@ -27,6 +27,9 @@ export interface TestOptions {
   assetHubKusamaUrl?: string; // AHK override; defaults from --governance-chain-url when bridged
   bridgeHubKusamaUrl?: string; // BHK — required when bridged
   bridgePumpRounds?: string; // Max rounds the bridge connector pumps before giving up
+  // Post-referendum testing
+  postTest?: string; // Path to a module run against the live network after the referendum executes
+  postTestArgs?: string; // Value passed to the post-test as `args` (JSON when parseable)
 }
 
 export interface ReferendumInfo {

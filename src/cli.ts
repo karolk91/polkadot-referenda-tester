@@ -90,6 +90,14 @@ program
     'Kusama Bridge Hub RPC endpoint URL. Required when the bridged scenario is detected. Format: url, url,block, or path to a chopsticks YAML config (with endpoint+wasm-override+import-storage+...)'
   )
   .option('--bridge-pump-rounds <n>', 'Max bridge pump rounds before giving up (default: 8)')
+  .option(
+    '--post-test <module>',
+    'Path to a post-referendum test module run against the live post-execution network. It exports a function (default/postTest/run) receiving { main, chains, args } where each chain has { label, specName, network, kind, wsEndpoint }; it drives the forks via dev RPCs and throws to fail. .ts and .js/.cjs are supported.'
+  )
+  .option(
+    '--post-test-args <json>',
+    'Value passed to the post-test as `args` (parsed as JSON when possible, otherwise the raw string).'
+  )
   .action(testReferendum);
 
 // List all referendums
