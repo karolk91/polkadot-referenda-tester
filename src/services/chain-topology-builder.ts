@@ -101,13 +101,16 @@ export class ChainTopologyBuilder {
       );
     }
 
-    for (const additionalEndpoint of this.additionalChainEndpoints) {
-      detectionTasks.push(
-        this.detectChainInfo(additionalEndpoint.url).then((info) => {
-          this._additionalChains.push(info);
-        })
-      );
-    }
+    // Detect concurrently but keep `_additionalChains` index-aligned with
+    // `additionalChainEndpoints`: buildNetworkTopology pairs the two arrays by index to attach
+    // each endpoint's `block`/`baseConfig` (e.g. an import-storage override) to the right chain.
+    detectionTasks.push(
+      Promise.all(
+        this.additionalChainEndpoints.map((endpoint) => this.detectChainInfo(endpoint.url))
+      ).then((infos) => {
+        this._additionalChains.push(...infos);
+      })
+    );
 
     await Promise.all(detectionTasks);
 
