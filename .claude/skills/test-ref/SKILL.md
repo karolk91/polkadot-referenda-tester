@@ -44,7 +44,7 @@ Recognize this from the user's request when they mention: "bridge", "bridged", "
 
 ### Chained Referenda
 - "then", "and then", "followed by", "after that" -> the request is a **chain** of referendum steps run in order on one forked network. Each step is parsed like a standalone request (governance ID and/or fellowship ID, or creation/preimage hex).
-- "apply the upgrade", "on the new runtime", "after upgrading" between steps -> the earlier step gets `--post-test post-tests/apply-authorized-upgrade.mjs --post-test-args '{"release":"<fellows release URL or tag>"}'`; ask for the release tag if the user didn't name one.
+- "apply the upgrade", "on the new runtime", "after upgrading" between steps -> the earlier step gets `--post-test apply-authorized-upgrade --post-test-args '{"release":"<fellows release URL or tag>"}'`; ask for the release tag if the user didn't name one.
 - Later steps see the state the earlier ones left behind, so a referendum whose call only decodes on the upgraded runtime must come after the upgrade step.
 
 ### Other Options
@@ -104,7 +104,7 @@ Base: `yarn cli test -v`
 - No cleanup -> add `--no-cleanup`
 - MUTUALLY EXCLUSIVE: `--referendum` vs `--call-to-create-governance-referendum`
 - MUTUALLY EXCLUSIVE: `--fellowship` vs `--call-to-create-fellowship-referendum`
-- Chained referenda -> put the first step's per-referendum flags (`-r`, `-f`, `--call-to-*`, `--pre-call`, `--pre-origin`, `--post-test`, `--post-test-args`) as usual, then `--then` followed by the next step's per-referendum flags, repeated per step. Chain URLs, `--additional-chains`, `--no-cleanup` and `-v` go once, before the first `--then`. The fellowship URL is needed if ANY step has a fellowship referendum. Example: `-r 1942 -f 612 --post-test post-tests/apply-authorized-upgrade.mjs --post-test-args '{"release":"v2.5.0"}' --then -r 1944 --post-test post-tests/dump-chain-events.mjs`
+- Chained referenda -> put the first step's per-referendum flags (`-r`, `-f`, `--call-to-*`, `--pre-call`, `--pre-origin`, `--post-test`, `--post-test-args`) as usual, then `--then` followed by the next step's per-referendum flags, repeated per step. Chain URLs, `--additional-chains`, `--no-cleanup` and `-v` go once, before the first `--then`. The fellowship URL is needed if ANY step has a fellowship referendum. Example: `-r 1942 -f 612 --post-test apply-authorized-upgrade --post-test-args '{"release":"v2.5.0"}' --then -r 1944 --post-test dump-chain-events`
 
 ### Bridged rules (Polkadot fellowship → Kusama governance)
 Triggered automatically when `--fellowship-chain-url` is on Polkadot and `--governance-chain-url` is on Kusama. In addition to the single-network rules:

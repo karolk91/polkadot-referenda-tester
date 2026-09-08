@@ -15,8 +15,8 @@ export { THEN_FLAG };
  * Referendum chaining — the command-line side.
  *
  *   test --governance-chain-url … --fellowship-chain-url … \
- *        -r 1942 -f 612 --post-test post-tests/apply-authorized-upgrade.mjs \
- *        --then -r 1944 --post-test post-tests/dump-chain-events.mjs
+ *        -r 1942 -f 612 --post-test apply-authorized-upgrade \
+ *        --then -r 1944 --post-test dump-chain-events
  *
  * Commander cannot parse repeated option groups, so the raw arguments are split on `--then`
  * first. The main segment goes through commander as usual; every later segment is parsed here
@@ -35,9 +35,9 @@ Chaining referenda:
 
   Example — authorize an upgrade, apply it, then run a referendum that needs the new runtime:
     test --governance-chain-url <ah> --fellowship-chain-url <collectives> \\
-         -r 1942 -f 612 --post-test post-tests/apply-authorized-upgrade.mjs \\
+         -r 1942 -f 612 --post-test apply-authorized-upgrade \\
            --post-test-args '{"release":"v2.5.0"}' \\
-         ${THEN_FLAG} -r 1944 --post-test post-tests/dump-chain-events.mjs
+         ${THEN_FLAG} -r 1944 --post-test dump-chain-events
 `;
 
 /** Register the per-referendum flags on a command (the `test` command and every `--then` parser). */

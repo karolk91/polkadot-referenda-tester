@@ -73,7 +73,7 @@ export const STEP_FIELDS: ReadonlyArray<StepField> = [
     key: 'postTest',
     flags: '--post-test <module>',
     description:
-      'Path to a post-referendum test module run against the live post-execution network. It exports a function (default/postTest/run) receiving { main, chains, args, step } where each chain has { label, specName, network, kind, wsEndpoint, chain }; it drives the forks via dev RPCs or the in-process chain and throws to fail. .ts and .js/.cjs/.mjs are supported.',
+      'Post-referendum test module run against the live post-execution network: a bundled name (apply-authorized-upgrade, dump-chain-events) or a path to your own module (./my-post-test.mjs, .ts/.js/.cjs/.mjs). It exports a function (default/postTest/run) receiving { main, chains, args, step } where each chain has { label, specName, network, kind, wsEndpoint, chain }; it drives the forks via dev RPCs or the in-process chain and throws to fail.',
   },
   {
     key: 'postTestArgs',

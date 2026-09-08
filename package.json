@@ -12,6 +12,7 @@
   "files": [
     "dist",
     "src",
+    "post-tests",
     "tsconfig.json"
   ],
   "repository": {
@@ -27,6 +28,8 @@
   "dependencies": {
     "@acala-network/chopsticks-testing": "^1.5.0",
     "@polkadot/keyring": "^13.0.0",
+    "@polkadot/util": "^14.0.1",
+    "@polkadot/util-crypto": "^14.0.1",
     "chalk": "^4.1.2",
     "cli-table3": "^0.6.5",
     "commander": "^14.0.1",

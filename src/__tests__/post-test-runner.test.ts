@@ -4,7 +4,12 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
 import { afterAll, describe, expect, it } from 'vitest';
-import { type PostTestContext, runPostTest } from '../services/post-test-runner';
+import {
+  listBundledPostTests,
+  type PostTestContext,
+  resolvePostTestModule,
+  runPostTest,
+} from '../services/post-test-runner';
 
 // Real dynamic import() has no host callback under Vitest's VM, so exercise the orchestration with
 // a require-based loader (the production default is a genuine eval-based import, covered by e2e).
@@ -44,7 +49,47 @@ const context: PostTestContext = {
   step: { index: 1, count: 1 },
 };
 
+describe('resolvePostTestModule', () => {
+  const bundled = '/pkg/post-tests';
+
+  it('resolves a bare name against the bundled post-tests directory', () => {
+    expect(resolvePostTestModule('apply-authorized-upgrade', bundled)).toBe(
+      join(bundled, 'apply-authorized-upgrade.mjs')
+    );
+  });
+
+  it('resolves anything path-shaped against the working directory', () => {
+    for (const spec of ['./mine.mjs', 'scripts/mine.mjs', 'mine.mjs', 'mine.ts', 'mine.cjs']) {
+      expect(resolvePostTestModule(spec, bundled)).toBe(join(process.cwd(), spec));
+    }
+  });
+
+  it('passes an absolute path through untouched', () => {
+    expect(resolvePostTestModule('/tmp/mine.mjs', bundled)).toBe('/tmp/mine.mjs');
+  });
+
+  it('lists the post-tests that ship with the tool', () => {
+    expect(listBundledPostTests()).toEqual(['apply-authorized-upgrade', 'dump-chain-events']);
+  });
+});
+
 describe('runPostTest', () => {
+  it('loads a bundled post-test by bare name', async () => {
+    const seen: string[] = [];
+    const load = async (specifier: string): Promise<unknown> => {
+      seen.push(specifier);
+      return { default: async () => {} };
+    };
+    await runPostTest(logger, 'apply-authorized-upgrade', context, undefined, load);
+    expect(seen[0]).toMatch(/post-tests\/apply-authorized-upgrade\.mjs$/);
+  });
+
+  it('rejects an unknown bare name and lists what is available', async () => {
+    await expect(runPostTest(logger, 'no-such-post-test', context)).rejects.toThrow(
+      /Unknown bundled post-test "no-such-post-test"\. Available: apply-authorized-upgrade, dump-chain-events/
+    );
+  });
+
   it('runs a default-exported function and passes args (parsed as JSON)', async () => {
     const out = join(dir, 'seen-args.json');
     const mod = fixture(

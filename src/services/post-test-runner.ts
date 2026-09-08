@@ -1,6 +1,51 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 import type { Logger } from '../utils/logger';
+
+/**
+ * The post-tests that ship with the tool. `__dirname` is `<pkg>/src/services` when running from
+ * source and `<pkg>/dist/services` when built, so one relative path finds `<pkg>/post-tests` in
+ * both cases — and therefore also inside an `npx`/global install, where the caller has no idea
+ * where the package lives.
+ */
+const BUNDLED_POST_TESTS_DIR = path.resolve(__dirname, '../../post-tests');
+
+/**
+ * True when the specifier names a file rather than a bundled post-test: absolute, containing a
+ * path separator, or carrying a JS/TS extension. Anything else (`apply-authorized-upgrade`) is a
+ * bundled name.
+ */
+function isPathSpecifier(specifier: string): boolean {
+  return path.isAbsolute(specifier) || /[\\/]/.test(specifier) || /\.[cm]?[jt]s$/i.test(specifier);
+}
+
+/** Bundled post-test names (file stems of `post-tests/*.mjs`), for help and error messages. */
+export function listBundledPostTests(dir: string = BUNDLED_POST_TESTS_DIR): string[] {
+  try {
+    return fs
+      .readdirSync(dir)
+      .filter((file) => /\.[cm]?js$/.test(file))
+      .map((file) => file.replace(/\.[cm]?js$/, ''))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Turn a `--post-test` value into an absolute file path. A bare name resolves against the tool's
+ * own bundled directory; anything path-shaped resolves against the working directory, so a
+ * user-supplied module still works from wherever it was invoked.
+ */
+export function resolvePostTestModule(
+  modulePath: string,
+  bundledDir: string = BUNDLED_POST_TESTS_DIR
+): string {
+  if (path.isAbsolute(modulePath)) return modulePath;
+  if (isPathSpecifier(modulePath)) return path.resolve(process.cwd(), modulePath);
+  return path.join(bundledDir, `${modulePath}.mjs`);
+}
 
 /**
  * A genuine dynamic `import()` that survives TypeScript's CommonJS emit. With `module: CommonJS`,
@@ -90,6 +135,10 @@ function parseArgs(raw: string | undefined): unknown {
 /**
  * Loads and runs a per-referendum post-test module against the live post-referendum network.
  *
+ * `modulePath` is either a bundled post-test name (`apply-authorized-upgrade`, resolved inside the
+ * installed package so it works under `npx`) or a path to the caller's own module, resolved against
+ * the working directory. See {@link resolvePostTestModule}.
+ *
  * The module is loaded with a dynamic `import()` so ESM post-tests (and the ESM-only polkadot-api
  * ecosystem they typically use) work even though this tool is CommonJS. `.js`/`.mjs`/`.cjs` load
  * directly; `.ts` relies on the host Node's type stripping (Node >= 22.18 / 23.6, or run with
@@ -104,9 +153,14 @@ export async function runPostTest(
   // Seam for tests: how the module URL is loaded. Production uses the real dynamic import.
   load: (specifier: string) => Promise<unknown> = dynamicImport
 ): Promise<void> {
-  const resolved = path.isAbsolute(modulePath)
-    ? modulePath
-    : path.resolve(process.cwd(), modulePath);
+  const resolved = resolvePostTestModule(modulePath);
+  if (!isPathSpecifier(modulePath) && !fs.existsSync(resolved)) {
+    const available = listBundledPostTests();
+    throw new Error(
+      `Unknown bundled post-test "${modulePath}". Available: ${available.join(', ') || '(none found)'}. ` +
+        'To run your own module, pass a path instead (e.g. ./my-post-test.mjs).'
+    );
+  }
 
   logger.section('Post-Referendum Test');
   logger.info(`Running post-test: ${resolved}`);
