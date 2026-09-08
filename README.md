@@ -64,7 +64,23 @@ npx github:karolk91/polkadot-referenda-tester test \
   --fellowship-chain-url wss://polkadot-collectives-rpc.polkadot.io \
   --call-to-create-governance-referendum 0x1503... \
   --call-to-create-fellowship-referendum 0x1703...
+
+# Chain referenda: run several steps, in order, on the same forked network.
+# Each --then segment takes the same per-referendum flags as the first step
+# (-r/-f, --call-to-create-*, --call-to-note-preimage-*, --pre-call, --pre-origin,
+# --post-test, --post-test-args); chain URLs and other run-level flags go first.
+# Here: authorize the v2.5.0 upgrade (1942 whitelisted by fellowship 612), apply the
+# release WASMs with a post-test, then run 1944 — whose call only decodes on v2.5.0.
+npx github:karolk91/polkadot-referenda-tester test \
+  --governance-chain-url wss://asset-hub-polkadot-rpc.n.dwellir.com \
+  --fellowship-chain-url wss://polkadot-collectives-rpc.polkadot.io \
+  --referendum 1942 --fellowship 612 \
+  --post-test post-tests/apply-authorized-upgrade.mjs \
+  --post-test-args '{"release":"https://github.com/polkadot-fellows/runtimes/releases/tag/v2.5.0"}' \
+  --then --referendum 1944 --post-test post-tests/dump-chain-events.mjs
 ```
+
+Steps may mix existing IDs and creation calls freely (e.g. create a referendum first, then execute an existing one). A failing step stops the run. Each step's post-test receives `step: { index, count, referendumId, fellowshipReferendumId }` in its context.
 
 ## Bridged referenda (Polkadot Fellowship → Kusama governance)
 
@@ -127,6 +143,9 @@ yarn cli test \
 | `--asset-hub-kusama-url <url>` | Kusama Asset Hub RPC endpoint (bridged scenario). Defaults to `--governance-chain-url` and must match it |
 | `--bridge-hub-kusama-url <url>` | Kusama Bridge Hub RPC endpoint (bridged scenario). Defaults to `wss://kusama-bridge-hub-rpc.polkadot.io` |
 | `--bridge-pump-rounds <n>` | Max bridge pump rounds before giving up (bridged scenario, default: `8`) |
+| `--post-test <module>` | Module run against the live forks after the referendum executes (`.mjs`/`.js`/`.cjs`/`.ts`). Exports a function receiving `{ main, chains, args, step }`; throws to fail. See `post-tests/` |
+| `--post-test-args <json>` | Value passed to the post-test as `args` (parsed as JSON when possible) |
+| `--then` | Separator starting another referendum step on the same forked network; repeat per step. Takes the same per-referendum flags as the first step |
 | `-v, --verbose` | Enable verbose logging |
 | `--no-cleanup` | Keep Chopsticks instance running after test |
 | `-h, --help` | Display help for command |

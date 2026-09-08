@@ -1,8 +1,15 @@
-import type { TestOptions } from '../types';
 import type { ParsedEndpoint } from '../utils/chain-endpoint-parser';
 import { buildChopsticksChainConfig, type StorageInjection } from '../utils/chopsticks-config';
 import type { Logger } from '../utils/logger';
 import { type ChainInfo, type ChainNetwork, fetchChainInfoFromEndpoint } from './chain-registry';
+
+export type PrimaryRole = 'governance' | 'fellowship';
+
+/** Which canned storage each primary fork gets (see {@link StorageInjection}). */
+export interface TopologyInjections {
+  governance?: StorageInjection;
+  fellowship?: StorageInjection;
+}
 
 export interface TopologyConfig {
   governance?: string;
@@ -146,7 +153,31 @@ export class ChainTopologyBuilder {
     return undefined;
   }
 
-  buildNetworkTopology(options?: TestOptions): {
+  /** The detected chain plus fork block and YAML extras for one primary role. */
+  primary(role: PrimaryRole): {
+    info: ChainInfo | undefined;
+    block: number | undefined;
+    baseConfig: Record<string, unknown> | undefined;
+  } {
+    return role === 'governance'
+      ? {
+          info: this._governanceChain,
+          block: this.governanceBlock,
+          baseConfig: this.governanceBaseConfig,
+        }
+      : {
+          info: this._fellowshipChain,
+          block: this.fellowshipBlock,
+          baseConfig: this.fellowshipBaseConfig,
+        };
+  }
+
+  /**
+   * Network config for a governance chain + a distinct fellowship chain. `injections` says which
+   * canned storage to merge into each fork — the caller decides from the whole run (with chaining,
+   * any step that creates a referendum needs its signer funded from the start).
+   */
+  buildNetworkTopology(injections?: TopologyInjections): {
     networkConfig: Record<string, unknown>;
     governanceKey: string;
     fellowshipKey: string;
@@ -162,12 +193,8 @@ export class ChainTopologyBuilder {
     let governanceKey: string;
     let fellowshipKey: string;
 
-    const fellowshipInjection = options?.callToCreateFellowshipReferendum
-      ? ('fellowship' as const)
-      : undefined;
-    const governanceInjection = options?.callToCreateGovernanceReferendum
-      ? ('alice-account' as const)
-      : undefined;
+    const fellowshipInjection = injections?.fellowship;
+    const governanceInjection = injections?.governance;
 
     if (!governanceIsRelay && !fellowshipIsRelay) {
       governanceKey = 'governance';

@@ -42,6 +42,17 @@ export interface PostTestChain {
  * `dev_newBlock` / `dev_setStorage` / `dev_timeTravel` RPCs available on its `wsEndpoint`. A script
  * connects with its own client (e.g. polkadot-api), drives the chains, and throws to fail.
  */
+/**
+ * Which referendum step of the run a post-test follows (1-based) and how many steps the run has,
+ * plus the IDs that step executed (resolved after any creation call).
+ */
+export interface PostTestStepInfo {
+  index: number;
+  count: number;
+  referendumId?: number;
+  fellowshipReferendumId?: number;
+}
+
 export interface PostTestContext {
   /** The chain the referendum executed on. */
   main: PostTestChain;
@@ -50,6 +61,7 @@ export interface PostTestContext {
   /** Value of `--post-test-args`, parsed as JSON when possible, otherwise the raw string. */
   args: unknown;
   verbose: boolean;
+  step: PostTestStepInfo;
 }
 
 /** A post-test module exports a function as `default`, `postTest`, or `run`. */

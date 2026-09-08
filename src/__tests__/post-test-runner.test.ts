@@ -41,6 +41,7 @@ const context: PostTestContext = {
   chains: [],
   args: undefined,
   verbose: false,
+  step: { index: 1, count: 1 },
 };
 
 describe('runPostTest', () => {

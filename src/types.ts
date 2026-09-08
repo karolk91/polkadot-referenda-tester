@@ -30,6 +30,31 @@ export interface TestOptions {
   // Post-referendum testing
   postTest?: string; // Path to a module run against the live network after the referendum executes
   postTestArgs?: string; // Value passed to the post-test as `args` (JSON when parseable)
+  // Referendum chaining: the steps given after each `--then` separator (already parsed from the
+  // same per-referendum flags), run in order on the same forked network after the step described
+  // by the top-level flags. See utils/referendum-steps.ts.
+  thenSteps?: ReferendumStep[];
+}
+
+/**
+ * One referendum step of a run: what a single invocation of the tool used to do. A run is an
+ * ordered list of steps executed on ONE forked network, so each step sees the state left behind
+ * by the previous ones (including anything a step's post-test did, e.g. applying a runtime upgrade).
+ *
+ * A step is a governance referendum, a fellowship referendum, or both (fellowship first, then
+ * governance — the whitelisting pattern). Each half is either an existing ID or a creation call.
+ */
+export interface ReferendumStep {
+  referendum?: number; // Existing governance referendum ID
+  fellowship?: number; // Existing fellowship referendum ID
+  callToCreateGovernanceReferendum?: string;
+  callToNotePreimageForGovernanceReferendum?: string;
+  callToCreateFellowshipReferendum?: string;
+  callToNotePreimageForFellowshipReferendum?: string;
+  preCall?: string; // Executed before the step's referendum (single-referendum steps only)
+  preOrigin?: string;
+  postTest?: string; // Module run against the live network after this step executes
+  postTestArgs?: string;
 }
 
 export interface ReferendumInfo {

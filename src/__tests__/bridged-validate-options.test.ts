@@ -37,7 +37,7 @@ function bridgedOptions(overrides: Partial<TestOptions> = {}): TestOptions {
 
 describe('validateOptions — bridged scenario', () => {
   it('passes with just fellowship + governance URLs (AHP/BHP/BHK default)', async () => {
-    await expect(validateOptions(bridgedOptions())).resolves.toBeUndefined();
+    await expect(validateOptions(bridgedOptions())).resolves.toHaveLength(1);
   });
 
   it('accepts explicit AHP / BHP / BHK overrides', async () => {
@@ -49,7 +49,7 @@ describe('validateOptions — bridged scenario', () => {
           bridgeHubKusamaUrl: 'wss://kusama-bridge-hub-rpc.polkadot.io',
         })
       )
-    ).resolves.toBeUndefined();
+    ).resolves.toHaveLength(1);
   });
 
   it('rejects when bridged scenario has no fellowship referendum (only a governance one)', async () => {
@@ -95,7 +95,7 @@ describe('validateOptions — unsupported reverse direction', () => {
         callToCreateFellowshipReferendum: '0xdeadbeef',
         callToCreateGovernanceReferendum: '0xfeedface',
       })
-    ).resolves.toBeUndefined();
+    ).resolves.toHaveLength(1);
   });
 
   it('does NOT trigger when one URL has unknown network', async () => {
@@ -108,6 +108,6 @@ describe('validateOptions — unsupported reverse direction', () => {
         callToCreateFellowshipReferendum: '0xdeadbeef',
         callToCreateGovernanceReferendum: '0xfeedface',
       })
-    ).resolves.toBeUndefined();
+    ).resolves.toHaveLength(1);
   });
 });
