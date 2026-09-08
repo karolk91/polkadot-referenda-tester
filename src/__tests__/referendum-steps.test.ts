@@ -42,6 +42,21 @@ describe('splitArgvOnThen', () => {
     });
   });
 
+  it('splits an arbitrary number of --then segments', () => {
+    const argv = ['test', '-r', '1'];
+    for (const id of ['2', '3', '4', '5']) argv.push('--then', '-r', id);
+
+    expect(splitArgvOnThen(argv)).toEqual({
+      main: ['test', '-r', '1'],
+      segments: [
+        ['-r', '2'],
+        ['-r', '3'],
+        ['-r', '4'],
+        ['-r', '5'],
+      ],
+    });
+  });
+
   it('keeps an empty segment for a trailing or doubled --then so it can be reported', () => {
     expect(splitArgvOnThen(['test', '-r', '1', '--then']).segments).toEqual([[]]);
     expect(splitArgvOnThen(['test', '-r', '1', '--then', '--then', '-r', '2']).segments).toEqual([
@@ -131,6 +146,40 @@ describe('parseThenSegment', () => {
       ])
     ).toEqual([{ referendum: 1 }, { fellowship: 2 }]);
   });
+
+  it('parses and labels segments beyond the second', () => {
+    expect(
+      parseThenSegments([
+        ['-r', '1'],
+        ['-f', '2'],
+        ['--call-to-create-governance-referendum', '0xaa'],
+        ['-r', '4', '--post-test', 'dump-chain-events'],
+      ])
+    ).toEqual([
+      { referendum: 1 },
+      { fellowship: 2 },
+      { callToCreateGovernanceReferendum: '0xaa' },
+      { referendum: 4, postTest: 'dump-chain-events' },
+    ]);
+
+    // The label carries the segment's own position, not just "first" or "last".
+    expect(() =>
+      parseThenSegments([
+        ['-r', '1'],
+        ['-r', '2'],
+        ['-r', '3'],
+        ['-r', 'nope'],
+      ])
+    ).toThrow('--then #4: Invalid referendum ID: nope');
+    expect(() =>
+      parseThenSegments([
+        ['-r', '1'],
+        ['-r', '2'],
+        ['--post-test', 'x'],
+        ['-r', '4'],
+      ])
+    ).toThrow(/--then #3: At least one referendum/);
+  });
 });
 
 describe('buildSteps', () => {
@@ -159,6 +208,45 @@ describe('buildSteps', () => {
       { referendum: 1944 },
       { callToCreateGovernanceReferendum: '0xaa' },
     ]);
+  });
+
+  it('builds a long chain of mixed steps in order', () => {
+    const steps = buildSteps({
+      ...base,
+      referendum: '1942',
+      fellowship: '612',
+      postTest: 'apply-authorized-upgrade',
+      thenSteps: [
+        { referendum: 1944, postTest: 'dump-chain-events' },
+        { callToCreateGovernanceReferendum: '0xaa' },
+        { fellowship: 613 },
+        { referendum: 1950, preCall: '0xcc', preOrigin: 'Root' },
+      ],
+    });
+
+    expect(steps).toEqual([
+      { referendum: 1942, fellowship: 612, postTest: 'apply-authorized-upgrade' },
+      { referendum: 1944, postTest: 'dump-chain-events' },
+      { callToCreateGovernanceReferendum: '0xaa' },
+      { fellowship: 613 },
+      { referendum: 1950, preCall: '0xcc', preOrigin: 'Root' },
+    ]);
+    expect(steps.filter(stepHasGovernance)).toHaveLength(4);
+    expect(steps.filter(stepHasFellowship)).toHaveLength(2);
+  });
+
+  it('validates every chained step, not just the first two', () => {
+    expect(() =>
+      buildSteps({
+        ...base,
+        referendum: '1',
+        thenSteps: [
+          { referendum: 2 },
+          { referendum: 3 },
+          { referendum: 4, callToCreateGovernanceReferendum: '0xaa' },
+        ],
+      })
+    ).toThrow(/--then #3: Cannot specify both --referendum/);
   });
 
   it('allows a run made only of --then steps', () => {
