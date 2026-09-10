@@ -12,6 +12,7 @@ import {
 import { getBlockEvents, type ParsedEvent, serializeEventData } from '../utils/event-serializer';
 import { stringify } from '../utils/json';
 import type { Logger } from '../utils/logger';
+import type { ChainInfo } from './chain-registry';
 import type { ChopsticksManager } from './chopsticks-manager';
 
 /**
@@ -25,6 +26,8 @@ export interface BridgeChain {
   client: PolkadotClient;
   /** Human-friendly label for log lines (e.g. "BridgeHubPolkadot"). */
   label: string;
+  /** Detected chain identity, when the adoption could read it (used to describe post-test chains). */
+  info?: ChainInfo;
 }
 
 export interface BridgePolkadotSide {

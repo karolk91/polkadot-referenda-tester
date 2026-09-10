@@ -1,9 +1,10 @@
 import { setupNetworks } from '@acala-network/chopsticks-testing';
 import type { PolkadotClient } from 'polkadot-api';
-import type { ChopsticksConfig, TestOptions } from '../types';
+import type { ReferendumStep, TestOptions } from '../types';
+import type { SubstrateApi } from '../types/substrate-api';
 import { serializeEventData } from '../utils/event-serializer';
 import type { Logger } from '../utils/logger';
-import { FELLOWSHIP_STORAGE_INJECTION } from '../utils/storage-constants';
+import { describeStep, stepHasFellowship, stepHasGovernance } from '../utils/referendum-steps';
 import {
   type BridgeChain,
   BridgeConnector,
@@ -19,22 +20,69 @@ import {
   POLKADOT_SIDE_KEYS,
 } from './bridge-topology-builder';
 import { BridgeVerifier } from './bridge-verifier';
-import { createApiForChain, createPolkadotClient, getChainInfo } from './chain-registry';
-import { ChainTopologyBuilder, type TopologyConfig } from './chain-topology-builder';
+import {
+  type ChainInfo,
+  createApiForChain,
+  createPolkadotClient,
+  fetchChainInfoFromEndpoint,
+  getChainInfo,
+} from './chain-registry';
+import {
+  ChainTopologyBuilder,
+  type TopologyConfig,
+  type TopologyInjections,
+} from './chain-topology-builder';
 import { type ChopsticksContext, ChopsticksManager } from './chopsticks-manager';
 import { EventCollector } from './event-collector';
+import {
+  type PostTestChain,
+  type PostTestContext,
+  type PostTestStepInfo,
+  runPostTest,
+} from './post-test-runner';
 import { SimulationRunner } from './simulation-runner';
 
-interface SingleChainTestConfig {
-  endpoint: string;
-  block: number | undefined;
-  referendumId: number | undefined;
-  isFellowship: boolean;
-  storageInjection: 'fellowship' | 'alice-account' | undefined;
-  createCallHex: string | undefined;
-  createPreimageHex: string | undefined;
-  options?: TestOptions;
-  cleanup: boolean;
+/** A live fork plus its long-lived polkadot-api client. */
+interface ConnectedFork {
+  manager: ChopsticksManager;
+  client: PolkadotClient;
+  api: SubstrateApi;
+}
+
+/** A primary (governance or fellowship) fork with its detected chain identity. */
+interface ForkedChain extends ConnectedFork {
+  info: ChainInfo;
+}
+
+/** Any fork the run knows about, as handed to event settlement and post-tests. */
+interface Fork {
+  label: string;
+  manager: ChopsticksManager;
+  /** Detected identity; when absent the post-test description falls back to an RPC read. */
+  info?: ChainInfo;
+}
+
+/**
+ * The forked network a run executes on. Built once from the union of what every step needs, then
+ * every {@link ReferendumStep} runs against it in order, so later steps see the state earlier ones
+ * (and their post-tests) left behind. `fellowship` is the very same object as `governance` when
+ * both referenda live on one chain.
+ */
+interface ForkedNetwork {
+  governance?: ForkedChain;
+  fellowship?: ForkedChain;
+  additional: Fork[];
+}
+
+/** What a step executed, for the post-test context. */
+interface StepOutcome {
+  mainLabel: string;
+  referendumId?: number;
+  fellowshipReferendumId?: number;
+}
+
+function managersOf(forks: Fork[]): Map<string, ChopsticksManager> {
+  return new Map(forks.map((fork) => [fork.label, fork.manager]));
 }
 
 export class NetworkCoordinator {
@@ -78,531 +126,511 @@ export class NetworkCoordinator {
     return this.topology.governanceChain?.network || 'unknown';
   }
 
-  async testWithFellowship(
-    mainReferendumId: number | undefined,
-    fellowshipReferendumId: number | undefined,
+  /**
+   * Run an ordered list of referendum steps on one forked network.
+   *
+   * The network is forked once from the union of what the steps need: the governance chain if any
+   * step has a governance referendum, the fellowship chain if any has a fellowship referendum, plus
+   * `--additional-chains`. Signers are funded up front for every creation call in the run. Each
+   * step then executes (fellowship first, then governance, when it has both), settles XCM on the
+   * other forks, and runs its own post-test before the next step starts.
+   */
+  async runSteps(
+    steps: ReferendumStep[],
     cleanup: boolean = true,
     options?: TestOptions
   ): Promise<void> {
-    const hasFellowship =
-      fellowshipReferendumId !== undefined || !!options?.callToCreateFellowshipReferendum;
-    const hasMain = mainReferendumId !== undefined || !!options?.callToCreateGovernanceReferendum;
-
-    if (!hasMain && hasFellowship) {
-      if (!this.topology.getFellowshipEndpoint()) {
-        throw new Error('Fellowship chain URL must be provided when testing fellowship referendum');
-      }
-
-      if (this.topology.hasAdditionalChains()) {
-        await this.topology.detectChainTypes();
-        return this.runSingleChainWithAdditionalChains(
-          fellowshipReferendumId,
-          true,
-          cleanup,
-          options
-        );
-      }
-
-      return this.runSingleChainTest({
-        endpoint: this.topology.getFellowshipEndpoint()!,
-        block: this.topology.getFellowshipBlock(),
-        referendumId: fellowshipReferendumId,
-        isFellowship: true,
-        storageInjection: options?.callToCreateFellowshipReferendum ? 'fellowship' : undefined,
-        createCallHex: options?.callToCreateFellowshipReferendum,
-        createPreimageHex: options?.callToNotePreimageForFellowshipReferendum,
-        options,
-        cleanup,
-      });
+    if (steps.length === 0) {
+      throw new Error('At least one referendum step is required');
     }
 
-    if (hasMain && !hasFellowship) {
-      if (!this.topology.getGovernanceEndpoint()) {
-        throw new Error('Governance endpoint must be set for single referendum testing');
-      }
+    const needGovernance = steps.some(stepHasGovernance);
+    const needFellowship = steps.some(stepHasFellowship);
 
-      if (this.topology.hasAdditionalChains()) {
-        await this.topology.detectChainTypes();
-        return this.runSingleChainWithAdditionalChains(mainReferendumId, false, cleanup, options);
-      }
-
-      return this.runSingleChainTest({
-        endpoint: this.topology.getGovernanceEndpoint()!,
-        block: this.topology.getGovernanceBlock(),
-        referendumId: mainReferendumId,
-        isFellowship: false,
-        storageInjection: options?.callToCreateGovernanceReferendum ? 'alice-account' : undefined,
-        createCallHex: options?.callToCreateGovernanceReferendum,
-        createPreimageHex: options?.callToNotePreimageForGovernanceReferendum,
-        options,
-        cleanup,
-      });
+    if (needFellowship && !this.topology.getFellowshipEndpoint()) {
+      throw new Error('Fellowship chain URL must be provided when testing fellowship referendum');
     }
-
-    if (!hasFellowship || !hasMain) {
-      throw new Error('Both referendum IDs must be provided or created for dual testing');
-    }
-
-    if (!this.topology.getFellowshipEndpoint()) {
-      throw new Error('Fellowship chain URL must be provided when fellowship referendum ID is set');
-    }
-
-    if (!this.topology.getGovernanceEndpoint()) {
-      throw new Error('Governance chain URL must be provided when testing both referenda');
+    if (needGovernance && !this.topology.getGovernanceEndpoint()) {
+      throw new Error('Governance chain URL must be provided when testing governance referendum');
     }
 
     await this.topology.detectChainTypes();
 
-    this.logger.section('Setting Up Multi-Chain Environment');
-    this.logger.info(`Governance Chain: ${this.topology.governanceChain!.label}`);
-    this.logger.info(`Fellowship Chain: ${this.topology.fellowshipChain!.label}`);
-    this.logger.info(`Fellowship Referendum: #${fellowshipReferendumId}`);
-    this.logger.info(`Main Referendum: #${mainReferendumId}\n`);
-
-    const sameEndpoint =
-      this.topology.getGovernanceEndpoint() === this.topology.getFellowshipEndpoint() ||
-      this.topology.governanceChain!.label === this.topology.fellowshipChain!.label;
-
-    if (sameEndpoint) {
-      return this.testSameChainWithFellowship(mainReferendumId, fellowshipReferendumId, options);
-    }
-
-    return this.testMultiChain(mainReferendumId, fellowshipReferendumId, cleanup, options);
-  }
-
-  private async runSingleChainTest(config: SingleChainTestConfig): Promise<void> {
-    const label = config.isFellowship ? 'Fellowship' : 'Governance';
-    this.logger.startSpinner(`Starting Chopsticks for ${label.toLowerCase()} chain...`);
-
-    const chopsticks = new ChopsticksManager(this.logger);
-    let client: PolkadotClient | null = null;
-
-    try {
-      const chopsticksConfig = config.isFellowship
-        ? await this.buildFellowshipChopsticksConfig(config)
-        : this.topology.buildConfig(config.endpoint, config.block, config.storageInjection);
-
-      const networkKey = config.isFellowship
-        ? await this.topology.detectRelayNetworkKey(config.endpoint)
-        : undefined;
-
-      const context = await chopsticks.setup(
-        chopsticksConfig as unknown as ChopsticksConfig,
-        networkKey
-      );
-
-      const wsEndpoint = context.ws.endpoint;
-      client = createPolkadotClient(wsEndpoint);
-      const api = createApiForChain(client);
-
-      this.logger.succeedSpinner(`Chopsticks ready at ${wsEndpoint}`);
-
-      this.logger.startSpinner('Waiting for chain to be ready...');
-      await chopsticks.waitForChainReady(api);
-      this.logger.succeedSpinner('Chain is ready');
-
-      const chainInfo = await getChainInfo(api, config.endpoint);
-      if (config.isFellowship) {
-        this.topology.fellowshipChain = chainInfo;
-      } else {
-        this.topology.governanceChain = chainInfo;
-      }
-      this.logger.info(`Detected chain: ${chainInfo.label} (${chainInfo.specName})`);
-
-      await this.runner.fetchAndSimulate({
-        api,
-        chopsticks,
-        referendumId: config.referendumId,
-        isFellowship: config.isFellowship,
-        createCallHex: config.createCallHex,
-        createPreimageHex: config.createPreimageHex,
-        preCall: config.options?.preCall,
-        preOrigin: config.options?.preOrigin,
-      });
-    } finally {
-      if (client) {
-        client.destroy();
-      }
-      if (config.cleanup) {
-        await chopsticks.cleanup();
-      } else {
-        this.logger.info(`\nChopsticks instance still running for inspection`);
-        this.logger.info('Press Ctrl+C to exit');
-        await chopsticks.pause();
-      }
-    }
-  }
-
-  private async runSingleChainWithAdditionalChains(
-    referendumId: number | undefined,
-    isFellowship: boolean,
-    cleanup: boolean,
-    options?: TestOptions
-  ): Promise<void> {
-    const mainChain = isFellowship
-      ? this.topology.fellowshipChain!
-      : this.topology.governanceChain!;
-    const mainEndpoint = isFellowship
-      ? this.topology.getFellowshipEndpoint()!
-      : this.topology.getGovernanceEndpoint()!;
-    const mainBlock = isFellowship
-      ? this.topology.getFellowshipBlock()
-      : this.topology.getGovernanceBlock();
-    const mainIsRelay = mainChain.kind === 'relay';
-    const label = isFellowship ? 'Fellowship' : 'Governance';
-
-    const mainKey = mainIsRelay
-      ? this.topology.getRelayKey(mainChain.network)
-      : isFellowship
+    const injections: TopologyInjections = {
+      governance: steps.some((step) => !!step.callToCreateGovernanceReferendum)
+        ? 'alice-account'
+        : undefined,
+      fellowship: steps.some((step) => !!step.callToCreateFellowshipReferendum)
         ? 'fellowship'
-        : 'governance';
-
-    let storageInjection: 'fellowship' | 'alice-account' | undefined;
-    if (isFellowship && options?.callToCreateFellowshipReferendum) {
-      storageInjection = 'fellowship';
-    } else if (!isFellowship && options?.callToCreateGovernanceReferendum) {
-      storageInjection = 'alice-account';
-    }
-
-    const networkConfig: Record<string, unknown> = {};
-    networkConfig[mainKey] = this.topology.buildConfig(mainEndpoint, mainBlock, storageInjection);
-
-    const { chainToNetworkKey } = this.topology.registerAdditionalChains(
-      networkConfig,
-      new Set([mainEndpoint]),
-      !isFellowship && mainIsRelay,
-      isFellowship && mainIsRelay
-    );
-
-    this.logger.startSpinner('Setting up interconnected chains...');
-    const networks = await setupNetworks(networkConfig as Parameters<typeof setupNetworks>[0]);
-
-    const mainManager = ChopsticksManager.fromExistingContext(
-      this.logger,
-      networks[mainKey] as unknown as ChopsticksContext
-    );
-
-    const additionalManagers = new Map<string, ChopsticksManager>();
-    for (const [chainLabel, networkKey] of chainToNetworkKey) {
-      additionalManagers.set(
-        chainLabel,
-        ChopsticksManager.fromExistingContext(
-          this.logger,
-          networks[networkKey] as unknown as ChopsticksContext
-        )
-      );
-    }
-
-    this.logger.succeedSpinner('Networks ready');
-    this.logger.info(`  ${label}: ${mainManager.getContext().ws.endpoint}`);
-    if (additionalManagers.size > 0) {
-      this.logger.info(
-        `Additional chains connected: ${Array.from(additionalManagers.keys()).join(', ')}`
-      );
-    }
-
-    const mainClient = createPolkadotClient(mainManager.getContext().ws.endpoint);
-
-    try {
-      const api = createApiForChain(mainClient);
-
-      this.logger.startSpinner('Waiting for chain to be ready...');
-      await mainManager.waitForChainReady(api);
-      this.logger.succeedSpinner('Chain is ready');
-
-      const chainInfo = await getChainInfo(api, mainEndpoint);
-      if (isFellowship) {
-        this.topology.fellowshipChain = chainInfo;
-      } else {
-        this.topology.governanceChain = chainInfo;
-      }
-      this.logger.info(`Detected chain: ${chainInfo.label} (${chainInfo.specName})`);
-
-      await this.runner.fetchAndSimulate({
-        api,
-        chopsticks: mainManager,
-        referendumId,
-        isFellowship,
-        createCallHex: isFellowship
-          ? options?.callToCreateFellowshipReferendum
-          : options?.callToCreateGovernanceReferendum,
-        createPreimageHex: isFellowship
-          ? options?.callToNotePreimageForFellowshipReferendum
-          : options?.callToNotePreimageForGovernanceReferendum,
-        preCall: options?.preCall,
-        preOrigin: options?.preOrigin,
-      });
-
-      await this.eventCollector.collectAdditionalChainEvents(additionalManagers);
-    } finally {
-      mainClient.destroy();
-
-      if (cleanup) {
-        await Promise.all([
-          mainManager.cleanup(),
-          ...Array.from(additionalManagers.values()).map((manager) => manager.cleanup()),
-        ]);
-      } else {
-        await this.pauseAllManagers([
-          { label: `${label} (${mainChain.label})`, manager: mainManager },
-          ...Array.from(additionalManagers).map(([chainLabel, manager]) => ({
-            label: chainLabel,
-            manager,
-          })),
-        ]);
-      }
-    }
-  }
-
-  private async buildFellowshipChopsticksConfig(
-    config: SingleChainTestConfig
-  ): Promise<Record<string, unknown>> {
-    const chopsticksConfig: Record<string, unknown> = {
-      endpoint: config.endpoint,
-      'build-block-mode': 'manual',
+        : undefined,
     };
 
-    if (config.block !== undefined) {
-      chopsticksConfig.block = config.block;
+    if (steps.length > 1) {
+      this.logger.section(`Referendum Chain (${steps.length} steps)`);
+      steps.forEach((step, index) => {
+        this.logger.info(`  ${index + 1}. ${describeStep(step)}`);
+      });
     }
 
-    if (config.storageInjection === 'fellowship') {
-      chopsticksConfig['import-storage'] = FELLOWSHIP_STORAGE_INJECTION;
-      this.logger.debug('Injecting fellowship storage for Alice account');
-    }
-
-    return chopsticksConfig;
-  }
-
-  private async testSameChainWithFellowship(
-    mainReferendumId: number | undefined,
-    fellowshipReferendumId: number | undefined,
-    options?: TestOptions
-  ): Promise<void> {
-    this.logger.startSpinner('Starting shared chain...');
-
-    const chopsticks = new ChopsticksManager(this.logger);
-    let client: PolkadotClient | null = null;
-
+    const network = await this.setupForkedNetwork(needGovernance, needFellowship, injections);
     try {
-      const chainEndpoint =
-        this.topology.getGovernanceEndpoint() || this.topology.getFellowshipEndpoint();
-      if (!chainEndpoint) {
-        throw new Error('At least one chain endpoint must be provided');
+      for (const [index, step] of steps.entries()) {
+        await this.runStep(network, step, index, steps.length, !!options?.verbose);
       }
-
-      const config: Record<string, unknown> = {
-        endpoint: chainEndpoint,
-        'build-block-mode': 'manual',
-      };
-
-      const block = this.topology.getGovernanceBlock() ?? this.topology.getFellowshipBlock();
-      if (block !== undefined) {
-        config.block = block;
-      }
-
-      if (options?.callToCreateFellowshipReferendum) {
-        config['import-storage'] = FELLOWSHIP_STORAGE_INJECTION;
-        this.logger.debug('Injecting fellowship storage for Alice account');
-      }
-
-      const context = await chopsticks.setup(config as unknown as ChopsticksConfig);
-
-      const endpoint = context.ws.endpoint;
-      client = createPolkadotClient(endpoint);
-      const api = createApiForChain(client);
-
-      this.logger.succeedSpinner(`Chain ready at ${endpoint}`);
-
-      this.logger.startSpinner('Waiting for chain to be ready...');
-      await chopsticks.waitForChainReady(api);
-      this.logger.succeedSpinner('Chain is ready');
-
-      this.topology.governanceChain = await getChainInfo(api, chainEndpoint);
-      this.topology.fellowshipChain = this.topology.governanceChain;
-      this.logger.info(
-        `Detected chain: ${this.topology.governanceChain.label} (${this.topology.governanceChain.specName})`
-      );
-
-      const createdFellowship = await this.runner.createReferendumIfNeeded({
-        api,
-        chopsticks,
-        callHex: options?.callToCreateFellowshipReferendum,
-        preimageHex: options?.callToNotePreimageForFellowshipReferendum,
-        isFellowship: true,
-      });
-      const actualFellowshipId = createdFellowship ?? fellowshipReferendumId;
-
-      const createdGovernance = await this.runner.createReferendumIfNeeded({
-        api,
-        chopsticks,
-        callHex: options?.callToCreateGovernanceReferendum,
-        preimageHex: options?.callToNotePreimageForGovernanceReferendum,
-        isFellowship: false,
-      });
-      const actualMainId = createdGovernance ?? mainReferendumId;
-
-      if (actualFellowshipId === undefined) {
-        throw new Error('Fellowship referendum ID is required but was not provided or created');
-      }
-
-      if (actualMainId === undefined) {
-        throw new Error('Main referendum ID is required but was not provided or created');
-      }
-
-      await this.runner.simulateSequentialReferenda(
-        api,
-        chopsticks,
-        actualFellowshipId,
-        actualMainId
-      );
     } finally {
-      if (client) {
-        client.destroy();
-      }
-      await chopsticks.cleanup();
-    }
-  }
-
-  private async testMultiChain(
-    mainReferendumId: number | undefined,
-    fellowshipReferendumId: number | undefined,
-    cleanup: boolean = true,
-    options?: TestOptions
-  ): Promise<void> {
-    const { governanceManager, fellowshipManager, additionalManagers } =
-      await this.setupInterconnectedChains(options);
-
-    const governanceClient = createPolkadotClient(governanceManager.getContext().ws.endpoint);
-    const fellowshipClient = createPolkadotClient(fellowshipManager.getContext().ws.endpoint);
-
-    this.logger.succeedSpinner('Networks ready');
-    this.logger.info(`  Governance: ${governanceManager.getContext().ws.endpoint}`);
-    this.logger.info(`  Fellowship: ${fellowshipManager.getContext().ws.endpoint}`);
-
-    try {
-      const governanceApi = createApiForChain(governanceClient);
-      const fellowshipApi = createApiForChain(fellowshipClient);
-
-      this.logger.startSpinner('Waiting for chains to be ready...');
-      await Promise.all([
-        governanceManager.waitForChainReady(governanceApi),
-        fellowshipManager.waitForChainReady(fellowshipApi),
-      ]);
-      this.logger.succeedSpinner('Chains are ready');
-
-      const [govChainInfo, fellChainInfo] = await Promise.all([
-        getChainInfo(governanceApi, this.topology.getGovernanceEndpoint()!),
-        getChainInfo(fellowshipApi, this.topology.getFellowshipEndpoint()!),
-      ]);
-      this.topology.governanceChain = govChainInfo;
-      this.topology.fellowshipChain = fellChainInfo;
-      this.logger.info(`Governance: ${govChainInfo.label} (${govChainInfo.specName})`);
-      this.logger.info(`Fellowship: ${fellChainInfo.label} (${fellChainInfo.specName})`);
-
-      const createdFellowship = await this.runner.createReferendumIfNeeded({
-        api: fellowshipApi,
-        chopsticks: fellowshipManager,
-        callHex: options?.callToCreateFellowshipReferendum,
-        preimageHex: options?.callToNotePreimageForFellowshipReferendum,
-        isFellowship: true,
-      });
-      const actualFellowshipId = createdFellowship ?? fellowshipReferendumId;
-
-      const createdGovernance = await this.runner.createReferendumIfNeeded({
-        api: governanceApi,
-        chopsticks: governanceManager,
-        callHex: options?.callToCreateGovernanceReferendum,
-        preimageHex: options?.callToNotePreimageForGovernanceReferendum,
-        isFellowship: false,
-      });
-      const actualMainId = createdGovernance ?? mainReferendumId;
-
-      if (actualFellowshipId === undefined) {
-        throw new Error('Fellowship referendum ID is required but was not provided or created');
-      }
-
-      if (actualMainId === undefined) {
-        throw new Error('Main referendum ID is required but was not provided or created');
-      }
-
-      await this.runner.simulateMultiChainReferenda({
-        fellowship: {
-          api: fellowshipApi,
-          chopsticks: fellowshipManager,
-          referendumId: actualFellowshipId,
-          label: this.topology.fellowshipChain!.label,
-        },
-        governance: {
-          api: governanceApi,
-          chopsticks: governanceManager,
-          referendumId: actualMainId,
-          label: this.topology.governanceChain!.label,
-        },
-      });
-
-      await this.eventCollector.displayPostExecutionEvents({
-        governance: { chopsticks: governanceManager, api: governanceApi },
-        fellowship: { chopsticks: fellowshipManager, api: fellowshipApi },
-        additionalManagers,
-        governanceLabel: this.topology.governanceChain!.label,
-        fellowshipLabel: this.topology.fellowshipChain!.label,
-      });
-    } finally {
-      governanceClient.destroy();
-      fellowshipClient.destroy();
-
-      if (cleanup) {
-        await Promise.all([
-          governanceManager.cleanup(),
-          fellowshipManager.cleanup(),
-          ...Array.from(additionalManagers.values()).map((manager) => manager.cleanup()),
-        ]);
-      } else {
-        await this.pauseAllManagers([
-          {
-            label: `Governance (${this.topology.governanceChain!.label})`,
-            manager: governanceManager,
-          },
-          ...Array.from(additionalManagers).map(([label, manager]) => ({ label, manager })),
-          {
-            label: `Fellowship (${this.topology.fellowshipChain!.label})`,
-            manager: fellowshipManager,
-          },
-        ]);
-      }
+      await this.teardownForkedNetwork(network, cleanup);
     }
   }
 
   /**
-   * Test a fellowship referendum whose proposal sends an XCM that ultimately executes on
-   * a chain in a different consensus (across a bridge).
+   * Fork every chain the run needs with one `setupNetworks` call so sibling/relay message passing
+   * is wired between them, then adopt the primaries with long-lived clients.
+   */
+  private async setupForkedNetwork(
+    needGovernance: boolean,
+    needFellowship: boolean,
+    injections: TopologyInjections
+  ): Promise<ForkedNetwork> {
+    const governanceInfo = this.topology.governanceChain;
+    const fellowshipInfo = this.topology.fellowshipChain;
+    if (needGovernance && !governanceInfo) {
+      throw new Error('Governance chain type could not be detected');
+    }
+    if (needFellowship && !fellowshipInfo) {
+      throw new Error('Fellowship chain type could not be detected');
+    }
+
+    const sharedChain =
+      needGovernance &&
+      needFellowship &&
+      (this.topology.getGovernanceEndpoint() === this.topology.getFellowshipEndpoint() ||
+        governanceInfo!.label === fellowshipInfo!.label);
+
+    let networkConfig: Record<string, unknown> = {};
+    let governanceKey: string | undefined;
+    let fellowshipKey: string | undefined;
+
+    if (needGovernance && needFellowship && !sharedChain) {
+      this.logger.section('Setting Up Multi-Chain Environment');
+      this.logger.info(`Governance Chain: ${governanceInfo!.label}`);
+      this.logger.info(`Fellowship Chain: ${fellowshipInfo!.label}\n`);
+      ({ networkConfig, governanceKey, fellowshipKey } =
+        this.topology.buildNetworkTopology(injections));
+    } else {
+      // One primary fork: the governance chain, or the fellowship chain, or the chain shared by both.
+      const role = needGovernance ? 'governance' : 'fellowship';
+      const { info, block, baseConfig } = this.topology.primary(role);
+      const primary = info!;
+      const key = primary.kind === 'relay' ? this.topology.getRelayKey(primary.network) : role;
+      // A fork takes one canned injection; the fellowship one is a superset of the Alice one, so it
+      // also covers a shared chain that creates both kinds of referendum.
+      const injection = injections.fellowship ?? injections.governance;
+      networkConfig[key] = this.topology.buildConfig(
+        primary.endpoint,
+        block,
+        injection,
+        baseConfig
+      );
+      governanceKey = needGovernance ? key : undefined;
+      fellowshipKey = needFellowship ? key : undefined;
+    }
+
+    const usedEndpoints = new Set<string>();
+    if (needGovernance) usedEndpoints.add(governanceInfo!.endpoint);
+    if (needFellowship) usedEndpoints.add(fellowshipInfo!.endpoint);
+    const { chainToNetworkKey } = this.topology.registerAdditionalChains(
+      networkConfig,
+      usedEndpoints,
+      needGovernance && governanceInfo!.kind === 'relay',
+      needFellowship && fellowshipInfo!.kind === 'relay'
+    );
+
+    this.logger.startSpinner('Setting up interconnected chains...');
+    const networks = await setupNetworks(networkConfig as Parameters<typeof setupNetworks>[0]);
+    this.logger.succeedSpinner('Networks ready');
+
+    const contextOf = (key: string): ChopsticksContext =>
+      networks[key] as unknown as ChopsticksContext;
+
+    if (governanceKey) {
+      this.logger.info(`  Governance: ${contextOf(governanceKey).ws.endpoint}`);
+    }
+    if (fellowshipKey && fellowshipKey !== governanceKey) {
+      this.logger.info(`  Fellowship: ${contextOf(fellowshipKey).ws.endpoint}`);
+    }
+
+    this.logger.startSpinner('Waiting for chains to be ready...');
+    const [governance, distinctFellowship] = await Promise.all([
+      governanceKey
+        ? this.adoptPrimaryChain(contextOf(governanceKey), governanceInfo!.endpoint)
+        : undefined,
+      fellowshipKey && fellowshipKey !== governanceKey
+        ? this.adoptPrimaryChain(contextOf(fellowshipKey), fellowshipInfo!.endpoint)
+        : undefined,
+    ]);
+    const fellowship = fellowshipKey ? (distinctFellowship ?? governance) : undefined;
+    this.logger.succeedSpinner('Chains are ready');
+
+    if (governance) {
+      this.topology.governanceChain = governance.info;
+      this.logger.info(`Governance: ${governance.info.label} (${governance.info.specName})`);
+    }
+    if (fellowship) {
+      this.topology.fellowshipChain = fellowship.info;
+      if (fellowship !== governance) {
+        this.logger.info(`Fellowship: ${fellowship.info.label} (${fellowship.info.specName})`);
+      }
+    }
+
+    const additional: Fork[] = [];
+    for (const [label, networkKey] of chainToNetworkKey) {
+      if (label === governance?.info.label || label === fellowship?.info.label) {
+        this.logger.debug(`Skipping ${label} as it's already used as governance/fellowship chain`);
+        continue;
+      }
+      this.logger.debug(
+        `Adding additional chain manager: ${label} from network key: ${networkKey}`
+      );
+      additional.push({
+        label,
+        manager: ChopsticksManager.fromExistingContext(this.logger, contextOf(networkKey)),
+        info: this.topology.additionalChains.find((chain) => chain.label === label),
+      });
+    }
+    if (additional.length > 0) {
+      this.logger.info(
+        `Additional chains connected: ${additional.map((fork) => fork.label).join(', ')}`
+      );
+    }
+
+    return { governance, fellowship, additional };
+  }
+
+  /** Wrap a chopsticks context with a manager and a ready polkadot-api client. */
+  private async connectFork(context: ChopsticksContext): Promise<ConnectedFork> {
+    const manager = ChopsticksManager.fromExistingContext(this.logger, context);
+    const client = createPolkadotClient(context.ws.endpoint);
+    const api = createApiForChain(client);
+    await manager.waitForChainReady(api);
+    return { manager, client, api };
+  }
+
+  private async adoptPrimaryChain(
+    context: ChopsticksContext,
+    endpoint: string
+  ): Promise<ForkedChain> {
+    const fork = await this.connectFork(context);
+    return { ...fork, info: await getChainInfo(fork.api, endpoint) };
+  }
+
+  /** Execute one step against the forked network and run its post-test. */
+  private async runStep(
+    network: ForkedNetwork,
+    step: ReferendumStep,
+    index: number,
+    count: number,
+    verbose: boolean
+  ): Promise<void> {
+    if (count > 1) {
+      this.logger.section(`Step ${index + 1}/${count}: ${describeStep(step)}`);
+    }
+
+    const hasGovernance = stepHasGovernance(step);
+    const hasFellowship = stepHasFellowship(step);
+    const { governance, fellowship } = network;
+
+    let outcome: StepOutcome;
+    if (hasGovernance && hasFellowship) {
+      if (!governance || !fellowship) {
+        throw new Error('Step needs governance and fellowship chains but they were not forked');
+      }
+      outcome = await this.runDualStep(network, step, governance, fellowship);
+    } else if (hasGovernance) {
+      if (!governance) {
+        throw new Error('Step needs the governance chain but it was not forked');
+      }
+      outcome = await this.runSingleStep(network, step, governance, false);
+    } else if (hasFellowship) {
+      if (!fellowship) {
+        throw new Error('Step needs the fellowship chain but it was not forked');
+      }
+      outcome = await this.runSingleStep(network, step, fellowship, true);
+    } else {
+      throw new Error(`Step ${index + 1} names no referendum`);
+    }
+
+    await this.maybeRunPostTest(
+      step,
+      outcome,
+      { index: index + 1, count },
+      this.forks(network),
+      verbose
+    );
+  }
+
+  /** Fellowship referendum then governance referendum (the whitelisting pattern). */
+  private async runDualStep(
+    network: ForkedNetwork,
+    step: ReferendumStep,
+    governance: ForkedChain,
+    fellowship: ForkedChain
+  ): Promise<StepOutcome> {
+    if (step.preCall) {
+      this.logger.warn(
+        'pre-call is only applied to single-referendum steps; ignoring it for this fellowship + governance step'
+      );
+    }
+
+    const createdFellowship = await this.runner.createReferendumIfNeeded({
+      api: fellowship.api,
+      chopsticks: fellowship.manager,
+      callHex: step.callToCreateFellowshipReferendum,
+      preimageHex: step.callToNotePreimageForFellowshipReferendum,
+      isFellowship: true,
+    });
+    const fellowshipId = createdFellowship ?? step.fellowship;
+
+    const createdGovernance = await this.runner.createReferendumIfNeeded({
+      api: governance.api,
+      chopsticks: governance.manager,
+      callHex: step.callToCreateGovernanceReferendum,
+      preimageHex: step.callToNotePreimageForGovernanceReferendum,
+      isFellowship: false,
+    });
+    const governanceId = createdGovernance ?? step.referendum;
+
+    if (fellowshipId === undefined) {
+      throw new Error('Fellowship referendum ID is required but was not provided or created');
+    }
+    if (governanceId === undefined) {
+      throw new Error('Main referendum ID is required but was not provided or created');
+    }
+
+    if (governance === fellowship) {
+      await this.runner.simulateSequentialReferenda(
+        governance.api,
+        governance.manager,
+        fellowshipId,
+        governanceId
+      );
+      await this.eventCollector.collectAdditionalChainEvents(managersOf(network.additional));
+    } else {
+      await this.runner.simulateMultiChainReferenda({
+        fellowship: {
+          api: fellowship.api,
+          chopsticks: fellowship.manager,
+          referendumId: fellowshipId,
+          label: fellowship.info.label,
+        },
+        governance: {
+          api: governance.api,
+          chopsticks: governance.manager,
+          referendumId: governanceId,
+          label: governance.info.label,
+        },
+      });
+      await this.eventCollector.displayPostExecutionEvents({
+        governance: { chopsticks: governance.manager, api: governance.api },
+        fellowship: { chopsticks: fellowship.manager, api: fellowship.api },
+        additionalManagers: managersOf(network.additional),
+        governanceLabel: governance.info.label,
+        fellowshipLabel: fellowship.info.label,
+      });
+    }
+
+    return {
+      mainLabel: governance.info.label,
+      referendumId: governanceId,
+      fellowshipReferendumId: fellowshipId,
+    };
+  }
+
+  /** A governance-only or fellowship-only referendum on `chain`; XCM settles on every other fork. */
+  private async runSingleStep(
+    network: ForkedNetwork,
+    step: ReferendumStep,
+    chain: ForkedChain,
+    isFellowship: boolean
+  ): Promise<StepOutcome> {
+    const result = await this.runner.fetchAndSimulate({
+      api: chain.api,
+      chopsticks: chain.manager,
+      referendumId: isFellowship ? step.fellowship : step.referendum,
+      isFellowship,
+      createCallHex: isFellowship
+        ? step.callToCreateFellowshipReferendum
+        : step.callToCreateGovernanceReferendum,
+      createPreimageHex: isFellowship
+        ? step.callToNotePreimageForFellowshipReferendum
+        : step.callToNotePreimageForGovernanceReferendum,
+      preCall: step.preCall,
+      preOrigin: step.preOrigin,
+    });
+
+    await this.eventCollector.collectAdditionalChainEvents(managersOf(this.forks(network, chain)));
+
+    return {
+      mainLabel: chain.info.label,
+      referendumId: isFellowship ? undefined : result.referendumId,
+      fellowshipReferendumId: isFellowship ? result.referendumId : undefined,
+    };
+  }
+
+  /**
+   * Every fork in the network in a stable order — primaries first, then additional chains — minus
+   * `except` (the chain a step just executed on, when the others should settle its XCM).
+   */
+  private forks(network: ForkedNetwork, except?: ForkedChain): Fork[] {
+    const forks: Fork[] = [];
+    for (const primary of [network.governance, network.fellowship]) {
+      if (
+        primary &&
+        primary !== except &&
+        !forks.some((fork) => fork.manager === primary.manager)
+      ) {
+        forks.push({ label: primary.info.label, manager: primary.manager, info: primary.info });
+      }
+    }
+    forks.push(...network.additional);
+    return forks;
+  }
+
+  private async teardownForkedNetwork(network: ForkedNetwork, cleanup: boolean): Promise<void> {
+    const primaries: Array<{ label: string; chain: ForkedChain }> = [];
+    if (network.governance) {
+      primaries.push({
+        label: `Governance (${network.governance.info.label})`,
+        chain: network.governance,
+      });
+    }
+    if (network.fellowship && network.fellowship !== network.governance) {
+      primaries.push({
+        label: `Fellowship (${network.fellowship.info.label})`,
+        chain: network.fellowship,
+      });
+    }
+    await this.shutdownForks(
+      primaries.map(({ chain }) => chain.client),
+      [
+        ...primaries.map(({ label, chain }) => ({ label, manager: chain.manager })),
+        ...network.additional.map(({ label, manager }) => ({ label, manager })),
+      ],
+      cleanup
+    );
+  }
+
+  /** Destroy the clients, then tear the forks down or leave them paused for inspection. */
+  private async shutdownForks(
+    clients: PolkadotClient[],
+    managers: Array<{ label: string; manager: ChopsticksManager }>,
+    cleanup: boolean
+  ): Promise<void> {
+    for (const client of clients) {
+      try {
+        client.destroy();
+      } catch {
+        // best-effort
+      }
+    }
+    if (cleanup) {
+      await Promise.all(managers.map(({ manager }) => manager.cleanup()));
+    } else {
+      await this.pauseAllManagers(managers);
+    }
+  }
+
+  /**
+   * Describe a live fork for a post-test. Uses the identity detected at fork time when we have it;
+   * otherwise reads `spec_name` via the same one-shot legacy RPC as pre-fork detection.
+   */
+  private async describePostTestChain(fork: Fork): Promise<PostTestChain> {
+    const context = fork.manager.getContext();
+    const wsEndpoint = context.ws.endpoint;
+    // The live chopsticks-core Blockchain, for in-process block building (see PostTestChain.chain).
+    const chain = (context as unknown as { chain?: unknown }).chain;
+    let info = fork.info;
+    if (!info) {
+      try {
+        info = await fetchChainInfoFromEndpoint(wsEndpoint);
+      } catch {
+        return {
+          label: fork.label,
+          specName: 'unknown',
+          network: 'unknown',
+          kind: 'unknown',
+          wsEndpoint,
+          chain,
+        };
+      }
+    }
+    return {
+      label: info.label,
+      specName: info.specName,
+      network: info.network,
+      kind: info.kind,
+      wsEndpoint,
+      chain,
+    };
+  }
+
+  /**
+   * Run a step's post-test module against the live network. `outcome.mainLabel` names the chain
+   * the step's referendum executed on. Rethrows on failure so the caller exits non-zero.
+   */
+  private async maybeRunPostTest(
+    step: Pick<ReferendumStep, 'postTest' | 'postTestArgs'>,
+    outcome: StepOutcome,
+    position: Pick<PostTestStepInfo, 'index' | 'count'>,
+    forks: Fork[],
+    verbose: boolean
+  ): Promise<void> {
+    if (!step.postTest) return;
+    const chains = await Promise.all(forks.map((fork) => this.describePostTestChain(fork)));
+    const main = chains.find((c) => c.label === outcome.mainLabel) ?? chains[0];
+    if (!main) throw new Error('No chains available for the post-test');
+    const context: PostTestContext = {
+      main,
+      chains,
+      args: undefined,
+      verbose,
+      step: {
+        ...position,
+        referendumId: outcome.referendumId,
+        fellowshipReferendumId: outcome.fellowshipReferendumId,
+      },
+    };
+    await runPostTest(this.logger, step.postTest, context, step.postTestArgs);
+  }
+
+  /**
+   * Run referendum steps whose fellowship half sends an XCM that ultimately executes on a chain
+   * in a different consensus (across the Polkadot → Kusama bridge).
    *
-   * Phase 1 scope (current): spawn both sides (Polkadot: relay + Collectives + AHP + BHP,
-   * Kusama: relay + AHK + BHK), drive the fellowship referendum on Collectives, and run a
-   * read-only BridgeConnector that decodes and reports any outbound bridge messages
-   * emitted on BHP. NO Kusama-side delivery happens yet — that arrives in Phase 4.
+   * Both sides are spawned once (Polkadot: Collectives + AHP + BHP, Kusama: AHK + BHK, plus any
+   * `--additional-chains` routed per side). Then, per step: the fellowship referendum on
+   * Collectives, the bridge pump that delivers its message to BHK and verifies it landed on AHK,
+   * the AHK public referendum that dispatches the whitelisted call (when the step has a governance
+   * half), downstream fan-out settlement on the other Kusama chains, and the step's post-test.
    */
   async testFellowshipBridged(
-    fellowshipReferendumId: number | undefined,
-    mainReferendumId: number | undefined,
+    steps: ReferendumStep[],
     cleanup: boolean,
     options: TestOptions,
     bridgeEndpoints: BridgeTopologyConfig
   ): Promise<void> {
-    // The second-half AHK governance referendum runs either from a create-call (new
-    // referendum) or from an existing referendum ID (`-r`). Either way it dispatches
-    // the bridged whitelisted call; without it, only the bridge crossing is exercised.
-    const runAhkPublicReferendum =
-      !!options.callToCreateGovernanceReferendum || mainReferendumId !== undefined;
+    if (steps.length === 0) {
+      throw new Error('At least one referendum step is required');
+    }
     const builder = new BridgeTopologyBuilder(this.logger, {
       ...bridgeEndpoints,
       injectFellowshipStorage:
-        bridgeEndpoints.injectFellowshipStorage ?? !!options.callToCreateFellowshipReferendum,
+        bridgeEndpoints.injectFellowshipStorage ??
+        steps.some((step) => !!step.callToCreateFellowshipReferendum),
       // Alice on AHK is only needed when *creating* a referendum (she signs notePreimage
       // + submit). An existing referendum is force-approved via storage, so no signer.
       injectAliceOnAssetHubKusama:
-        bridgeEndpoints.injectAliceOnAssetHubKusama ?? !!options.callToCreateGovernanceReferendum,
+        bridgeEndpoints.injectAliceOnAssetHubKusama ??
+        steps.some((step) => !!step.callToCreateGovernanceReferendum),
       // Alice signs receive_messages_proof on BHK — always fund her there.
       injectAliceOnBridgeHubKusama: bridgeEndpoints.injectAliceOnBridgeHubKusama ?? true,
     });
@@ -628,21 +656,16 @@ export class NetworkCoordinator {
 
     const polkadotChains: Record<string, BridgeChain> = {};
     const kusamaChains: Record<string, BridgeChain> = {};
-    const clientsToDestroy: PolkadotClient[] = [];
     // Hoisted so the finally-block can tear down the bridge subscription + the
     // polkadot.js ApiPromise instances it owns, even if the bridge work throws.
     let bridgeConnector: BridgeConnector | null = null;
 
     try {
       for (const [key, ctx] of Object.entries(polkadotNetworks)) {
-        const chain = await this.adoptBridgeChain(key, ctx as unknown as ChopsticksContext);
-        polkadotChains[key] = chain;
-        clientsToDestroy.push(chain.client);
+        polkadotChains[key] = await this.adoptBridgeChain(key, ctx as unknown as ChopsticksContext);
       }
       for (const [key, ctx] of Object.entries(kusamaNetworks)) {
-        const chain = await this.adoptBridgeChain(key, ctx as unknown as ChopsticksContext);
-        kusamaChains[key] = chain;
-        clientsToDestroy.push(chain.client);
+        kusamaChains[key] = await this.adoptBridgeChain(key, ctx as unknown as ChopsticksContext);
       }
 
       // Everything adopted under a non-core key (relay `polkadot`/`kusama` or `extra_<n>`)
@@ -668,22 +691,11 @@ export class NetworkCoordinator {
         extras: kusamaExtras,
       };
 
-      this.logger.section('Fellowship Referendum Simulation (Collectives)');
-      await this.runner.fetchAndSimulate({
-        api: polkadotSideForConnector.collectives.api,
-        chopsticks: polkadotSideForConnector.collectives.manager,
-        referendumId: fellowshipReferendumId,
-        isFellowship: true,
-        createCallHex: options.callToCreateFellowshipReferendum,
-        createPreimageHex: options.callToNotePreimageForFellowshipReferendum,
-        preCall: options.preCall,
-        preOrigin: options.preOrigin,
-        label: 'Fellowship',
-      });
-
       const pumpRounds = options.bridgePumpRounds
         ? parseInt(options.bridgePumpRounds, 10)
         : undefined;
+      // Construction only stores the sides; the bridge subscription is set up lazily by the first
+      // pump. One connector for the whole run: its collected events accumulate across steps.
       bridgeConnector = new BridgeConnector(
         this.logger,
         polkadotSideForConnector,
@@ -692,75 +704,118 @@ export class NetworkCoordinator {
       );
       const connector = bridgeConnector;
 
-      this.logger.section('Bridge Pump (observe BHP outbound, deliver to BHK)');
-      const report = await connector.pumpUntilQuiet();
-      this.logger.info(
-        `Bridge pump observed ${report.totalSeen} outbound message(s) across ${report.byLane.size} lane(s) over ${report.rounds} round(s)`
-      );
+      const bridgeForks: Fork[] = [
+        ...Object.values(polkadotChains),
+        ...Object.values(kusamaChains),
+      ].map((chain) => ({ label: chain.label, manager: chain.manager, info: chain.info }));
 
-      if (report.totalSeen > 0) {
-        // The chopsticks connector delivered the messages to BHK during the pump above.
-        // Verify the end-to-end happy path: BHP MessageAccepted, BHK MessagesReceived,
-        // AHK MessageQueue.Processed{success:true} all fired.
-        this.logger.section('Bridge Delivery Verification');
-        const verifier = new BridgeVerifier(this.logger, {
-          outboundPalletName: 'BridgeKusamaMessages',
-          destMessagesPalletName: 'BridgePolkadotMessages',
-        });
-        const verification = await verifier.verify(
-          polkadotSideForConnector,
-          kusamaSideForConnector,
-          connector.getCollectedEvents()
-        );
-        if (!verification.overallPass) {
-          throw new Error(
-            `Bridge end-to-end verification FAILED: ${verification.failureReasons.join('; ')}`
+      for (const [index, step] of steps.entries()) {
+        if (steps.length > 1) {
+          this.logger.section(`Step ${index + 1}/${steps.length}: ${describeStep(step)}`);
+        }
+        const outcome: StepOutcome = {
+          mainLabel: stepHasGovernance(step)
+            ? kusamaSideForConnector.ahk.label
+            : polkadotSideForConnector.collectives.label,
+        };
+
+        if (stepHasFellowship(step)) {
+          this.logger.section('Fellowship Referendum Simulation (Collectives)');
+          const fellowshipResult = await this.runner.fetchAndSimulate({
+            api: polkadotSideForConnector.collectives.api,
+            chopsticks: polkadotSideForConnector.collectives.manager,
+            referendumId: step.fellowship,
+            isFellowship: true,
+            createCallHex: step.callToCreateFellowshipReferendum,
+            createPreimageHex: step.callToNotePreimageForFellowshipReferendum,
+            preCall: step.preCall,
+            preOrigin: step.preOrigin,
+            label: 'Fellowship',
+          });
+          outcome.fellowshipReferendumId = fellowshipResult.referendumId;
+
+          this.logger.section('Bridge Pump (observe BHP outbound, deliver to BHK)');
+          const report = await connector.pumpUntilQuiet();
+          this.logger.info(
+            `Bridge pump observed ${report.totalSeen} outbound message(s) across ${report.byLane.size} lane(s) over ${report.rounds} round(s)`
           );
-        }
-      } else {
-        this.logger.info(
-          'No bridge messages observed (fellowship referendum may not have produced one, or BHK not in topology).'
-        );
-      }
 
-      // Second half of the full end-to-end scenario: now that the fellowship
-      // referendum has bridged Whitelist.whitelist_call(hash) into AHK, run an AHK
-      // public referendum on the WhitelistedCaller track whose proposal is
-      // Whitelist.dispatch_whitelisted_call_with_preimage(call_X). Approval +
-      // scheduler dispatch then actually executes call_X on AHK.
-      if (runAhkPublicReferendum) {
-        this.logger.section('Bridged-Target Public Referendum (AHK whitelistedcaller)');
-        const ahkResult = await this.runner.fetchAndSimulate({
-          api: kusamaSideForConnector.ahk.api,
-          chopsticks: kusamaSideForConnector.ahk.manager,
-          // Existing AHK governance referendum (`-r`), or undefined when creating one.
-          referendumId: mainReferendumId,
-          isFellowship: false,
-          createCallHex: options.callToCreateGovernanceReferendum,
-          createPreimageHex: options.callToNotePreimageForGovernanceReferendum,
-          label: 'AHK Public',
-        });
-
-        // The dispatched call may fan XCM out to the other Kusama chains (e.g. a
-        // network-wide `authorize_upgrade`). AHK has already queued those messages on
-        // each target's inbound queue; build blocks on every other Kusama-side chain
-        // until each one actually *processes* the fan-out message addressed to it, then
-        // report what each one did.
-        const downstream = Object.values(kusamaChains).filter(
-          (chain) => chain !== kusamaSideForConnector.ahk
-        );
-        if (downstream.length > 0) {
-          this.logger.section('Downstream Fan-Out Settlement (Kusama system chains)');
-          // Identifiers of the XCM the AHK referendum dispatched outward. settleDownstream
-          // waits until each target processes one of these (a `MessageQueue.Processed`
-          // whose `id` is in this set) — a call-agnostic completion signal, instead of
-          // advancing a fixed number of blocks and racing the cross-chain delivery.
-          const expectedMessageIds = collectOutboundXcmIds(ahkResult.events);
-          const settleResults = await connector.settleDownstream(downstream, expectedMessageIds);
-          // Report only the fan-out targets; AHK is the source and its own
-          // UpgradeAuthorized is already surfaced during the public-referendum simulation.
-          this.reportDownstreamFanOut(connector, downstream, settleResults);
+          if (report.totalSeen > 0) {
+            // The chopsticks connector delivered the messages to BHK during the pump above.
+            // Verify the end-to-end happy path: BHP MessageAccepted, BHK MessagesReceived,
+            // AHK MessageQueue.Processed{success:true} all fired.
+            this.logger.section('Bridge Delivery Verification');
+            const verifier = new BridgeVerifier(this.logger, {
+              outboundPalletName: 'BridgeKusamaMessages',
+              destMessagesPalletName: 'BridgePolkadotMessages',
+            });
+            const verification = await verifier.verify(
+              polkadotSideForConnector,
+              kusamaSideForConnector,
+              connector.getCollectedEvents()
+            );
+            if (!verification.overallPass) {
+              throw new Error(
+                `Bridge end-to-end verification FAILED: ${verification.failureReasons.join('; ')}`
+              );
+            }
+          } else {
+            this.logger.info(
+              'No bridge messages observed (fellowship referendum may not have produced one, or BHK not in topology).'
+            );
+          }
         }
+
+        // Second half of the full end-to-end scenario: now that the fellowship referendum has
+        // bridged Whitelist.whitelist_call(hash) into AHK, run an AHK public referendum on the
+        // WhitelistedCaller track whose proposal is
+        // Whitelist.dispatch_whitelisted_call_with_preimage(call_X). Approval + scheduler
+        // dispatch then actually executes call_X on AHK.
+        if (stepHasGovernance(step)) {
+          this.logger.section('Bridged-Target Public Referendum (AHK whitelistedcaller)');
+          const ahkResult = await this.runner.fetchAndSimulate({
+            api: kusamaSideForConnector.ahk.api,
+            chopsticks: kusamaSideForConnector.ahk.manager,
+            // Existing AHK governance referendum (`-r`), or undefined when creating one.
+            referendumId: step.referendum,
+            isFellowship: false,
+            createCallHex: step.callToCreateGovernanceReferendum,
+            createPreimageHex: step.callToNotePreimageForGovernanceReferendum,
+            preCall: step.preCall,
+            preOrigin: step.preOrigin,
+            label: 'AHK Public',
+          });
+          outcome.referendumId = ahkResult.referendumId;
+
+          // The dispatched call may fan XCM out to the other Kusama chains (e.g. a
+          // network-wide `authorize_upgrade`). AHK has already queued those messages on
+          // each target's inbound queue; build blocks on every other Kusama-side chain
+          // until each one actually *processes* the fan-out message addressed to it, then
+          // report what each one did.
+          const downstream = Object.values(kusamaChains).filter(
+            (chain) => chain !== kusamaSideForConnector.ahk
+          );
+          if (downstream.length > 0) {
+            this.logger.section('Downstream Fan-Out Settlement (Kusama system chains)');
+            // Identifiers of the XCM the AHK referendum dispatched outward. settleDownstream
+            // waits until each target processes one of these (a `MessageQueue.Processed`
+            // whose `id` is in this set) — a call-agnostic completion signal, instead of
+            // advancing a fixed number of blocks and racing the cross-chain delivery.
+            const expectedMessageIds = collectOutboundXcmIds(ahkResult.events);
+            const settleResults = await connector.settleDownstream(downstream, expectedMessageIds);
+            // Report only the fan-out targets; AHK is the source and its own
+            // UpgradeAuthorized is already surfaced during the public-referendum simulation.
+            this.reportDownstreamFanOut(connector, downstream, settleResults);
+          }
+        }
+
+        await this.maybeRunPostTest(
+          step,
+          outcome,
+          { index: index + 1, count: steps.length },
+          bridgeForks,
+          !!options.verbose
+        );
       }
     } finally {
       // Tear down the bridge subscription + its polkadot.js ApiPromise instances
@@ -774,30 +829,21 @@ export class NetworkCoordinator {
         }
       }
 
-      for (const client of clientsToDestroy) {
-        try {
-          client.destroy();
-        } catch {
-          // ignore — best-effort
-        }
-      }
-
-      const allManagers = [
-        ...Object.entries(polkadotChains).map(([label, c]) => ({
-          label: `Polkadot/${label} (${c.label})`,
-          manager: c.manager,
+      const allChains = [
+        ...Object.entries(polkadotChains).map(([key, chain]) => ({
+          label: `Polkadot/${key} (${chain.label})`,
+          chain,
         })),
-        ...Object.entries(kusamaChains).map(([label, c]) => ({
-          label: `Kusama/${label} (${c.label})`,
-          manager: c.manager,
+        ...Object.entries(kusamaChains).map(([key, chain]) => ({
+          label: `Kusama/${key} (${chain.label})`,
+          chain,
         })),
       ];
-
-      if (cleanup) {
-        await Promise.all(allManagers.map(({ manager }) => manager.cleanup()));
-      } else {
-        await this.pauseAllManagers(allManagers);
-      }
+      await this.shutdownForks(
+        allChains.map(({ chain }) => chain.client),
+        allChains.map(({ label, chain }) => ({ label, manager: chain.manager })),
+        cleanup
+      );
     }
   }
 
@@ -855,20 +901,19 @@ export class NetworkCoordinator {
     }
   }
 
-  private async adoptBridgeChain(label: string, ctx: ChopsticksContext): Promise<BridgeChain> {
-    const manager = ChopsticksManager.fromExistingContext(this.logger, ctx);
-    const client = createPolkadotClient(manager.getContext().ws.endpoint);
-    const api = createApiForChain(client);
-    await manager.waitForChainReady(api);
-    let chainLabel = label;
+  /** Adopt a bridged fork; a failed identity read keeps the network key as its label. */
+  private async adoptBridgeChain(key: string, ctx: ChopsticksContext): Promise<BridgeChain> {
+    const fork = await this.connectFork(ctx);
+    const wsEndpoint = fork.manager.getContext().ws.endpoint;
+    let info: ChainInfo | undefined;
     try {
-      const info = await getChainInfo(api, manager.getContext().ws.endpoint);
-      chainLabel = info.label;
+      info = await getChainInfo(fork.api, wsEndpoint);
     } catch (error) {
-      this.logger.debug(`Could not detect chain info for ${label}: ${(error as Error).message}`);
+      this.logger.debug(`Could not detect chain info for ${key}: ${(error as Error).message}`);
     }
-    this.logger.info(`  ${label} ready: ${chainLabel} at ${manager.getContext().ws.endpoint}`);
-    return { manager, api, client, label: chainLabel };
+    const label = info?.label ?? key;
+    this.logger.info(`  ${key} ready: ${label} at ${wsEndpoint}`);
+    return { ...fork, label, info };
   }
 
   private async pauseAllManagers(
@@ -897,70 +942,5 @@ export class NetworkCoordinator {
       }
     });
     await Promise.all(pausePromises);
-  }
-
-  private async setupInterconnectedChains(options?: TestOptions): Promise<{
-    governanceManager: ChopsticksManager;
-    fellowshipManager: ChopsticksManager;
-    additionalManagers: Map<string, ChopsticksManager>;
-  }> {
-    if (!this.topology.governanceChain || !this.topology.fellowshipChain) {
-      throw new Error('Chain types must be detected before setting up interconnected chains');
-    }
-
-    const { networkConfig, governanceKey, fellowshipKey } =
-      this.topology.buildNetworkTopology(options);
-
-    const { chainToNetworkKey } = this.topology.registerAdditionalChains(
-      networkConfig,
-      new Set([this.topology.governanceChain.endpoint, this.topology.fellowshipChain.endpoint]),
-      this.topology.governanceChain.kind === 'relay',
-      this.topology.fellowshipChain.kind === 'relay'
-    );
-
-    const networks = await setupNetworks(networkConfig as Parameters<typeof setupNetworks>[0]);
-
-    const additionalManagers = new Map<string, ChopsticksManager>();
-    for (const [chainLabel, networkKey] of chainToNetworkKey) {
-      if (
-        chainLabel === this.topology.governanceChain!.label ||
-        chainLabel === this.topology.fellowshipChain?.label
-      ) {
-        this.logger.debug(
-          `Skipping ${chainLabel} as it's already used as governance/fellowship chain`
-        );
-        continue;
-      }
-
-      this.logger.debug(
-        `Adding additional chain manager: ${chainLabel} from network key: ${networkKey}`
-      );
-      additionalManagers.set(
-        chainLabel,
-        ChopsticksManager.fromExistingContext(
-          this.logger,
-          networks[networkKey] as unknown as ChopsticksContext
-        )
-      );
-    }
-
-    this.logger.debug(`Setup complete. Additional managers created: ${additionalManagers.size}`);
-    if (additionalManagers.size > 0) {
-      this.logger.info(
-        `Additional chains connected: ${Array.from(additionalManagers.keys()).join(', ')}`
-      );
-    }
-
-    return {
-      governanceManager: ChopsticksManager.fromExistingContext(
-        this.logger,
-        networks[governanceKey] as unknown as ChopsticksContext
-      ),
-      fellowshipManager: ChopsticksManager.fromExistingContext(
-        this.logger,
-        networks[fellowshipKey] as unknown as ChopsticksContext
-      ),
-      additionalManagers,
-    };
   }
 }

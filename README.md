@@ -64,7 +64,40 @@ npx github:karolk91/polkadot-referenda-tester test \
   --fellowship-chain-url wss://polkadot-collectives-rpc.polkadot.io \
   --call-to-create-governance-referendum 0x1503... \
   --call-to-create-fellowship-referendum 0x1703...
+
+# Chain referenda: run several steps, in order, on the same forked network.
+# Each --then segment takes the same per-referendum flags as the first step
+# (-r/-f, --call-to-create-*, --call-to-note-preimage-*, --pre-call, --pre-origin,
+# --post-test, --post-test-args); chain URLs and other run-level flags go first.
+# Here: authorize the v2.5.0 upgrade (1942 whitelisted by fellowship 612), apply the
+# release WASMs with a post-test, then run 1944 — whose call only decodes on v2.5.0.
+npx github:karolk91/polkadot-referenda-tester test \
+  --governance-chain-url wss://asset-hub-polkadot-rpc.n.dwellir.com \
+  --fellowship-chain-url wss://polkadot-collectives-rpc.polkadot.io \
+  --referendum 1942 --fellowship 612 \
+  --post-test apply-authorized-upgrade \
+  --post-test-args '{"release":"https://github.com/polkadot-fellows/runtimes/releases/tag/v2.5.0"}' \
+  --then --referendum 1944 --post-test dump-chain-events
 ```
+
+Steps may mix existing IDs and creation calls freely (e.g. create a referendum first, then execute an existing one). A failing step stops the run. Each step's post-test receives `step: { index, count, referendumId, fellowshipReferendumId }` in its context.
+
+## Post-tests
+
+`--post-test` runs a module against the live forks after a referendum executes, so a run can assert what the proposal was supposed to do. Two post-tests ship with the tool and are referenced by bare name, which works from a clone, a global install, or `npx`:
+
+| Name | What it does |
+| --- | --- |
+| `apply-authorized-upgrade` | Matches each fork's `System.AuthorizedUpgrade` against the blake2-256 of a GitHub release's WASM assets, applies the upgrade, walks the blocks where migrations run, then verifies `:code` and `spec_version`. Args: `release` (release URL, `owner/repo@tag`, or a bare fellows tag), `wasmDir`, `blocksAfterUpgrade`, `maxMigrationBlocks`, `only`, `failOnMissing`. |
+| `dump-chain-events` | Prints decoded extrinsics and events per fork, read from the in-process Chopsticks chain. Args: `blocks`, `only`, `all`, `verbose`. |
+
+Anything path-shaped loads your own module instead, resolved against the working directory:
+
+```bash
+yarn cli test --governance-chain-url <url> -r 1777 --post-test ./my-post-test.mjs
+```
+
+A post-test exports a function as `default`, `postTest`, or `run`, receives `{ main, chains, args, step }`, and throws to fail the run. Each entry in `chains` carries `{ label, specName, network, kind, wsEndpoint, chain }`, where `chain` is the live Chopsticks `Blockchain` — build blocks with `chain.newBlock()` so cross-chain message delivery works. `.mjs`, `.js` and `.cjs` load anywhere; `.ts` needs a Node with type stripping (>= 22.18 or >= 23.6).
 
 ## Bridged referenda (Polkadot Fellowship → Kusama governance)
 
@@ -127,6 +160,9 @@ yarn cli test \
 | `--asset-hub-kusama-url <url>` | Kusama Asset Hub RPC endpoint (bridged scenario). Defaults to `--governance-chain-url` and must match it |
 | `--bridge-hub-kusama-url <url>` | Kusama Bridge Hub RPC endpoint (bridged scenario). Defaults to `wss://kusama-bridge-hub-rpc.polkadot.io` |
 | `--bridge-pump-rounds <n>` | Max bridge pump rounds before giving up (bridged scenario, default: `8`) |
+| `--post-test <module>` | Module run against the live forks after the referendum executes: a bundled name (`apply-authorized-upgrade`, `dump-chain-events`) or a path to your own (`./my-post-test.mjs`). See [Post-tests](#post-tests) |
+| `--post-test-args <json>` | Value passed to the post-test as `args` (parsed as JSON when possible) |
+| `--then` | Separator starting another referendum step on the same forked network; repeat per step. Takes the same per-referendum flags as the first step |
 | `-v, --verbose` | Enable verbose logging |
 | `--no-cleanup` | Keep Chopsticks instance running after test |
 | `-h, --help` | Display help for command |

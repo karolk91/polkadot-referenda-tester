@@ -4454,6 +4454,8 @@ __metadata:
     "@acala-network/chopsticks-testing": "npm:^1.5.0"
     "@biomejs/biome": "npm:^2.0.0"
     "@polkadot/keyring": "npm:^13.0.0"
+    "@polkadot/util": "npm:^14.0.1"
+    "@polkadot/util-crypto": "npm:^14.0.1"
     "@tsconfig/node20": "npm:^20.1.9"
     "@types/js-yaml": "npm:^4.0.9"
     "@types/node": "npm:^22.15.21"

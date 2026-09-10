@@ -2,13 +2,14 @@ import { classifyAdditionalBridgeChains } from '../services/bridge-topology-buil
 import type { ChainNetwork } from '../services/chain-registry';
 import { fetchNetworkFromEndpoint } from '../services/chain-registry';
 import { NetworkCoordinator } from '../services/network-coordinator';
-import type { TestOptions } from '../types';
+import type { ReferendumStep, TestOptions } from '../types';
 import {
   inferNetworkFromUrl,
   parseEndpoint,
   parseMultipleEndpoints,
 } from '../utils/chain-endpoint-parser';
 import { Logger } from '../utils/logger';
+import { buildSteps, stepHasFellowship, stepHasGovernance } from '../utils/referendum-steps';
 
 const networkResolutionCache = new Map<string, Promise<ChainNetwork>>();
 
@@ -108,27 +109,14 @@ async function isCrossNetworkScenario(options: TestOptions): Promise<boolean> {
   return fellowshipNet !== governanceNet;
 }
 
-export async function validateOptions(options: TestOptions): Promise<void> {
-  if (options.referendum && options.callToCreateGovernanceReferendum) {
-    throw new Error(
-      'Cannot specify both --referendum (existing ID) and --call-to-create-governance-referendum (create new). Use one or the other.'
-    );
-  }
-
-  if (options.fellowship && options.callToCreateFellowshipReferendum) {
-    throw new Error(
-      'Cannot specify both --fellowship (existing ID) and --call-to-create-fellowship-referendum (create new). Use one or the other.'
-    );
-  }
-
-  const hasGovernanceRef = !!(options.referendum || options.callToCreateGovernanceReferendum);
-  const hasFellowshipRef = !!(options.fellowship || options.callToCreateFellowshipReferendum);
-
-  if (!hasGovernanceRef && !hasFellowshipRef) {
-    throw new Error(
-      'At least one referendum must be specified (--referendum, --fellowship) or created (--call-to-create-governance-referendum, --call-to-create-fellowship-referendum)'
-    );
-  }
+/**
+ * Validate the CLI options and return the referendum steps they describe. Per-step consistency
+ * (ID vs creation call, at least one referendum) is checked for the top-level step and every
+ * `--then` step; the bridged-scenario rules are checked across the whole run.
+ */
+export async function validateOptions(options: TestOptions): Promise<ReferendumStep[]> {
+  const steps = buildSteps(options);
+  const hasFellowshipRef = steps.some(stepHasFellowship);
 
   if (await isBridgedScenario(options)) {
     if (!hasFellowshipRef) {
@@ -158,6 +146,8 @@ export async function validateOptions(options: TestOptions): Promise<void> {
         'Either use the supported direction or run both referenda on the same network.'
     );
   }
+
+  return steps;
 }
 
 export async function testReferendum(options: TestOptions): Promise<void> {
@@ -165,10 +155,9 @@ export async function testReferendum(options: TestOptions): Promise<void> {
   const cleanupEnabled = options.cleanup !== false;
 
   try {
-    await validateOptions(options);
-
-    const hasGovernanceRef = !!(options.referendum || options.callToCreateGovernanceReferendum);
-    const hasFellowshipRef = !!(options.fellowship || options.callToCreateFellowshipReferendum);
+    const steps = await validateOptions(options);
+    const hasGovernanceRef = steps.some(stepHasGovernance);
+    const hasFellowshipRef = steps.some(stepHasFellowship);
 
     if (hasGovernanceRef && !options.governanceChainUrl) {
       throw new Error('--governance-chain-url is required when testing a governance referendum');
@@ -189,16 +178,6 @@ export async function testReferendum(options: TestOptions): Promise<void> {
     const additionalChainsParsed = options.additionalChains
       ? parseMultipleEndpoints(options.additionalChains)
       : [];
-
-    const mainRefId = options.referendum ? parseInt(options.referendum, 10) : undefined;
-    if (mainRefId !== undefined && Number.isNaN(mainRefId)) {
-      throw new Error(`Invalid referendum ID: ${options.referendum}`);
-    }
-
-    const fellowshipRefId = options.fellowship ? parseInt(options.fellowship, 10) : undefined;
-    if (fellowshipRefId !== undefined && Number.isNaN(fellowshipRefId)) {
-      throw new Error('Invalid fellowship referendum ID');
-    }
 
     if (hasFellowshipRef) {
       logger.section('Polkadot Referenda Tester (Fellowship Mode)');
@@ -259,13 +238,13 @@ export async function testReferendum(options: TestOptions): Promise<void> {
           ],
           logger
         );
-      await coordinator.testFellowshipBridged(fellowshipRefId, mainRefId, cleanupEnabled, options, {
+      await coordinator.testFellowshipBridged(steps, cleanupEnabled, options, {
         ...bridgeEndpoints,
         additionalPolkadot,
         additionalKusama,
       });
     } else {
-      await coordinator.testWithFellowship(mainRefId, fellowshipRefId, cleanupEnabled, options);
+      await coordinator.runSteps(steps, cleanupEnabled, options);
     }
 
     if (cleanupEnabled) {

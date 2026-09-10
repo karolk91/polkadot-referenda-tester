@@ -20,6 +20,13 @@ import { Command } from 'commander';
 import { version } from '../package.json';
 import { listReferendums } from './commands/list-referendums';
 import { testReferendum } from './commands/test-referendum';
+import {
+  addStepOptions,
+  parseThenSegments,
+  splitArgvOnThen,
+  THEN_FLAG,
+  THEN_HELP,
+} from './utils/then-args';
 
 const program = new Command();
 
@@ -28,10 +35,19 @@ program
   .description('CLI tool to test Polkadot referenda execution using Chopsticks')
   .version(version);
 
+// `--then` splits the `test` arguments into referendum steps that all use the same per-referendum
+// flags. Commander cannot parse repeated option groups, so split first: the main segment goes
+// through commander as usual and the later segments are parsed in the `test` preAction hook below.
+const { main: mainArgs, segments: thenSegments } = splitArgvOnThen(process.argv.slice(2));
+
 // Single chain referendum test
-program
-  .command('test')
-  .description('Test a referendum by simulating its execution')
+const testCommand = addStepOptions(
+  program
+    .command('test')
+    .description(
+      'Test a referendum by simulating its execution. Chain several referenda with --then (see below).'
+    )
+)
   .option(
     '--governance-chain-url <url>',
     'Governance chain RPC endpoint URL. Format: url, url,block, or path to a chopsticks YAML config (with endpoint+wasm-override+import-storage+...) (e.g., wss://polkadot.io or wss://polkadot.io,12345)'
@@ -40,38 +56,12 @@ program
     '--fellowship-chain-url <url>',
     'Fellowship chain RPC endpoint URL. Format: url, url,block, or path to a chopsticks YAML config (with endpoint+wasm-override+import-storage+...) (only required when using --fellowship)'
   )
-  .option('-r, --referendum <id>', 'Main governance referendum ID to test')
-  .option('-f, --fellowship <id>', 'Fellowship referendum ID (for whitelisting scenarios)')
   .option('-p, --port <port>', 'Local Chopsticks starting port', '8000')
-  .option(
-    '--pre-call <hex>',
-    'Hex string of call to execute before the main referendum (via Scheduler.Inline)'
-  )
-  .option(
-    '--pre-origin <origin>',
-    'Origin for pre-execution call (e.g., "Root", "WhitelistedCaller", "Origins.Treasurer")'
-  )
   .option('--no-cleanup', 'Keep Chopsticks instance running after test')
   .option('-v, --verbose', 'Enable verbose logging')
   .option(
     '--additional-chains <urls>',
     'Comma-separated list of additional chain URLs to spawn alongside the primary chains. Use this for relays (e.g. Polkadot relay, REQUIRED for the bridged scenario) and for monitoring other chains. Each entry: url, url,block, or path to a chopsticks YAML config (with endpoint+wasm-override+import-storage+...). Relays are auto-detected by URL (no parachain prefix). E.g., wss://rpc.polkadot.io,wss://kusama-rpc.polkadot.io,./configs/some-chain.yml'
-  )
-  .option(
-    '--call-to-create-governance-referendum <hex>',
-    'Call data to create a governance referendum (hex). Mutually exclusive with --referendum'
-  )
-  .option(
-    '--call-to-note-preimage-for-governance-referendum <hex>',
-    'Call data to note preimage for governance referendum (hex, optional)'
-  )
-  .option(
-    '--call-to-create-fellowship-referendum <hex>',
-    'Call data to create a fellowship referendum (hex). Mutually exclusive with --fellowship'
-  )
-  .option(
-    '--call-to-note-preimage-for-fellowship-referendum <hex>',
-    'Call data to note preimage for fellowship referendum (hex, optional)'
   )
   .option(
     '--asset-hub-polkadot-url <url>',
@@ -90,7 +80,23 @@ program
     'Kusama Bridge Hub RPC endpoint URL. Required when the bridged scenario is detected. Format: url, url,block, or path to a chopsticks YAML config (with endpoint+wasm-override+import-storage+...)'
   )
   .option('--bridge-pump-rounds <n>', 'Max bridge pump rounds before giving up (default: 8)')
+  .addHelpText('after', THEN_HELP)
+  // The `--then` segments become `options.thenSteps`; parse errors use commander's own reporting.
+  .hook('preAction', (command) => {
+    try {
+      command.setOptionValue('thenSteps', parseThenSegments(thenSegments));
+    } catch (error) {
+      command.error(`error: ${(error as Error).message}`);
+    }
+  })
   .action(testReferendum);
+
+// Only `test` understands `--then`.
+program.hook('preAction', (_program, actionCommand) => {
+  if (thenSegments.length > 0 && actionCommand !== testCommand) {
+    actionCommand.error(`error: ${THEN_FLAG} is only supported by the "test" command`);
+  }
+});
 
 // List all referendums
 program
@@ -111,4 +117,4 @@ program
   .option('-v, --verbose', 'Enable verbose logging')
   .action(listReferendums);
 
-program.parse();
+program.parse(mainArgs, { from: 'user' });
