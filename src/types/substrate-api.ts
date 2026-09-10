@@ -1,5 +1,5 @@
-import type { Binary } from '@polkadot-api/substrate-bindings';
-import type { Enum, HexString, PolkadotSigner, SS58String } from 'polkadot-api';
+import type { TxCreator } from 'polkadot-api/tx-creator';
+import type { Enum, HexString, SS58String } from 'polkadot-api';
 
 // --- Storage entry types (mirrors polkadot-api's unsafe API shapes) ---
 
@@ -58,7 +58,7 @@ export type RawReferendumInfo = Enum<{
 // --- Scheduler types ---
 
 export type ScheduledCall = Enum<{
-  Inline: Binary;
+  Inline: Uint8Array;
   Lookup: { hash: HexString; len: number };
 }>;
 
@@ -74,9 +74,9 @@ export interface ScheduledEntry {
 // --- Transaction type (returned by txFromCallData) ---
 
 export interface DecodedTransaction {
-  sign(from: PolkadotSigner, ...args: unknown[]): Promise<string>;
+  create(creator: TxCreator, ...args: unknown[]): Promise<Uint8Array>;
   decodedCall: { type: string; value: { type: string; value?: { index?: number } } };
-  getEncodedData(): Binary;
+  getEncodedData(): Promise<Uint8Array>;
 }
 
 // --- Runtime version ---
@@ -139,5 +139,5 @@ export interface SubstrateApi {
       Tracks(): Promise<TrackInfo[]>;
     };
   };
-  txFromCallData(callData: Binary): Promise<DecodedTransaction>;
+  txFromCallData(callData: Uint8Array): Promise<DecodedTransaction>;
 }

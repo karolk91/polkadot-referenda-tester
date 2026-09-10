@@ -1,7 +1,6 @@
 import type { PolkadotClient } from 'polkadot-api';
 import { createClient } from 'polkadot-api';
-import { withPolkadotSdkCompat } from 'polkadot-api/polkadot-sdk-compat';
-import { getWsProvider } from 'polkadot-api/ws-provider/node';
+import { getWsProvider } from 'polkadot-api/ws';
 import type { ReferendaPallet, SubstrateApi } from '../types/substrate-api';
 
 export type ChainNetwork = 'polkadot' | 'kusama' | 'paseo' | 'westend' | 'rococo' | 'unknown';
@@ -131,7 +130,7 @@ export async function fetchChainInfoFromEndpoint(endpoint: string): Promise<Chai
  * Create a polkadot-api client connected to the given WebSocket endpoint.
  */
 export function createPolkadotClient(endpoint: string): PolkadotClient {
-  return createClient(withPolkadotSdkCompat(getWsProvider(endpoint)));
+  return createClient(getWsProvider(endpoint));
 }
 
 /**
@@ -178,24 +177,19 @@ export function fetchRuntimeSpecName(endpoint: string, timeoutMs = 20000): Promi
     );
     try {
       const provider = getWsProvider(endpoint);
-      const conn = provider((raw: string) => {
-        let msg: { id?: number; error?: { message?: string }; result?: { specName?: string } };
-        try {
-          msg = JSON.parse(raw);
-        } catch {
-          return;
-        }
+      // polkadot-api's provider delivers already-parsed JSON-RPC messages and `send` takes a request
+      // object (both were raw strings before polkadot-api v2).
+      const conn = provider((msg) => {
         if (msg.id !== 1) return;
-        if (msg.error) {
-          finish(() => reject(new Error(msg.error?.message || 'state_getRuntimeVersion failed')));
-        } else {
-          finish(() => resolve(String(msg.result?.specName ?? 'unknown')));
+        if ('error' in msg && msg.error) {
+          finish(() => reject(new Error(msg.error.message || 'state_getRuntimeVersion failed')));
+        } else if ('result' in msg) {
+          const result = msg.result as { specName?: string } | undefined;
+          finish(() => resolve(String(result?.specName ?? 'unknown')));
         }
       });
       connection = conn;
-      conn.send(
-        JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'state_getRuntimeVersion', params: [] })
-      );
+      conn.send({ jsonrpc: '2.0', id: 1, method: 'state_getRuntimeVersion', params: [] });
     } catch (error) {
       finish(() => reject(error as Error));
     }
