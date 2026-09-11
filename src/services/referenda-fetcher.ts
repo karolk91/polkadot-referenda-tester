@@ -1,4 +1,3 @@
-import { FixedSizeBinary } from '@polkadot-api/substrate-bindings';
 import type { ReferendumInfo } from '../types';
 import type {
   ReferendumOngoing,
@@ -159,7 +158,7 @@ export class ReferendaFetcher {
       submittedAt: 0,
     };
 
-    const taskName = FixedSizeBinary.fromBytes(getEnactmentTaskName(referendumId));
+    const taskName = getEnactmentTaskName(referendumId);
     let lookup: [number, number] | undefined;
     try {
       lookup = await api.query.Scheduler.Lookup.getValue(taskName as unknown as Uint8Array);

@@ -27,6 +27,35 @@ export interface TestOptions {
   assetHubKusamaUrl?: string; // AHK override; defaults from --governance-chain-url when bridged
   bridgeHubKusamaUrl?: string; // BHK — required when bridged
   bridgePumpRounds?: string; // Max rounds the bridge connector pumps before giving up
+  // Post-referendum testing
+  postTest?: string; // Path to a module run against the live network after the referendum executes
+  postTestArgs?: string; // Value passed to the post-test as `args` (JSON when parseable)
+  // Referendum chaining: the steps given after each `--then` separator (already parsed from the
+  // same per-referendum flags), run in order on the same forked network after the step described
+  // by the top-level flags. See utils/referendum-steps.ts.
+  thenSteps?: ReferendumStep[];
+}
+
+/**
+ * One referendum step of a run. Before chaining existed, a single invocation of the tool ran
+ * exactly one step. A run is an ordered list of steps executed on ONE forked network, so each step
+ * runs on the state the previous steps produced, including changes made by a step's post-test (for
+ * example applying a runtime upgrade).
+ *
+ * A step is a governance referendum, a fellowship referendum, or both (fellowship first, then
+ * governance — the whitelisting pattern). Each half is either an existing ID or a creation call.
+ */
+export interface ReferendumStep {
+  referendum?: number; // Existing governance referendum ID
+  fellowship?: number; // Existing fellowship referendum ID
+  callToCreateGovernanceReferendum?: string;
+  callToNotePreimageForGovernanceReferendum?: string;
+  callToCreateFellowshipReferendum?: string;
+  callToNotePreimageForFellowshipReferendum?: string;
+  preCall?: string; // Executed before the step's referendum (single-referendum steps only)
+  preOrigin?: string;
+  postTest?: string; // Module run against the live network after this step executes
+  postTestArgs?: string;
 }
 
 export interface ReferendumInfo {

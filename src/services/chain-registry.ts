@@ -1,7 +1,6 @@
 import type { PolkadotClient } from 'polkadot-api';
 import { createClient } from 'polkadot-api';
-import { withPolkadotSdkCompat } from 'polkadot-api/polkadot-sdk-compat';
-import { getWsProvider } from 'polkadot-api/ws-provider/node';
+import { getWsProvider } from 'polkadot-api/ws';
 import type { ReferendaPallet, SubstrateApi } from '../types/substrate-api';
 
 export type ChainNetwork = 'polkadot' | 'kusama' | 'paseo' | 'westend' | 'rococo' | 'unknown';
@@ -113,28 +112,25 @@ export async function fetchNetworkFromEndpoint(endpoint: string): Promise<ChainN
 }
 
 /**
- * Open a transient client, read runtime metadata, and return the full {@link ChainInfo}
- * (network + kind + label). Always destroys the client, even on error. Used by the
- * bridged-scenario path to classify `--additional-chains` (network for side-routing,
- * kind to skip relays, label for identity-based dedup against the core bridge chains).
+ * Read the full {@link ChainInfo} (network + kind + label) for an endpoint from its runtime
+ * `spec_name`, via a single legacy `state_getRuntimeVersion` RPC ({@link fetchRuntimeSpecName})
+ * instead of a full polkadot-api client. This works against full nodes, chopsticks forks and
+ * legacy-only endpoints, such as a subway caching/failover proxy that implements the old JSON-RPC
+ * but not the new `chainHead_*` API that `createClient` requires. Used by all pre-fork chain
+ * detection and by the bridged-scenario path to classify `--additional-chains`.
  *
- * @throws if the endpoint cannot be reached or the metadata read fails.
+ * @throws if the endpoint cannot be reached or the runtime-version read fails.
  */
 export async function fetchChainInfoFromEndpoint(endpoint: string): Promise<ChainInfo> {
-  const client = createPolkadotClient(endpoint);
-  try {
-    const api = createApiForChain(client);
-    return await getChainInfo(api, endpoint);
-  } finally {
-    client.destroy();
-  }
+  const specName = await fetchRuntimeSpecName(endpoint);
+  return buildChainInfoFromSpecName(specName, endpoint);
 }
 
 /**
  * Create a polkadot-api client connected to the given WebSocket endpoint.
  */
 export function createPolkadotClient(endpoint: string): PolkadotClient {
-  return createClient(withPolkadotSdkCompat(getWsProvider(endpoint)));
+  return createClient(getWsProvider(endpoint));
 }
 
 /**
@@ -147,6 +143,61 @@ export function createApiForChain(client: PolkadotClient): SubstrateApi {
   }
 
   throw new Error('Unable to create unsafe API instance from client');
+}
+
+/**
+ * Read a chain's runtime `specName` via a single legacy `state_getRuntimeVersion` JSON-RPC
+ * call over a bare polkadot-api ws provider, deliberately NOT `createClient`. `createClient`
+ * requires the new `chainHead_*`/`chainSpec_*` JSON-RPC spec; a legacy-only endpoint (for example
+ * a subway caching/failover proxy) returns "Method not found" for `chainHead_v1_follow`, which
+ * puts `createClient` into a reconnect loop with no backoff. Every node implements the old
+ * `state_getRuntimeVersion`, so this works against full nodes, chopsticks forks and proxies. The
+ * socket is always torn down before the promise settles.
+ *
+ * @throws if the endpoint cannot be reached, the RPC errors, or no response arrives in time.
+ */
+export function fetchRuntimeSpecName(endpoint: string, timeoutMs = 20000): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    let connection: { disconnect: () => void } | undefined;
+    let done = false;
+    // Tear the socket down before settling. `resolve`/`reject` are already idempotent, so this
+    // only guards the teardown.
+    const cleanup = (): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try {
+        connection?.disconnect();
+      } catch {
+        // ignore teardown errors
+      }
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Timed out reading runtime version from ${endpoint}`));
+    }, timeoutMs);
+    try {
+      const provider = getWsProvider(endpoint);
+      // polkadot-api's provider delivers already-parsed JSON-RPC messages and `send` takes a request
+      // object (both were raw strings before polkadot-api v2).
+      const conn = provider((msg) => {
+        if (msg.id !== 1) return;
+        if ('error' in msg && msg.error) {
+          cleanup();
+          reject(new Error(msg.error.message || 'state_getRuntimeVersion failed'));
+        } else if ('result' in msg) {
+          const result = msg.result as { specName?: string } | undefined;
+          cleanup();
+          resolve(String(result?.specName ?? 'unknown'));
+        }
+      });
+      connection = conn;
+      conn.send({ jsonrpc: '2.0', id: 1, method: 'state_getRuntimeVersion', params: [] });
+    } catch (error) {
+      cleanup();
+      reject(error as Error);
+    }
+  });
 }
 
 /**

@@ -1,8 +1,14 @@
 import type { SubstrateApi } from '../types/substrate-api';
 import { displayChainEvents } from '../utils/event-serializer';
 import type { Logger } from '../utils/logger';
-import { createApiForChain, createPolkadotClient } from './chain-registry';
 import type { ChopsticksManager } from './chopsticks-manager';
+
+/** A live fork this collector builds blocks on and reads events from (a `Fork` from the coordinator). */
+export interface CollectableChain {
+  label: string;
+  manager: ChopsticksManager;
+  api: SubstrateApi;
+}
 
 /**
  * Collects and displays post-execution events from chain instances.
@@ -17,11 +23,9 @@ import type { ChopsticksManager } from './chopsticks-manager';
  * │    └─ collectAdditionalChainEvents()              │
  * │                                                   │
  * │  collectAdditionalChainEvents()                   │
- * │    ├─ for each additional manager:                │
- * │    │   ├─ newBlock() to process XCM               │
- * │    │   ├─ create temp client + api                │
- * │    │   └─ displayChainEvents()                    │
- * │    └─ destroy temp clients                        │
+ * │    └─ for each other fork:                        │
+ * │        ├─ newBlock() to process XCM               │
+ * │        └─ displayChainEvents()                    │
  * └──────────────────────────────────────────────────┘
  */
 export class EventCollector {
@@ -34,12 +38,11 @@ export class EventCollector {
   async displayPostExecutionEvents(context: {
     governance: { chopsticks: ChopsticksManager; api: SubstrateApi };
     fellowship: { chopsticks: ChopsticksManager; api: SubstrateApi };
-    additionalManagers: Map<string, ChopsticksManager>;
+    additional: CollectableChain[];
     governanceLabel: string;
     fellowshipLabel: string;
   }): Promise<void> {
-    const { governance, fellowship, additionalManagers, governanceLabel, fellowshipLabel } =
-      context;
+    const { governance, fellowship, additional, governanceLabel, fellowshipLabel } = context;
     this.logger.section('Post-Execution XCM Events');
     this.logger.info('Advancing blocks to process XCM messages...\n');
 
@@ -65,49 +68,42 @@ export class EventCollector {
     displayChainEvents(fellowshipLabel, fellowshipBlockNumber, fellowshipEvents, this.logger);
     this.logger.info('');
 
-    await this.collectAdditionalChainEvents(additionalManagers);
+    await this.collectAdditionalChainEvents(additional);
   }
 
-  async collectAdditionalChainEvents(
-    additionalManagers: Map<string, ChopsticksManager>
-  ): Promise<void> {
-    this.logger.debug(
-      `collectAdditionalChainEvents called with ${additionalManagers.size} managers`
-    );
+  /**
+   * Build a block on every other fork so it processes the XCM the referendum sent, then print the
+   * resulting events. This reuses each fork's long-lived client, so a chained run does not
+   * reconnect to every chain and re-download its metadata on every step.
+   */
+  async collectAdditionalChainEvents(chains: CollectableChain[]): Promise<void> {
+    this.logger.debug(`collectAdditionalChainEvents called with ${chains.length} chains`);
 
-    if (additionalManagers.size === 0) {
+    if (chains.length === 0) {
       this.logger.debug('No additional chains to process');
       return;
     }
 
     this.logger.section('Additional Chain Events');
     this.logger.info(
-      `Advancing blocks on ${additionalManagers.size} additional chains to process XCM messages...\n`
+      `Advancing blocks on ${chains.length} additional chains to process XCM messages...\n`
     );
 
-    for (const [chainLabel, manager] of additionalManagers) {
-      this.logger.debug(`Processing events for chain: ${chainLabel}`);
+    for (const { label, manager, api } of chains) {
+      this.logger.debug(`Processing events for chain: ${label}`);
       try {
         await manager.newBlock();
 
-        const endpoint = manager.getContext().ws.endpoint;
-        const client = createPolkadotClient(endpoint);
+        const [blockNumber, events] = await Promise.all([
+          api.query.System.Number.getValue(),
+          api.query.System.Events.getValue(),
+        ]);
 
-        try {
-          const api = createApiForChain(client);
-
-          const blockNumber = await api.query.System.Number.getValue();
-          const events = await api.query.System.Events.getValue();
-
-          displayChainEvents(chainLabel, blockNumber, events, this.logger);
-        } finally {
-          client.destroy();
-        }
-
+        displayChainEvents(label, blockNumber, events, this.logger);
         this.logger.info('');
       } catch (error) {
         const chainError = error as Error;
-        this.logger.error(`Error collecting events from ${chainLabel}: ${chainError.message}`);
+        this.logger.error(`Error collecting events from ${label}: ${chainError.message}`);
         this.logger.debug(`Stack trace: ${chainError.stack}`);
       }
     }

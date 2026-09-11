@@ -11,5 +11,5 @@
     "sourceMap": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", ".yarn"]
+  "exclude": ["node_modules", "dist", ".yarn", "src/**/__tests__/**"]
 }

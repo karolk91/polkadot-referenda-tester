@@ -1,15 +1,15 @@
-import type { PolkadotClient } from 'polkadot-api';
-import type { TestOptions } from '../types';
 import type { ParsedEndpoint } from '../utils/chain-endpoint-parser';
 import { buildChopsticksChainConfig, type StorageInjection } from '../utils/chopsticks-config';
 import type { Logger } from '../utils/logger';
-import {
-  type ChainInfo,
-  type ChainNetwork,
-  createApiForChain,
-  createPolkadotClient,
-  getChainInfo,
-} from './chain-registry';
+import { type ChainInfo, type ChainNetwork, fetchChainInfoFromEndpoint } from './chain-registry';
+
+export type PrimaryRole = 'governance' | 'fellowship';
+
+/** Which predefined storage each primary fork receives (see {@link StorageInjection}). */
+export interface TopologyInjections {
+  governance?: StorageInjection;
+  fellowship?: StorageInjection;
+}
 
 export interface TopologyConfig {
   governance?: string;
@@ -20,6 +20,36 @@ export interface TopologyConfig {
   fellowshipBlock?: number;
   fellowshipBaseConfig?: Record<string, unknown>;
   additionalChains?: ParsedEndpoint[];
+}
+
+/** One `--additional-chains` entry: the endpoint the user requested, and its detected identity. */
+interface AdditionalChain {
+  endpoint: ParsedEndpoint;
+  info: ChainInfo;
+}
+
+/** A primary role's detected chain, with the fork block and YAML extras for that role. */
+interface PrimaryChain {
+  info: ChainInfo;
+  block?: number;
+  baseConfig?: Record<string, unknown>;
+}
+
+/** A chain included in the forked network: its chopsticks config key and its identity. */
+export interface RegisteredChain {
+  key: string;
+  info: ChainInfo;
+}
+
+/** The `setupNetworks` config for a run, and the key each chain uses in it. */
+export interface NetworkTopology {
+  networkConfig: Record<string, unknown>;
+  /** The governance fork, when the run tests a governance referendum. */
+  governance?: RegisteredChain;
+  /** The fellowship fork; the same entry as `governance` when both use one chain. */
+  fellowship?: RegisteredChain;
+  /** The `--additional-chains` that received their own fork, in config order. */
+  additional: RegisteredChain[];
 }
 
 export class ChainTopologyBuilder {
@@ -34,7 +64,7 @@ export class ChainTopologyBuilder {
 
   private _governanceChain?: ChainInfo;
   private _fellowshipChain?: ChainInfo;
-  private _additionalChains: ChainInfo[] = [];
+  private _additionalChains: AdditionalChain[] = [];
 
   constructor(logger: Logger, config: TopologyConfig) {
     this.logger = logger;
@@ -63,10 +93,6 @@ export class ChainTopologyBuilder {
     this._fellowshipChain = info;
   }
 
-  get additionalChains(): ChainInfo[] {
-    return this._additionalChains;
-  }
-
   getGovernanceEndpoint(): string | undefined {
     return this.governanceEndpoint;
   }
@@ -75,199 +101,172 @@ export class ChainTopologyBuilder {
     return this.fellowshipEndpoint;
   }
 
-  getGovernanceBlock(): number | undefined {
-    return this.governanceBlock;
-  }
-
-  getFellowshipBlock(): number | undefined {
-    return this.fellowshipBlock;
-  }
-
-  hasAdditionalChains(): boolean {
-    return this.additionalChainEndpoints.length > 0;
-  }
-
+  /**
+   * Identify every configured chain from its runtime `spec_name`, concurrently. Uses the legacy
+   * `state_getRuntimeVersion` path (no polkadot-api `createClient`), so detection works against
+   * legacy-only endpoints such as a subway caching proxy (see chain-registry).
+   */
   async detectChainTypes(): Promise<void> {
     this.logger.startSpinner('Detecting chain types...');
 
-    const clients: PolkadotClient[] = [];
-    try {
-      const detectionTasks: Promise<void>[] = [];
+    const [governanceInfo, fellowshipInfo, additionalInfos] = await Promise.all([
+      this.governanceEndpoint
+        ? fetchChainInfoFromEndpoint(this.governanceEndpoint)
+        : Promise.resolve(undefined),
+      this.fellowshipEndpoint
+        ? fetchChainInfoFromEndpoint(this.fellowshipEndpoint)
+        : Promise.resolve(undefined),
+      Promise.all(
+        this.additionalChainEndpoints.map((endpoint) => fetchChainInfoFromEndpoint(endpoint.url))
+      ),
+    ]);
 
-      if (this.governanceEndpoint) {
-        detectionTasks.push(
-          this.detectChainInfo(this.governanceEndpoint, clients).then((info) => {
-            this._governanceChain = info;
-          })
-        );
-      }
+    if (governanceInfo) this._governanceChain = governanceInfo;
+    if (fellowshipInfo) this._fellowshipChain = fellowshipInfo;
+    // Each endpoint stores its own detected identity, so an entry's `block` / `baseConfig`
+    // always applies to the chain the user requested.
+    this._additionalChains = this.additionalChainEndpoints.map((endpoint, index) => ({
+      endpoint,
+      info: additionalInfos[index],
+    }));
 
-      if (this.fellowshipEndpoint) {
-        detectionTasks.push(
-          this.detectChainInfo(this.fellowshipEndpoint, clients).then((info) => {
-            this._fellowshipChain = info;
-          })
-        );
-      }
-
-      for (const additionalEndpoint of this.additionalChainEndpoints) {
-        detectionTasks.push(
-          this.detectChainInfo(additionalEndpoint.url, clients).then((info) => {
-            this._additionalChains.push(info);
-          })
-        );
-      }
-
-      await Promise.all(detectionTasks);
-
-      this.logger.succeedSpinner('Chain types detected');
-      if (this._governanceChain) {
-        this.logger.info(
-          `Governance: ${this._governanceChain.label} (${this._governanceChain.kind})`
-        );
-      }
-      if (this._fellowshipChain) {
-        this.logger.info(
-          `Fellowship: ${this._fellowshipChain.label} (${this._fellowshipChain.kind})`
-        );
-      }
-    } finally {
-      for (const client of clients) {
-        client.destroy();
-      }
+    this.logger.succeedSpinner('Chain types detected');
+    if (this._governanceChain) {
+      this.logger.info(
+        `Governance: ${this._governanceChain.label} (${this._governanceChain.kind})`
+      );
+    }
+    if (this._fellowshipChain) {
+      this.logger.info(
+        `Fellowship: ${this._fellowshipChain.label} (${this._fellowshipChain.kind})`
+      );
     }
   }
 
-  private async detectChainInfo(endpoint: string, clients: PolkadotClient[]): Promise<ChainInfo> {
-    const client = createPolkadotClient(endpoint);
-    clients.push(client);
-    const api = createApiForChain(client);
-    return getChainInfo(api, endpoint);
+  /** The detected chain for a primary role, with its fork block and YAML extras. */
+  private primary(role: PrimaryRole): PrimaryChain {
+    const info = role === 'governance' ? this._governanceChain : this._fellowshipChain;
+    if (!info) {
+      throw new Error(
+        `${role === 'governance' ? 'Governance' : 'Fellowship'} chain type could not be detected`
+      );
+    }
+    return role === 'governance'
+      ? { info, block: this.governanceBlock, baseConfig: this.governanceBaseConfig }
+      : { info, block: this.fellowshipBlock, baseConfig: this.fellowshipBaseConfig };
   }
 
-  async detectRelayNetworkKey(endpoint: string): Promise<string | undefined> {
-    let tempClient: PolkadotClient | undefined;
-    try {
-      tempClient = createPolkadotClient(endpoint);
-      const tempApi = createApiForChain(tempClient);
-      const chainInfo = await getChainInfo(tempApi, endpoint);
-      if (chainInfo.kind === 'relay') {
-        this.logger.debug(`Chain is a relay chain, using network key: ${chainInfo.network}`);
-        return chainInfo.network;
-      }
-    } catch (error) {
-      this.logger.debug(`Pre-detection failed, using default network key: ${error}`);
-    } finally {
-      tempClient?.destroy();
-    }
-    return undefined;
-  }
-
-  buildNetworkTopology(options?: TestOptions): {
-    networkConfig: Record<string, unknown>;
-    governanceKey: string;
-    fellowshipKey: string;
-  } {
-    if (!this._governanceChain || !this._fellowshipChain) {
-      throw new Error('Chain types must be detected before building network topology');
+  /**
+   * Build the whole `setupNetworks` config for a run: the primary fork(s) the run requires, plus
+   * every `--additional-chains` entry that is not already one of them.
+   *
+   * A run requires one primary fork when it tests only governance, only fellowship, or both on
+   * the same chain, and two when the referenda are on different chains. `injections` specifies
+   * which predefined storage to merge into each primary. The caller decides this from the whole
+   * run, because with chaining any step that creates a referendum requires a funded signer from
+   * the start.
+   */
+  buildNetworkTopology(request: {
+    needGovernance: boolean;
+    needFellowship: boolean;
+    injections?: TopologyInjections;
+  }): NetworkTopology {
+    const { needGovernance, needFellowship, injections } = request;
+    if (!needGovernance && !needFellowship) {
+      throw new Error('A run must test a governance or a fellowship referendum');
     }
 
-    const governanceIsRelay = this._governanceChain.kind === 'relay';
-    const fellowshipIsRelay = this._fellowshipChain.kind === 'relay';
+    const governance = needGovernance ? this.primary('governance') : undefined;
+    const fellowship = needFellowship ? this.primary('fellowship') : undefined;
+    const sharedChain =
+      !!governance &&
+      !!fellowship &&
+      (this.governanceEndpoint === this.fellowshipEndpoint ||
+        governance.info.label === fellowship.info.label);
 
     const networkConfig: Record<string, unknown> = {};
-    let governanceKey: string;
-    let fellowshipKey: string;
+    let governanceSlot: RegisteredChain | undefined;
+    let fellowshipSlot: RegisteredChain | undefined;
 
-    const fellowshipInjection = options?.callToCreateFellowshipReferendum
-      ? ('fellowship' as const)
-      : undefined;
-    const governanceInjection = options?.callToCreateGovernanceReferendum
-      ? ('alice-account' as const)
-      : undefined;
-
-    if (!governanceIsRelay && !fellowshipIsRelay) {
-      governanceKey = 'governance';
-      fellowshipKey = 'fellowship';
-      networkConfig[governanceKey] = this.buildConfig(
-        this._governanceChain.endpoint,
-        this.governanceBlock,
-        governanceInjection,
-        this.governanceBaseConfig
-      );
-      networkConfig[fellowshipKey] = this.buildConfig(
-        this._fellowshipChain.endpoint,
-        this.fellowshipBlock,
-        fellowshipInjection,
-        this.fellowshipBaseConfig
-      );
+    if (governance && fellowship && !sharedChain) {
+      this.logger.section('Setting Up Multi-Chain Environment');
+      this.logger.info(`Governance Chain: ${governance.info.label}`);
+      this.logger.info(`Fellowship Chain: ${fellowship.info.label}\n`);
+      // A relay uses its network key, so chopsticks connects the vertical relay↔parachain link.
+      // The other side uses its role name. When both are relays, only the first can use the
+      // relay key.
+      const governanceIsRelay = governance.info.kind === 'relay';
+      const governanceKey = governanceIsRelay
+        ? this.getRelayKey(governance.info.network)
+        : 'governance';
+      const fellowshipKey =
+        fellowship.info.kind === 'relay' && !governanceIsRelay
+          ? this.getRelayKey(fellowship.info.network)
+          : 'fellowship';
+      networkConfig[governanceKey] = this.buildConfig(governance, injections?.governance);
+      networkConfig[fellowshipKey] = this.buildConfig(fellowship, injections?.fellowship);
+      governanceSlot = { key: governanceKey, info: governance.info };
+      fellowshipSlot = { key: fellowshipKey, info: fellowship.info };
     } else {
-      const relayChain = governanceIsRelay ? this._governanceChain : this._fellowshipChain;
-      const parachain = governanceIsRelay ? this._fellowshipChain : this._governanceChain;
-
-      const relayBlock = governanceIsRelay ? this.governanceBlock : this.fellowshipBlock;
-      const parachainBlock = governanceIsRelay ? this.fellowshipBlock : this.governanceBlock;
-      const relayBaseConfig = governanceIsRelay
-        ? this.governanceBaseConfig
-        : this.fellowshipBaseConfig;
-      const parachainBaseConfig = governanceIsRelay
-        ? this.fellowshipBaseConfig
-        : this.governanceBaseConfig;
-
-      const relayKey = this.getRelayKey(relayChain.network);
-      const parachainKey = governanceIsRelay ? 'fellowship' : 'governance';
-
-      governanceKey = governanceIsRelay ? relayKey : parachainKey;
-      fellowshipKey = fellowshipIsRelay ? relayKey : parachainKey;
-
-      const relayInjection = governanceIsRelay ? governanceInjection : fellowshipInjection;
-      const parachainInjection = governanceIsRelay ? fellowshipInjection : governanceInjection;
-
-      networkConfig[relayKey] = this.buildConfig(
-        relayChain.endpoint,
-        relayBlock,
-        relayInjection,
-        relayBaseConfig
+      // One primary fork: the governance chain, or the fellowship chain, or the chain shared by both.
+      const primary = governance ?? fellowship!;
+      const role: PrimaryRole = governance ? 'governance' : 'fellowship';
+      const key = primary.info.kind === 'relay' ? this.getRelayKey(primary.info.network) : role;
+      // A fork receives one predefined injection. The fellowship injection is a superset of the
+      // Alice injection, so it also covers a shared chain that creates both kinds of referendum.
+      networkConfig[key] = this.buildConfig(
+        primary,
+        injections?.fellowship ?? injections?.governance
       );
-      networkConfig[parachainKey] = this.buildConfig(
-        parachain.endpoint,
-        parachainBlock,
-        parachainInjection,
-        parachainBaseConfig
-      );
+      const slot: RegisteredChain = { key, info: primary.info };
+      governanceSlot = governance ? slot : undefined;
+      fellowshipSlot = fellowship ? slot : undefined;
     }
 
-    return { networkConfig, governanceKey, fellowshipKey };
+    const additional = this.registerAdditionalChains(
+      networkConfig,
+      [governance, fellowship].filter((p): p is PrimaryChain => !!p)
+    );
+
+    return {
+      networkConfig,
+      governance: governanceSlot,
+      fellowship: fellowshipSlot,
+      additional,
+    };
   }
 
-  registerAdditionalChains(
+  /**
+   * Add every `--additional-chains` entry to `networkConfig`, skipping the entries already forked
+   * as a primary (by endpoint or by identity) and any relay whose key a primary already uses.
+   */
+  private registerAdditionalChains(
     networkConfig: Record<string, unknown>,
-    usedEndpoints: Set<string>,
-    governanceIsRelay: boolean,
-    fellowshipIsRelay: boolean
-  ): { usedEndpoints: Set<string>; chainToNetworkKey: Map<string, string> } {
-    const chainToNetworkKey = new Map<string, string>();
-    const usedRelayKeys = new Set<string>();
+    primaries: PrimaryChain[]
+  ): RegisteredChain[] {
+    const usedEndpoints = new Set(primaries.map(({ info }) => info.endpoint));
+    const usedLabels = new Set(primaries.map(({ info }) => info.label));
+    const usedRelayKeys = new Set(
+      primaries
+        .filter(({ info }) => info.kind === 'relay')
+        .map(({ info }) => this.getRelayKey(info.network))
+    );
 
-    if (governanceIsRelay) {
-      usedRelayKeys.add(this.getRelayKey(this._governanceChain!.network));
-    }
-    if (fellowshipIsRelay) {
-      usedRelayKeys.add(this.getRelayKey(this._fellowshipChain!.network));
-    }
-
-    this._additionalChains.forEach((chain, chainIndex) => {
-      if (usedEndpoints.has(chain.endpoint)) {
-        this.logger.debug(`Skipping duplicate endpoint for ${chain.label}: ${chain.endpoint}`);
+    const registered: RegisteredChain[] = [];
+    this._additionalChains.forEach(({ endpoint, info }, chainIndex) => {
+      if (usedEndpoints.has(info.endpoint) || usedLabels.has(info.label)) {
+        this.logger.debug(
+          `Skipping ${info.label}: already forked as the governance/fellowship chain`
+        );
         return;
       }
 
       let key: string;
-      if (chain.kind === 'relay') {
-        const relayKey = this.getRelayKey(chain.network);
+      if (info.kind === 'relay') {
+        const relayKey = this.getRelayKey(info.network);
         if (usedRelayKeys.has(relayKey)) {
           this.logger.warn(
-            `Skipping relay chain ${chain.label}: relay key '${relayKey}' is already in use`
+            `Skipping relay chain ${info.label}: relay key '${relayKey}' is already in use`
           );
           return;
         }
@@ -277,34 +276,40 @@ export class ChainTopologyBuilder {
         key = `additional_${chainIndex}`;
       }
 
-      const block = this.additionalChainEndpoints[chainIndex]?.block;
-      const baseConfig = this.additionalChainEndpoints[chainIndex]?.baseConfig;
-      networkConfig[key] = this.buildConfig(chain.endpoint, block, undefined, baseConfig);
-      usedEndpoints.add(chain.endpoint);
-      chainToNetworkKey.set(chain.label, key);
+      networkConfig[key] = this.buildConfig(
+        { info, block: endpoint.block, baseConfig: endpoint.baseConfig },
+        undefined
+      );
+      usedEndpoints.add(info.endpoint);
+      usedLabels.add(info.label);
+      registered.push({ key, info });
       this.logger.debug(
-        `Adding ${chain.label} (${chain.kind}) to network config with key: ${key}${block ? ` at block ${block}` : ''}`
+        `Adding ${info.label} (${info.kind}) to network config with key: ${key}${endpoint.block ? ` at block ${endpoint.block}` : ''}`
       );
     });
 
-    return { usedEndpoints, chainToNetworkKey };
+    return registered;
   }
 
-  buildConfig(
-    endpoint: string,
-    block?: number,
-    storageInjection?: StorageInjection,
-    userBaseConfig?: Record<string, unknown>
+  private buildConfig(
+    chain: PrimaryChain,
+    storageInjection: StorageInjection | undefined
   ): Record<string, unknown> {
     if (storageInjection === 'fellowship') {
       this.logger.debug('Injecting fellowship storage for Alice account');
     } else if (storageInjection === 'alice-account') {
       this.logger.debug('Injecting Alice account with funds');
     }
-    return buildChopsticksChainConfig(endpoint, block, storageInjection, userBaseConfig, 0);
+    return buildChopsticksChainConfig(
+      chain.info.endpoint,
+      chain.block,
+      storageInjection,
+      chain.baseConfig,
+      0
+    );
   }
 
-  getRelayKey(network: ChainNetwork): string {
+  private getRelayKey(network: ChainNetwork): string {
     if (network === 'polkadot') {
       return 'polkadot';
     }

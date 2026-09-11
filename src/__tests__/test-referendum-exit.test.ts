@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const mockTestWithFellowship = vi.fn();
+const mockRunSteps = vi.fn();
 
 // `new vi.fn(...)` requires a constructible function — arrow functions throw.
 // Declare a named function so biome's useArrowFunction rule doesn't try to rewrite it.
 function MockNetworkCoordinator() {
-  return { testWithFellowship: mockTestWithFellowship };
+  return { runSteps: mockRunSteps };
 }
 
 vi.mock('../services/network-coordinator', () => ({
@@ -57,20 +57,20 @@ describe('testReferendum process exit', () => {
 
   afterEach(() => {
     exitSpy.mockClear();
-    mockTestWithFellowship.mockReset();
+    mockRunSteps.mockReset();
   });
 
   it('calls process.exit(0) after successful workflow with cleanup enabled', async () => {
-    mockTestWithFellowship.mockResolvedValue(undefined);
+    mockRunSteps.mockResolvedValue(undefined);
 
     await testReferendum(makeOptions({ cleanup: true }));
 
-    expect(mockTestWithFellowship).toHaveBeenCalledOnce();
+    expect(mockRunSteps).toHaveBeenCalledOnce();
     expect(exitSpy).toHaveBeenCalledWith(0);
   });
 
   it('calls process.exit(1) when workflow throws an error', async () => {
-    mockTestWithFellowship.mockRejectedValue(new Error('boom'));
+    mockRunSteps.mockRejectedValue(new Error('boom'));
 
     await testReferendum(makeOptions({ cleanup: true }));
 
@@ -78,11 +78,11 @@ describe('testReferendum process exit', () => {
   });
 
   it('does not call process.exit when cleanup is disabled (no-cleanup mode)', async () => {
-    mockTestWithFellowship.mockResolvedValue(undefined);
+    mockRunSteps.mockResolvedValue(undefined);
 
     await testReferendum(makeOptions({ cleanup: false }));
 
-    expect(mockTestWithFellowship).toHaveBeenCalledOnce();
+    expect(mockRunSteps).toHaveBeenCalledOnce();
     expect(exitSpy).not.toHaveBeenCalled();
   });
 

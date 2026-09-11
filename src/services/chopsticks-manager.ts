@@ -1,9 +1,9 @@
 import type { Config } from '@acala-network/chopsticks/dist/esm/schema/index.js';
 import { BuildBlockMode } from '@acala-network/chopsticks-core';
 import { setupNetworks } from '@acala-network/chopsticks-testing';
-import * as path from 'path';
 import type { ChopsticksConfig } from '../types';
 import type { SubstrateApi } from '../types/substrate-api';
+import { defaultDbPath } from '../utils/chopsticks-config';
 import { stringify } from '../utils/json';
 import type { Logger } from '../utils/logger';
 
@@ -54,7 +54,7 @@ export class ChopsticksManager {
 
       const chopsticksConfig: Config = {
         endpoint: config.endpoint,
-        db: config.db || path.join(process.cwd(), '.chopsticks-db'),
+        db: config.db || defaultDbPath(config.endpoint),
         'build-block-mode': buildBlockMode,
         'mock-signature-host': config['mock-signature-host'] !== false,
         'allow-unresolved-imports': config['allow-unresolved-imports'] !== false,

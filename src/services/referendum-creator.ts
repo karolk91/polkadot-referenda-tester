@@ -1,7 +1,7 @@
 import { Keyring } from '@polkadot/keyring';
 import { Binary } from '@polkadot-api/substrate-bindings';
-import type { PolkadotSigner } from 'polkadot-api';
-import { getPolkadotSigner } from 'polkadot-api/signer';
+import { getTxCreator, type TxCreator } from 'polkadot-api/tx-creator';
+import { toHex } from 'polkadot-api/utils';
 import type { SubstrateApi } from '../types/substrate-api';
 import { formatDispatchError } from '../utils/dispatch-result';
 import { getBlockEvents } from '../utils/event-serializer';
@@ -50,19 +50,19 @@ export class ReferendumCreator {
 
     const keyring = new Keyring({ type: 'sr25519' });
     const alice = keyring.addFromUri('//Alice');
-    const signer = getPolkadotSigner(alice.publicKey, 'Sr25519', alice.sign);
+    const creator = getTxCreator(alice.publicKey, 'Sr25519', alice.sign);
 
     this.logger.info(
       `Creating ${isFellowship ? 'fellowship' : 'governance'} referendum using Alice account...`
     );
 
     const preimageNoted = preimageCallHex
-      ? await this.notePreimage(api, signer, preimageCallHex)
+      ? await this.notePreimage(api, creator, preimageCallHex)
       : false;
 
     const referendumId = await this.submitAndRetrieveId(
       api,
-      signer,
+      creator,
       validatedSubmitHex,
       isFellowship
     );
@@ -72,7 +72,7 @@ export class ReferendumCreator {
 
   private async decodeAndSignCall(
     api: SubstrateApi,
-    signer: PolkadotSigner,
+    creator: TxCreator,
     validatedHex: string,
     failureLabel: string
   ): Promise<string> {
@@ -83,20 +83,20 @@ export class ReferendumCreator {
       );
     });
 
-    const signedTx = await decoded.sign(signer);
+    const signedTx = toHex(await decoded.create(creator));
     this.logger.debug(`${failureLabel} transaction signed`);
     return signedTx;
   }
 
   private async notePreimage(
     api: SubstrateApi,
-    signer: PolkadotSigner,
+    creator: TxCreator,
     preimageCallHex: string
   ): Promise<boolean> {
     const validatedHex = ReferendumCreator.validateHex(preimageCallHex, 'preimageCall');
     this.logger.startSpinner('Noting preimage...');
 
-    const signedPreimageTx = await this.decodeAndSignCall(api, signer, validatedHex, 'preimage');
+    const signedPreimageTx = await this.decodeAndSignCall(api, creator, validatedHex, 'preimage');
 
     await this.chopsticks.newBlock({ transactions: [signedPreimageTx] });
     await this.chopsticks.newBlock();
@@ -107,7 +107,7 @@ export class ReferendumCreator {
 
   private async submitAndRetrieveId(
     api: SubstrateApi,
-    signer: PolkadotSigner,
+    creator: TxCreator,
     validatedSubmitHex: string,
     isFellowship: boolean
   ): Promise<number> {
@@ -119,7 +119,7 @@ export class ReferendumCreator {
 
     const signedSubmitTx = await this.decodeAndSignCall(
       api,
-      signer,
+      creator,
       validatedSubmitHex,
       'referendum submit'
     );
