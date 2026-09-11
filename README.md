@@ -69,8 +69,8 @@ npx github:karolk91/polkadot-referenda-tester test \
 # Each --then segment takes the same per-referendum flags as the first step
 # (-r/-f, --call-to-create-*, --call-to-note-preimage-*, --pre-call, --pre-origin,
 # --post-test, --post-test-args); chain URLs and other run-level flags go first.
-# Here: authorize the v2.5.0 upgrade (1942 whitelisted by fellowship 612), apply the
-# release WASMs with a post-test, then run 1944 — whose call only decodes on v2.5.0.
+# This example authorizes the v2.5.0 upgrade (1942, whitelisted by fellowship 612), applies
+# the release WASMs with a post-test, then runs 1944, whose call only decodes on v2.5.0.
 npx github:karolk91/polkadot-referenda-tester test \
   --governance-chain-url wss://asset-hub-polkadot-rpc.n.dwellir.com \
   --fellowship-chain-url wss://polkadot-collectives-rpc.polkadot.io \
@@ -80,24 +80,24 @@ npx github:karolk91/polkadot-referenda-tester test \
   --then --referendum 1944 --post-test dump-chain-events
 ```
 
-Steps may mix existing IDs and creation calls freely (e.g. create a referendum first, then execute an existing one). A failing step stops the run. Each step's post-test receives `step: { index, count, referendumId, fellowshipReferendumId }` in its context.
+A step may use an existing ID or a creation call, and a run may mix both (for example create a referendum first, then execute an existing one). A failing step stops the run, and the later steps do not execute. Each step's post-test receives `step: { index, count, referendumId, fellowshipReferendumId }` in its context.
 
 ## Post-tests
 
-`--post-test` runs a module against the live forks after a referendum executes, so a run can assert what the proposal was supposed to do. Two post-tests ship with the tool and are referenced by bare name, which works from a clone, a global install, or `npx`:
+`--post-test` runs a module against the live forks after a referendum executes, so a run can check the effects of the proposal. The tool includes two post-tests. Reference them by bare name; this works from a clone, a global install, or `npx`:
 
 | Name | What it does |
 | --- | --- |
-| `apply-authorized-upgrade` | Matches each fork's `System.AuthorizedUpgrade` against the blake2-256 of a GitHub release's WASM assets, applies the upgrade, walks the blocks where migrations run, then verifies `:code` and `spec_version`. Args: `release` (release URL, `owner/repo@tag`, or a bare fellows tag), `wasmDir`, `blocksAfterUpgrade`, `maxMigrationBlocks`, `only`, `failOnMissing`. |
+| `apply-authorized-upgrade` | Matches each fork's `System.AuthorizedUpgrade` against the blake2-256 of a GitHub release's WASM assets, applies the upgrade, builds the blocks where migrations run, then verifies `:code` and `spec_version`. Args: `release` (release URL, `owner/repo@tag`, or a bare fellows tag), `wasmDir`, `blocksAfterUpgrade`, `maxMigrationBlocks`, `only`, `failOnMissing`. |
 | `dump-chain-events` | Prints decoded extrinsics and events per fork, read from the in-process Chopsticks chain. Args: `blocks`, `only`, `all`, `verbose`. |
 
-Anything path-shaped loads your own module instead, resolved against the working directory:
+A value containing a path separator or a file extension loads your own module instead, resolved against the working directory:
 
 ```bash
 yarn cli test --governance-chain-url <url> -r 1777 --post-test ./my-post-test.mjs
 ```
 
-A post-test exports a function as `default`, `postTest`, or `run`, receives `{ main, chains, args, step }`, and throws to fail the run. Each entry in `chains` carries `{ label, specName, network, kind, wsEndpoint, chain }`, where `chain` is the live Chopsticks `Blockchain` — build blocks with `chain.newBlock()` so cross-chain message delivery works. `.mjs`, `.js` and `.cjs` load anywhere; `.ts` needs a Node with type stripping (>= 22.18 or >= 23.6).
+A post-test exports a function as `default`, `postTest`, or `run`, receives `{ main, chains, args, step }`, and throws to fail the run. Each entry in `chains` contains `{ label, specName, network, kind, wsEndpoint, chain }`, where `chain` is the live Chopsticks `Blockchain`. Build blocks with `chain.newBlock()` so cross-chain message delivery works. `.mjs`, `.js` and `.cjs` always load; `.ts` requires Node with type stripping (>= 22.18 or >= 23.6).
 
 ## Bridged referenda (Polkadot Fellowship → Kusama governance)
 

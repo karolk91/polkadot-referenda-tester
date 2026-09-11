@@ -20,33 +20,35 @@ function isPathSpecifier(specifier: string): boolean {
 }
 
 /**
- * Turn a `--post-test` value into an absolute file path. A bare name is looked up among the
- * bundled post-tests (whatever extension they ship with); anything path-shaped resolves against
- * the working directory, so a user-supplied module still works from wherever it was invoked.
+ * Turn a `--post-test` value into an absolute file path. A bare name resolves to a bundled
+ * post-test with any supported extension. A value containing a path separator or a file extension
+ * resolves against the working directory, so a user-supplied module works from any directory.
  */
 export function resolvePostTestModule(
   modulePath: string,
   bundledDir: string = BUNDLED_POST_TESTS_DIR
 ): string {
   if (isPathSpecifier(modulePath)) return path.resolve(process.cwd(), modulePath);
-  // The join is the not-found case: `runPostTest` turns the missing file into a clear error.
+  // This join produces a path for a name that does not exist; `runPostTest` then reports the
+  // missing file as an error.
   return bundledPostTests(bundledDir).get(modulePath) ?? path.join(bundledDir, `${modulePath}.mjs`);
 }
 
 /**
- * A genuine dynamic `import()` that survives TypeScript's CommonJS emit. With `module: CommonJS`,
- * `tsc` rewrites a literal `import()` into `require()`, which cannot load ESM or `.ts` post-tests.
- * A direct `eval` keeps a real runtime `import()` that carries this module's host import callback
- * (so ESM and Node's `.ts` type stripping work); the specifier is inlined as an escaped string
- * literal so nothing from the surrounding scope is evaluated. (`new Function` does not work here —
- * a function built that way has no import callback: "A dynamic import callback was not specified".)
+ * A dynamic `import()` that remains a dynamic import after TypeScript's CommonJS emit. With
+ * `module: CommonJS`, `tsc` rewrites a literal `import()` into `require()`, which cannot load ESM
+ * or `.ts` post-tests. A direct `eval` produces a runtime `import()` that retains this module's
+ * host import callback, so ESM and Node's `.ts` type stripping both work. The specifier is
+ * inlined as an escaped string literal, so the code evaluates nothing from the surrounding scope.
+ * `new Function` does not work here: a function built that way has no import callback and fails
+ * with "A dynamic import callback was not specified".
  */
 function dynamicImport(specifier: string): Promise<unknown> {
   // biome-ignore lint/security/noGlobalEval: intentional — preserves dynamic import() in CJS output
   return eval(`import(${JSON.stringify(specifier)})`) as Promise<unknown>;
 }
 
-/** A live Chopsticks-forked chain handed to a post-test script. */
+/** A live Chopsticks-forked chain passed to a post-test script. */
 export interface PostTestChain {
   /** Human label, e.g. `Polkadot Asset Hub` or `Hydration`. */
   label: string;
@@ -82,7 +84,8 @@ export interface PostTestStepInfo {
  * Context passed to a post-referendum test script. The referendum has already been executed on
  * `main`; every chain in `chains` (including `main`) is a live Chopsticks fork with the standard
  * `dev_newBlock` / `dev_setStorage` / `dev_timeTravel` RPCs available on its `wsEndpoint`. A script
- * connects with its own client (e.g. polkadot-api), drives the chains, and throws to fail.
+ * connects with its own client (e.g. polkadot-api), builds blocks on the chains, and throws to
+ * report a failure.
  */
 export interface PostTestContext {
   /** The chain the referendum executed on. */
@@ -128,8 +131,8 @@ function parseArgs(raw: string | undefined): unknown {
  * The module is loaded with a dynamic `import()` so ESM post-tests (and the ESM-only polkadot-api
  * ecosystem they typically use) work even though this tool is CommonJS. `.js`/`.mjs`/`.cjs` load
  * directly; `.ts` relies on the host Node's type stripping (Node >= 22.18 / 23.6, or run with
- * `--experimental-strip-types`) — precompile to `.js` on older runtimes. Rethrows on failure so
- * the caller can surface a non-zero exit.
+ * `--experimental-strip-types`); precompile to `.js` on older runtimes. Rethrows on failure so
+ * the caller can exit non-zero.
  */
 export async function runPostTest(
   logger: Logger,

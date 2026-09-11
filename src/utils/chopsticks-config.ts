@@ -4,28 +4,29 @@ import { mkdirSync } from 'fs';
 import * as path from 'path';
 import { ALICE_ACCOUNT_INJECTION, FELLOWSHIP_STORAGE_INJECTION } from './storage-constants';
 
-/** Which canned storage override (if any) to merge into a chain's `import-storage`. */
+/** Which predefined storage override (if any) to merge into a chain's `import-storage`. */
 export type StorageInjection = 'fellowship' | 'alice-account';
 
 /**
  * Per-chain SQLite cache path. Each forked chain needs its OWN db file: when several chains are
  * forked together (e.g. governance + `--additional-chains`), sharing one file makes the concurrent
- * opens collide with `SQLITE_CANTOPEN`. Deriving the filename from the endpoint keeps the storage
- * cache warm across runs (same endpoint → same file) while giving distinct chains distinct files.
+ * opens fail with `SQLITE_CANTOPEN`. Deriving the filename from the endpoint reuses the storage
+ * cache across runs (same endpoint → same file) and uses a different file per chain.
  */
 export function defaultDbPath(endpoint: string): string {
   const dir = path.join(process.cwd(), '.chopsticks-db');
   try {
     mkdirSync(dir, { recursive: true });
   } catch {
-    // best-effort; setup will surface a real failure if the directory is unusable
+    // best-effort; setup reports an error if the directory is unusable
   }
   const slug = endpoint
     .replace(/[^a-zA-Z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '')
     .slice(0, 60);
-  // The slug is truncated, so two endpoints can share a prefix (easy with query-string RPC URLs);
-  // the digest of the full endpoint keeps their files distinct while staying stable across runs.
+  // The slug is truncated, so two endpoints can share a prefix (common with query-string RPC
+  // URLs). The digest of the full endpoint gives them different files and does not change
+  // between runs.
   const digest = createHash('sha1').update(endpoint).digest('hex').slice(0, 10);
   return path.join(dir, `${slug || 'chain'}-${digest}.sqlite`);
 }
@@ -37,10 +38,10 @@ export function defaultDbPath(endpoint: string): string {
  *   2. user's YAML baseConfig — can override `runtime-log-level`, add `wasm-override`, etc.
  *   3. tool-mandatory test-harness settings — `build-block-mode` / `mock-signature-host` /
  *      `allow-unresolved-imports` cannot be disabled by the user
- *   4. explicit endpoint / block from the URL flag — always win
+ *   4. explicit endpoint / block from the URL flag — always take precedence
  *   5. `import-storage` — the user's block shallow-merged with the tool's storage injection
- *      (the tool wins per-pallet, so test mechanics like funding Alice are never silently
- *      disabled by a user-provided YAML)
+ *      (the tool's value takes precedence per-pallet, so a user-provided YAML cannot disable
+ *      test mechanics such as funding Alice)
  *
  * Shared by {@link ChainTopologyBuilder} and {@link BridgeTopologyBuilder}; they differ only
  * in the default `runtime-log-level` (passed via {@link runtimeLogLevel}).

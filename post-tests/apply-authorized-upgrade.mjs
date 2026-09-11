@@ -6,13 +6,14 @@
 //     --post-test post-tests/apply-authorized-upgrade.mjs \
 //     --post-test-args '{"release":"https://github.com/polkadot-fellows/runtimes/releases/tag/v2.5.0"}'
 //
-// For each chain handed to the post-test the script:
+// For each chain passed to the post-test the script:
 //   1. reads `System.AuthorizedUpgrade` (code_hash + check_version) — chains without one are skipped;
 //   2. downloads the `*.compact.compressed.wasm` assets of the GitHub release (cached on disk),
-//      blake2-256 hashes every asset and picks the one matching the on-chain authorized hash —
-//      this IS the hash verification: the release artifact must hash to what governance approved;
+//      blake2-256 hashes every asset and picks the one matching the on-chain authorized hash.
+//      This is the hash verification: the release artifact must hash to the value governance
+//      approved;
 //   3. submits an unsigned `System.apply_authorized_upgrade(code)` in a new block (in-process via
-//      the live chopsticks `Blockchain`, so the block builder actually includes it);
+//      the live chopsticks `Blockchain`, so the block builder includes it);
 //   4. keeps building blocks: relay chains switch code immediately (`System.CodeUpdated`), cumulus
 //      parachains store a pending PVF first (`ParachainSystem.ValidationFunctionStored`) and chopsticks
 //      delivers the relay `GoAhead` on the next block (`ValidationFunctionApplied` + `CodeUpdated`);
@@ -27,7 +28,7 @@
 //   release            GitHub release URL ".../releases/tag/<tag>", "<owner>/<repo>@<tag>", or a bare
 //                      tag (repo defaults to polkadot-fellows/runtimes)
 //   wasmDir            local directory of *.wasm files to use instead of downloading
-//   cacheDir           where downloaded assets go (default .cache/release-runtimes/<tag>)
+//   cacheDir           directory for downloaded assets (default .cache/release-runtimes/<tag>)
 //   blocksAfterUpgrade blocks to build after the code switch (default 3)
 //   maxMigrationBlocks upper bound on extra blocks while MBM cursor is active (default 40)
 //   only               array of labels/specNames to restrict the run to
@@ -54,8 +55,8 @@ const DEFAULT_REPO = 'polkadot-fellows/runtimes';
 const DEFAULT_BLOCKS_AFTER = 3;
 const DEFAULT_MAX_MIGRATION_BLOCKS = 40;
 
-// Events that carry the upgrade/migration story; everything else post-upgrade is reported as
-// "other activity" so nothing is hidden, but these get highlighted.
+// Events that indicate upgrade or migration progress. Everything else after the upgrade is
+// reported as "other activity", so no event is omitted; these events are highlighted.
 const NOTABLE = new Set([
   'system.CodeUpdated',
   'parachainSystem.ValidationFunctionStored',
@@ -105,7 +106,7 @@ export async function fetchReleaseWasms({ owner, repo, tag }, cacheDir) {
   mkdirSync(cacheDir, { recursive: true });
 
   const files = [];
-  // Modest parallelism; the assets are ~1–2.5 MB each.
+  // Limit parallelism; the assets are ~1-2.5 MB each.
   const queue = [...assets];
   const workers = Array.from({ length: 4 }, async () => {
     for (let a = queue.shift(); a; a = queue.shift()) {
@@ -136,8 +137,8 @@ export function loadLocalWasms(dir) {
 }
 
 /**
- * Hash every wasm (blake2-256, what `authorize_upgrade` commits to) and index by hash. Only the
- * hash and the path are kept; the matched asset's bytes are read again when it is applied.
+ * Hash every wasm (blake2-256, the value `authorize_upgrade` commits to) and index by hash.
+ * Stores only the hash and the path, and re-reads the matched asset's bytes when applying it.
  */
 export function indexWasmsByHash(files) {
   const byHash = new Map();
@@ -253,7 +254,7 @@ async function upgradeChain(ptChain, wasmsByHash, opts) {
     return result;
   }
 
-  // 4. Walk blocks: the apply block, then enough blocks past the code switch (which lands one
+  // 4. Build blocks: the apply block, then enough blocks past the code switch (which occurs one
   //    block later on parachains), extending while MBM is active.
   let codeUpdatedAt;
   let pvfStoredAt;
@@ -267,7 +268,8 @@ async function upgradeChain(ptChain, wasmsByHash, opts) {
         if (key === 'system.CodeUpdated') codeUpdatedAt = codeUpdatedAt ?? blockNumber;
         if (key === 'parachainSystem.ValidationFunctionStored') pvfStoredAt = pvfStoredAt ?? blockNumber;
         if (key === 'parachainSystem.ValidationFunctionApplied') pvfAppliedAt = pvfAppliedAt ?? blockNumber;
-        // MBM can start and finish inside one block, so the cursor poll below never sees it active.
+        // MBM can start and finish inside one block, so the cursor poll below never reads it as
+        // active.
         if (key === 'multiBlockMigrations.UpgradeStarted') result.mbmSeenActive = true;
       } else if (isPostUpgrade && !ROUTINE.has(key)) {
         result.other.set(key, (result.other.get(key) ?? 0) + 1);
@@ -338,8 +340,8 @@ async function upgradeChain(ptChain, wasmsByHash, opts) {
 // ---------------------------------------------------------------------------------------------
 
 export default async function run(ctx) {
-  // Without this @polkadot/util-crypto falls back to the pure-JS blake2, ~10x slower than the
-  // wasm one — and this script hashes every release asset plus each chain's 2 MB `:code`.
+  // Without this, @polkadot/util-crypto uses the pure-JS blake2, about 10x slower than the wasm
+  // implementation. This script hashes every release asset and each chain's 2 MB `:code`.
   await cryptoWaitReady();
   const args = ctx.args && typeof ctx.args === 'object' ? ctx.args : {};
   const opts = {

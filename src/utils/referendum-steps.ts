@@ -7,15 +7,15 @@ import { listBundledPostTests } from './bundled-post-tests';
  *
  * A run is an ordered list of {@link ReferendumStep}s executed on ONE forked network. On the
  * command line the steps are separated by a bare `--then`, and every segment uses the same
- * per-referendum flags (see {@link STEP_FIELDS}). This module is the pure part: the field table,
- * predicates, validation and the options → step conversion. Parsing `--then` segments with
- * commander lives in `then-args.ts` so services can import this module without pulling in the CLI
+ * per-referendum flags (see {@link STEP_FIELDS}). This module holds the pure part: the field
+ * table, predicates, validation and the options → step conversion. Parsing `--then` segments with
+ * commander is in `then-args.ts`, so services can import this module without importing the CLI
  * framework.
  */
 
 export const THEN_FLAG = '--then';
 
-/** One per-referendum CLI flag and the {@link ReferendumStep} field it feeds. */
+/** One per-referendum CLI flag and the {@link ReferendumStep} field it sets. */
 export interface StepField {
   key: keyof ReferendumStep;
   flags: string;
@@ -73,7 +73,7 @@ export const STEP_FIELDS: ReadonlyArray<StepField> = [
   {
     key: 'postTest',
     flags: '--post-test <module>',
-    description: `Post-referendum test module run against the live post-execution network: a bundled name (${listBundledPostTests().join(', ') || 'none bundled'}) or a path to your own module (./my-post-test.mjs, .ts/.js/.cjs/.mjs). It exports a function (default/postTest/run) receiving { main, chains, args, step } where each chain has { label, specName, network, kind, wsEndpoint, chain }; it drives the forks via dev RPCs or the in-process chain and throws to fail.`,
+    description: `Post-referendum test module run against the live post-execution network: a bundled name (${listBundledPostTests().join(', ') || 'none bundled'}) or a path to your own module (./my-post-test.mjs, .ts/.js/.cjs/.mjs). It exports a function (default/postTest/run) receiving { main, chains, args, step } where each chain has { label, specName, network, kind, wsEndpoint, chain }; it builds blocks on the forks via dev RPCs or the in-process chain and throws to report a failure.`,
   },
   {
     key: 'postTestArgs',
@@ -119,8 +119,8 @@ export interface StepHalf {
 }
 
 /**
- * The governance or fellowship half of a step. Every caller that runs one referendum picks the
- * same three fields, so they are selected here once instead of at each site.
+ * The governance or fellowship half of a step. Every caller that runs one referendum reads the
+ * same three fields, so this function selects them once instead of each caller repeating it.
  */
 export function stepHalf(step: ReferendumStep, isFellowship: boolean): StepHalf {
   return isFellowship
@@ -149,8 +149,8 @@ export function describeStep(step: ReferendumStep): string {
 
 /**
  * Validate one step: an existing ID and a creation call are mutually exclusive per half, and a
- * step must name at least one referendum. `label` (e.g. `--then #2`) prefixes the message for
- * chained steps; the top-level step keeps the exact messages the tool has always produced.
+ * step must specify at least one referendum. `label` (e.g. `--then #2`) prefixes the message for
+ * chained steps; the top-level step uses the message without a prefix.
  */
 export function validateStep(step: ReferendumStep, label?: string): void {
   const prefix = label ? `${label}: ` : '';
@@ -199,9 +199,9 @@ export function stepFromOptions(options: StepOptions, label?: string): Referendu
 }
 
 /**
- * The ordered step list for a run: the top-level step (when it names a referendum) followed by
- * the already-parsed `--then` steps. Throws with the same messages a single-step invocation always
- * produced when the top-level flags are inconsistent.
+ * The ordered step list for a run: the top-level step (when it specifies a referendum) followed
+ * by the already-parsed `--then` steps. Throws when the top-level flags are inconsistent, using
+ * the same messages as a single-step run.
  */
 export function buildSteps(options: TestOptions): ReferendumStep[] {
   const first = stepFromOptions(options);
@@ -218,7 +218,7 @@ export function buildSteps(options: TestOptions): ReferendumStep[] {
     ).map((field) => longFlag(field.flags));
     if (orphans.length > 0) {
       throw new Error(
-        `${orphans.join(', ')} need a referendum in the same segment; move them after the ${THEN_FLAG} they belong to`
+        `${orphans.join(', ')} need a referendum in the same segment; move them after the ${THEN_FLAG} for that referendum`
       );
     }
   }

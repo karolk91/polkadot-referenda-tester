@@ -114,10 +114,10 @@ export async function fetchNetworkFromEndpoint(endpoint: string): Promise<ChainN
 /**
  * Read the full {@link ChainInfo} (network + kind + label) for an endpoint from its runtime
  * `spec_name`, via a single legacy `state_getRuntimeVersion` RPC ({@link fetchRuntimeSpecName})
- * instead of a full polkadot-api client. That makes it safe against full nodes, chopsticks forks,
- * and legacy-only endpoints alike — e.g. a subway caching/failover proxy that speaks the old
- * JSON-RPC but not the new `chainHead_*` API that `createClient` requires. Used by all pre-fork
- * chain detection and by the bridged-scenario path to classify `--additional-chains`.
+ * instead of a full polkadot-api client. This works against full nodes, chopsticks forks and
+ * legacy-only endpoints, such as a subway caching/failover proxy that implements the old JSON-RPC
+ * but not the new `chainHead_*` API that `createClient` requires. Used by all pre-fork chain
+ * detection and by the bridged-scenario path to classify `--additional-chains`.
  *
  * @throws if the endpoint cannot be reached or the runtime-version read fails.
  */
@@ -147,12 +147,12 @@ export function createApiForChain(client: PolkadotClient): SubstrateApi {
 
 /**
  * Read a chain's runtime `specName` via a single legacy `state_getRuntimeVersion` JSON-RPC
- * call over a bare polkadot-api ws provider — deliberately NOT `createClient`. `createClient`
- * speaks the new `chainHead_*`/`chainSpec_*` JSON-RPC spec; a legacy-only endpoint (e.g. a
- * subway caching/failover proxy) returns "Method not found" for `chainHead_v1_follow`, which
- * sends `createClient` into a tight no-backoff reconnect loop. The old `state_getRuntimeVersion`
- * is universally supported, so this is safe against full nodes, chopsticks forks, and proxies
- * alike. The socket is always torn down before the promise settles.
+ * call over a bare polkadot-api ws provider, deliberately NOT `createClient`. `createClient`
+ * requires the new `chainHead_*`/`chainSpec_*` JSON-RPC spec; a legacy-only endpoint (for example
+ * a subway caching/failover proxy) returns "Method not found" for `chainHead_v1_follow`, which
+ * puts `createClient` into a reconnect loop with no backoff. Every node implements the old
+ * `state_getRuntimeVersion`, so this works against full nodes, chopsticks forks and proxies. The
+ * socket is always torn down before the promise settles.
  *
  * @throws if the endpoint cannot be reached, the RPC errors, or no response arrives in time.
  */
@@ -161,7 +161,7 @@ export function fetchRuntimeSpecName(endpoint: string, timeoutMs = 20000): Promi
     let connection: { disconnect: () => void } | undefined;
     let done = false;
     // Tear the socket down before settling. `resolve`/`reject` are already idempotent, so this
-    // only has to guard the teardown itself.
+    // only guards the teardown.
     const cleanup = (): void => {
       if (done) return;
       done = true;

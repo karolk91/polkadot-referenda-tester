@@ -1,6 +1,6 @@
-// Shared helpers for post-tests that read the live chopsticks-core `Blockchain` handed to them
-// as `chain.chain` (in-process, no WebSocket round-trips). Everything decodes with the
-// @polkadot/types registry the block itself carries, so it follows runtime upgrades.
+// Shared helpers for post-tests that read the live chopsticks-core `Blockchain` passed to them
+// as `chain.chain` (in-process, no WebSocket round-trips). Decoding uses the @polkadot/types
+// registry attached to the block, so it stays correct across runtime upgrades.
 
 import { hexToU8a } from '@polkadot/util';
 
@@ -8,7 +8,7 @@ export const RULE = '━'.repeat(70);
 export const log = (...args) => console.log(...args);
 export const section = (title) => log(`\n${RULE}\n${title}\n${RULE}`);
 
-/** Per-block noise that says nothing about what a referendum or upgrade did. */
+/** Per-block events that report nothing about a referendum or an upgrade. */
 export const ROUTINE = new Set(['system.ExtrinsicSuccess']);
 
 /** Decode a storage entry of `query` at `block` using the type recorded in metadata. */
@@ -62,7 +62,7 @@ export async function describeExtrinsics(block) {
  * @param {string} [opts.tag]    annotation after the header (e.g. "apply_authorized_upgrade")
  * @param {Set}    [opts.hide]   event keys to leave out (count is still reported)
  * @param {Set}    [opts.mark]   event keys to highlight with ◀◀
- * @param {RegExp} [opts.flag]   pattern over "key data" that marks an event as failure-looking ⚠️
+ * @param {RegExp} [opts.flag]   pattern over "key data" that marks an event as a probable failure ⚠️
  * @returns {{ events: any[], flagged: string[] }} all events (hidden ones included) and the flagged lines
  */
 export async function printBlock(label, block, { max, tag, hide, mark, flag } = {}) {

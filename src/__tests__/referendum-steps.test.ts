@@ -260,7 +260,7 @@ describe('buildSteps', () => {
     expect(() =>
       buildSteps({ ...base, postTest: 'a.mjs', thenSteps: [{ referendum: 1 }] })
     ).toThrow(
-      '--post-test need a referendum in the same segment; move them after the --then they belong to'
+      '--post-test need a referendum in the same segment; move them after the --then for that referendum'
     );
   });
 

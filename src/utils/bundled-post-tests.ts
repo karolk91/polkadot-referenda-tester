@@ -2,20 +2,20 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 /**
- * The post-tests that ship with the tool. `__dirname` is `<pkg>/src/utils` when running from
- * source and `<pkg>/dist/utils` when built, so one relative path finds `<pkg>/post-tests` in both
- * cases — and therefore also inside an `npx`/global install, where the caller has no idea where
- * the package lives.
+ * The post-tests included with the tool. `__dirname` is `<pkg>/src/utils` when running from
+ * source and `<pkg>/dist/utils` when built, so one relative path resolves to `<pkg>/post-tests` in
+ * both cases, including an `npx` or global install where the caller does not know the package
+ * location.
  */
 export const BUNDLED_POST_TESTS_DIR = path.resolve(__dirname, '../../post-tests');
 
-/** Extensions a bundled post-test may ship with. */
+/** Extensions a bundled post-test may use. */
 const MODULE_EXTENSION = /\.[cm]?js$/;
 
 /**
- * Bundled post-tests by name: `apply-authorized-upgrade` → `<pkg>/post-tests/…​.mjs`. A single
- * directory read backs module resolution, the `--post-test` help text and the "unknown post-test"
- * error, so they cannot disagree about what actually ships.
+ * Bundled post-tests by name: `apply-authorized-upgrade` → `<pkg>/post-tests/…​.mjs`. One
+ * directory read provides module resolution, the `--post-test` help text and the "unknown
+ * post-test" error, so all three report the same set of files.
  */
 export function bundledPostTests(dir: string = BUNDLED_POST_TESTS_DIR): Map<string, string> {
   let files: string[];

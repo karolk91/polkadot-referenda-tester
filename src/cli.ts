@@ -36,8 +36,8 @@ program
   .version(version);
 
 // `--then` splits the `test` arguments into referendum steps that all use the same per-referendum
-// flags. Commander cannot parse repeated option groups, so split first: the main segment goes
-// through commander as usual and the later segments are parsed in the `test` preAction hook below.
+// flags. Commander cannot parse repeated option groups, so split first: commander parses the main
+// segment, and the `test` preAction hook below parses the later segments.
 const { main: mainArgs, segments: thenSegments } = splitArgvOnThen(process.argv.slice(2));
 
 // Single chain referendum test
@@ -91,7 +91,7 @@ const testCommand = addStepOptions(
   })
   .action(testReferendum);
 
-// Only `test` understands `--then`.
+// Only `test` accepts `--then`.
 program.hook('preAction', (_program, actionCommand) => {
   if (thenSegments.length > 0 && actionCommand !== testCommand) {
     actionCommand.error(`error: ${THEN_FLAG} is only supported by the "test" command`);

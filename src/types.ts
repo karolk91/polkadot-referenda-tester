@@ -37,9 +37,10 @@ export interface TestOptions {
 }
 
 /**
- * One referendum step of a run: what a single invocation of the tool used to do. A run is an
- * ordered list of steps executed on ONE forked network, so each step sees the state left behind
- * by the previous ones (including anything a step's post-test did, e.g. applying a runtime upgrade).
+ * One referendum step of a run. Before chaining existed, a single invocation of the tool ran
+ * exactly one step. A run is an ordered list of steps executed on ONE forked network, so each step
+ * runs on the state the previous steps produced, including changes made by a step's post-test (for
+ * example applying a runtime upgrade).
  *
  * A step is a governance referendum, a fellowship referendum, or both (fellowship first, then
  * governance — the whitelisting pattern). Each half is either an existing ID or a creation call.

@@ -5,7 +5,7 @@ import { type ChainInfo, type ChainNetwork, fetchChainInfoFromEndpoint } from '.
 
 export type PrimaryRole = 'governance' | 'fellowship';
 
-/** Which canned storage each primary fork gets (see {@link StorageInjection}). */
+/** Which predefined storage each primary fork receives (see {@link StorageInjection}). */
 export interface TopologyInjections {
   governance?: StorageInjection;
   fellowship?: StorageInjection;
@@ -22,33 +22,33 @@ export interface TopologyConfig {
   additionalChains?: ParsedEndpoint[];
 }
 
-/** One `--additional-chains` entry: what the user asked for, and the identity detected for it. */
+/** One `--additional-chains` entry: the endpoint the user requested, and its detected identity. */
 interface AdditionalChain {
   endpoint: ParsedEndpoint;
   info: ChainInfo;
 }
 
-/** A primary role's detected chain plus the fork block and YAML extras that go with it. */
+/** A primary role's detected chain, with the fork block and YAML extras for that role. */
 interface PrimaryChain {
   info: ChainInfo;
   block?: number;
   baseConfig?: Record<string, unknown>;
 }
 
-/** A chain that earned a fork: the chopsticks config key it was registered under, and its identity. */
+/** A chain included in the forked network: its chopsticks config key and its identity. */
 export interface RegisteredChain {
   key: string;
   info: ChainInfo;
 }
 
-/** The `setupNetworks` config for a run, plus which chain landed under which key. */
+/** The `setupNetworks` config for a run, and the key each chain uses in it. */
 export interface NetworkTopology {
   networkConfig: Record<string, unknown>;
   /** The governance fork, when the run tests a governance referendum. */
   governance?: RegisteredChain;
-  /** The fellowship fork; the very same entry as `governance` when both share one chain. */
+  /** The fellowship fork; the same entry as `governance` when both use one chain. */
   fellowship?: RegisteredChain;
-  /** The `--additional-chains` that earned their own fork, in config order. */
+  /** The `--additional-chains` that received their own fork, in config order. */
   additional: RegisteredChain[];
 }
 
@@ -123,8 +123,8 @@ export class ChainTopologyBuilder {
 
     if (governanceInfo) this._governanceChain = governanceInfo;
     if (fellowshipInfo) this._fellowshipChain = fellowshipInfo;
-    // Each endpoint keeps its own detected identity, so an entry's `block` / `baseConfig` can
-    // never drift onto a different chain.
+    // Each endpoint stores its own detected identity, so an entry's `block` / `baseConfig`
+    // always applies to the chain the user requested.
     this._additionalChains = this.additionalChainEndpoints.map((endpoint, index) => ({
       endpoint,
       info: additionalInfos[index],
@@ -157,13 +157,14 @@ export class ChainTopologyBuilder {
   }
 
   /**
-   * Build the whole `setupNetworks` config for a run: the primary fork(s) the run needs, plus
-   * every `--additional-chains` entry that isn't already one of them.
+   * Build the whole `setupNetworks` config for a run: the primary fork(s) the run requires, plus
+   * every `--additional-chains` entry that is not already one of them.
    *
-   * A run needs one primary fork when it tests only governance, only fellowship, or both on the
-   * same chain, and two when the two referenda live on different chains. `injections` says which
-   * canned storage to merge into each primary — the caller decides from the whole run (with
-   * chaining, any step that creates a referendum needs its signer funded from the start).
+   * A run requires one primary fork when it tests only governance, only fellowship, or both on
+   * the same chain, and two when the referenda are on different chains. `injections` specifies
+   * which predefined storage to merge into each primary. The caller decides this from the whole
+   * run, because with chaining any step that creates a referendum requires a funded signer from
+   * the start.
    */
   buildNetworkTopology(request: {
     needGovernance: boolean;
@@ -191,8 +192,9 @@ export class ChainTopologyBuilder {
       this.logger.section('Setting Up Multi-Chain Environment');
       this.logger.info(`Governance Chain: ${governance.info.label}`);
       this.logger.info(`Fellowship Chain: ${fellowship.info.label}\n`);
-      // A relay takes its network key so chopsticks wires the vertical relay↔parachain link; the
-      // other side keeps its role name. When both are relays only the first can take the relay key.
+      // A relay uses its network key, so chopsticks connects the vertical relay↔parachain link.
+      // The other side uses its role name. When both are relays, only the first can use the
+      // relay key.
       const governanceIsRelay = governance.info.kind === 'relay';
       const governanceKey = governanceIsRelay
         ? this.getRelayKey(governance.info.network)
@@ -210,8 +212,8 @@ export class ChainTopologyBuilder {
       const primary = governance ?? fellowship!;
       const role: PrimaryRole = governance ? 'governance' : 'fellowship';
       const key = primary.info.kind === 'relay' ? this.getRelayKey(primary.info.network) : role;
-      // A fork takes one canned injection; the fellowship one is a superset of the Alice one, so it
-      // also covers a shared chain that creates both kinds of referendum.
+      // A fork receives one predefined injection. The fellowship injection is a superset of the
+      // Alice injection, so it also covers a shared chain that creates both kinds of referendum.
       networkConfig[key] = this.buildConfig(
         primary,
         injections?.fellowship ?? injections?.governance
@@ -235,8 +237,8 @@ export class ChainTopologyBuilder {
   }
 
   /**
-   * Add every `--additional-chains` entry to `networkConfig`, skipping the ones already forked as
-   * a primary (by endpoint or by identity) and any relay whose key a primary has taken.
+   * Add every `--additional-chains` entry to `networkConfig`, skipping the entries already forked
+   * as a primary (by endpoint or by identity) and any relay whose key a primary already uses.
    */
   private registerAdditionalChains(
     networkConfig: Record<string, unknown>,

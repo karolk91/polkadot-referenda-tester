@@ -47,16 +47,16 @@ import {
 import { SimulationRunner } from './simulation-runner';
 
 /**
- * A live fork the run drives: a chopsticks node with a long-lived polkadot-api client and a known
- * identity. Structurally {@link BridgeChain}, so bridged forks feed the same helpers.
+ * A forked chain: a chopsticks node with a long-lived polkadot-api client and a known identity.
+ * Same shape as {@link BridgeChain}, so bridged forks work with the same helpers.
  */
 type Fork = BridgeChain;
 
 /**
- * The forked network a run executes on. Built once from the union of what every step needs, then
- * every {@link ReferendumStep} runs against it in order, so later steps see the state earlier ones
- * (and their post-tests) left behind. `fellowship` is the very same object as `governance` when
- * both referenda live on one chain.
+ * The forked network a run executes on. Built once from the union of what every step requires,
+ * then every {@link ReferendumStep} runs against it in order, so each step starts from the state
+ * the previous steps and their post-tests produced. `fellowship` is the same object as
+ * `governance` when both referenda are on one chain.
  */
 interface ForkedNetwork {
   governance?: Fork;
@@ -72,7 +72,7 @@ interface StepOutcome {
   fellowshipReferendumId?: number;
 }
 
-/** The already-spawned bridged network a {@link NetworkCoordinator.runBridgedStep} runs against. */
+/** The spawned bridged network that {@link NetworkCoordinator.runBridgedStep} uses. */
 interface BridgedRun {
   connector: BridgeConnector;
   polkadot: BridgePolkadotSide;
@@ -125,11 +125,12 @@ export class NetworkCoordinator {
   /**
    * Run an ordered list of referendum steps on one forked network.
    *
-   * The network is forked once from the union of what the steps need: the governance chain if any
-   * step has a governance referendum, the fellowship chain if any has a fellowship referendum, plus
-   * `--additional-chains`. Signers are funded up front for every creation call in the run. Each
-   * step then executes (fellowship first, then governance, when it has both), settles XCM on the
-   * other forks, and runs its own post-test before the next step starts.
+   * The network is forked once from the union of what the steps require: the governance chain if
+   * any step has a governance referendum, the fellowship chain if any step has a fellowship
+   * referendum, plus `--additional-chains`. The run funds the signer for every creation call
+   * before the first step. Each step executes its referenda (fellowship first, then governance,
+   * when it has both), settles XCM on the other forks, and runs its post-test before the next
+   * step starts.
    */
   async runSteps(steps: ReferendumStep[], cleanup: boolean = true): Promise<void> {
     if (steps.length === 0) {
@@ -175,10 +176,10 @@ export class NetworkCoordinator {
   }
 
   /**
-   * Run the steps in order against one already-forked network: print the step header, execute the
-   * step's referenda, then run its post-test before the next step starts. `execute` performs the
-   * referenda and reports which fork they ran on; `forks` is everything a post-test may drive.
-   * Shared by the single-consensus and bridged paths, which differ only in `execute`.
+   * Run the steps in order against one forked network: print the step header, execute the step's
+   * referenda, then run its post-test before the next step starts. `execute` runs the referenda
+   * and returns the fork they executed on; `forks` contains every fork a post-test can use. The
+   * single-consensus and bridged paths share this method and differ only in `execute`.
    */
   private async runStepChain(
     steps: ReferendumStep[],
@@ -195,8 +196,8 @@ export class NetworkCoordinator {
   }
 
   /**
-   * Fork every chain the run needs with one `setupNetworks` call so sibling/relay message passing
-   * is wired between them, then adopt the primaries with long-lived clients.
+   * Fork every chain the run requires with one `setupNetworks` call, so chopsticks connects
+   * sibling and relay message passing between them, then connect a client to each fork.
    */
   private async setupForkedNetwork(
     needGovernance: boolean,
@@ -227,11 +228,13 @@ export class NetworkCoordinator {
 
     this.logger.startSpinner('Waiting for chains to be ready...');
     const [governance, distinctFellowship, additionalForks] = await Promise.all([
-      governanceSlot ? this.adoptPrimaryChain(governanceSlot, contextOf) : undefined,
-      fellowshipSlot && !sharedFork ? this.adoptPrimaryChain(fellowshipSlot, contextOf) : undefined,
-      // Additional chains keep the identity detected before the fork; they get a client here too,
-      // so per-step event collection reuses it instead of reconnecting to each of them every step.
-      Promise.all(additional.map((slot) => this.adoptFork(contextOf(slot.key), () => slot.info))),
+      governanceSlot ? this.connectPrimaryChain(governanceSlot, contextOf) : undefined,
+      fellowshipSlot && !sharedFork
+        ? this.connectPrimaryChain(fellowshipSlot, contextOf)
+        : undefined,
+      // Additional chains reuse the identity detected before forking. They also get a client
+      // here, so per-step event collection reuses it instead of reconnecting on every step.
+      Promise.all(additional.map((slot) => this.connectFork(contextOf(slot.key), () => slot.info))),
     ]);
     const fellowship = fellowshipSlot ? (distinctFellowship ?? governance) : undefined;
     this.logger.succeedSpinner('Chains are ready');
@@ -257,9 +260,9 @@ export class NetworkCoordinator {
 
   /**
    * Wrap a chopsticks context with a manager and a ready polkadot-api client, then identify it.
-   * `identify` runs against the live fork so a `wasm-override` is reflected in the identity.
+   * `identify` reads from the live fork, so the identity includes any `wasm-override`.
    */
-  private async adoptFork(
+  private async connectFork(
     context: ChopsticksContext,
     identify: (api: SubstrateApi, endpoint: string) => ChainInfo | Promise<ChainInfo>
   ): Promise<Fork> {
@@ -273,14 +276,14 @@ export class NetworkCoordinator {
   }
 
   /**
-   * Adopt a primary fork, re-reading its identity from the live fork (so a `wasm-override` shows
-   * up) but keeping the upstream endpoint the run was pointed at on the resulting {@link ChainInfo}.
+   * Connect a primary fork. Re-reads the identity from the live fork, so a `wasm-override`
+   * applies, but keeps the upstream endpoint from the command line on the {@link ChainInfo}.
    */
-  private adoptPrimaryChain(
+  private connectPrimaryChain(
     slot: RegisteredChain,
     contextOf: (key: string) => ChopsticksContext
   ): Promise<Fork> {
-    return this.adoptFork(contextOf(slot.key), (api) => getChainInfo(api, slot.info.endpoint));
+    return this.connectFork(contextOf(slot.key), (api) => getChainInfo(api, slot.info.endpoint));
   }
 
   /** Execute one step against the forked network. */
@@ -323,7 +326,7 @@ export class NetworkCoordinator {
   ): Promise<StepOutcome> {
     if (step.preCall) {
       this.logger.warn(
-        'pre-call is only applied to single-referendum steps; ignoring it for this fellowship + governance step'
+        '--pre-call applies only to single-referendum steps; ignoring it for this fellowship + governance step'
       );
     }
 
@@ -418,9 +421,9 @@ export class NetworkCoordinator {
   }
 
   /**
-   * Every fork in the network in a stable order — primaries first, then additional chains — minus
-   * `except` (the chain a step just executed on, when the others should settle its XCM). A chain
-   * that is both primaries is one fork, and appears once.
+   * Every fork in the network in a stable order: primaries first, then additional chains, without
+   * `except` (the chain a step just executed on, when the other forks should settle its XCM). A
+   * chain used as both primaries is one fork and appears once.
    */
   private forks(network: ForkedNetwork, except?: Fork): Fork[] {
     const primaries = [network.governance, network.fellowship].filter(
@@ -467,7 +470,7 @@ export class NetworkCoordinator {
     }
   }
 
-  /** Describe a live fork for a post-test, from the identity established when it was adopted. */
+  /** Describe a live fork for a post-test, using the identity read when the fork was connected. */
   private describePostTestChain(fork: Fork): PostTestChain {
     const context = fork.manager.getContext();
     return {
@@ -511,12 +514,12 @@ export class NetworkCoordinator {
   }
 
   /**
-   * Run referendum steps whose fellowship half sends an XCM that ultimately executes on a chain
-   * in a different consensus (across the Polkadot → Kusama bridge).
+   * Run referendum steps whose fellowship half sends an XCM that executes on a chain in a
+   * different consensus (across the Polkadot → Kusama bridge).
    *
-   * Both sides are spawned once (Polkadot: Collectives + AHP + BHP, Kusama: AHK + BHK, plus any
-   * `--additional-chains` routed per side). Then, per step: the fellowship referendum on
-   * Collectives, the bridge pump that delivers its message to BHK and verifies it landed on AHK,
+   * This method spawns both sides once (Polkadot: Collectives + AHP + BHP, Kusama: AHK + BHK,
+   * plus any `--additional-chains` routed per side). Then, per step: the fellowship referendum on
+   * Collectives, the bridge pump that delivers its message to BHK and verifies it arrived on AHK,
    * the AHK public referendum that dispatches the whitelisted call (when the step has a governance
    * half), downstream fan-out settlement on the other Kusama chains, and the step's post-test.
    */
@@ -534,12 +537,13 @@ export class NetworkCoordinator {
       injectFellowshipStorage:
         bridgeEndpoints.injectFellowshipStorage ??
         steps.some((step) => !!step.callToCreateFellowshipReferendum),
-      // Alice on AHK is only needed when *creating* a referendum (she signs notePreimage
-      // + submit). An existing referendum is force-approved via storage, so no signer.
+      // Alice on AHK is only required when creating a referendum (the Alice account signs
+      // notePreimage + submit). An existing referendum is force-approved via storage, so it
+      // requires no signer.
       injectAliceOnAssetHubKusama:
         bridgeEndpoints.injectAliceOnAssetHubKusama ??
         steps.some((step) => !!step.callToCreateGovernanceReferendum),
-      // Alice signs receive_messages_proof on BHK — always fund her there.
+      // The Alice account signs receive_messages_proof on BHK, so always fund it there.
       injectAliceOnBridgeHubKusama: bridgeEndpoints.injectAliceOnBridgeHubKusama ?? true,
     });
 
@@ -550,8 +554,8 @@ export class NetworkCoordinator {
     this.logger.info(`Polkadot-side keys: ${Object.values(POLKADOT_SIDE_KEYS).join(', ')}`);
     this.logger.info(`Kusama-side keys: ${Object.values(KUSAMA_SIDE_KEYS).join(', ')}`);
 
-    // The two sides are independent spawns: chopsticks only wires message passing *within* one
-    // `setupNetworks` call, and the cross-consensus link is established later by BridgeConnector.
+    // The two sides are independent: chopsticks connects message passing only within one
+    // `setupNetworks` call, and BridgeConnector establishes the cross-consensus link later.
     this.logger.startSpinner('Spawning Polkadot-side and Kusama-side chopsticks forks...');
     const [polkadotNetworks, kusamaNetworks] = await Promise.all([
       setupNetworks(polkadotSide.networkConfig as Parameters<typeof setupNetworks>[0]),
@@ -566,26 +570,26 @@ export class NetworkCoordinator {
     let bridgeConnector: BridgeConnector | null = null;
 
     try {
-      // Each adoption only connects to its own already-spawned fork and reads from it, so they
-      // all run concurrently instead of serializing one metadata download per chain. Adopted
-      // chains are recorded as they arrive, so the finally-block can still tear down whatever
-      // came up if one of them fails.
-      const adoptSide = (
+      // Each call connects to one already-spawned fork and only reads from it, so they all run
+      // concurrently instead of downloading metadata one chain at a time. Each call records its
+      // chain immediately, so the finally-block tears down the chains that connected even when
+      // another one fails.
+      const connectSide = (
         networks: Record<string, unknown>,
         into: Record<string, BridgeChain>
       ): Promise<unknown> =>
         Promise.all(
           Object.entries(networks).map(async ([key, ctx]) => {
-            into[key] = await this.adoptBridgeChain(key, ctx as unknown as ChopsticksContext);
+            into[key] = await this.connectBridgeChain(key, ctx as unknown as ChopsticksContext);
           })
         );
       await Promise.all([
-        adoptSide(polkadotNetworks, polkadotChains),
-        adoptSide(kusamaNetworks, kusamaChains),
+        connectSide(polkadotNetworks, polkadotChains),
+        connectSide(kusamaNetworks, kusamaChains),
       ]);
 
-      // Everything adopted under a non-core key (relay `polkadot`/`kusama` or `extra_<n>`)
-      // came from --additional-chains; hand them to the connector so the pump advances them.
+      // Every chain under a non-core key (relay `polkadot`/`kusama` or `extra_<n>`) came from
+      // --additional-chains. Pass them to the connector so the pump advances them.
       const polkadotCoreKeys = new Set<string>(Object.values(POLKADOT_SIDE_KEYS));
       const kusamaCoreKeys = new Set<string>(Object.values(KUSAMA_SIDE_KEYS));
       const polkadotExtras = Object.entries(polkadotChains)
@@ -610,8 +614,8 @@ export class NetworkCoordinator {
       const pumpRounds = options.bridgePumpRounds
         ? parseInt(options.bridgePumpRounds, 10)
         : undefined;
-      // Construction only stores the sides; the bridge subscription is set up lazily by the first
-      // pump. One connector for the whole run: its collected events accumulate across steps.
+      // The constructor only stores the sides; the first pump sets up the bridge subscription.
+      // One connector for the whole run, so its collected events accumulate across steps.
       bridgeConnector = new BridgeConnector(
         this.logger,
         polkadotSideForConnector,
@@ -628,9 +632,9 @@ export class NetworkCoordinator {
 
       await this.runStepChain(steps, bridgeForks, (step) => this.runBridgedStep(step, run));
     } finally {
-      // Tear down the bridge subscription + its polkadot.js ApiPromise instances
-      // BEFORE we shut down chopsticks; otherwise the ApiPromise sockets observe a
-      // server disconnect and log noisy errors during cleanup.
+      // Tear down the bridge subscription and its polkadot.js ApiPromise instances BEFORE
+      // shutting down chopsticks; otherwise the ApiPromise sockets receive a server disconnect
+      // and log errors during cleanup.
       if (bridgeConnector) {
         try {
           await bridgeConnector.teardown();
@@ -690,8 +694,8 @@ export class NetworkCoordinator {
 
       if (report.totalSeen > 0) {
         // The chopsticks connector delivered the messages to BHK during the pump above.
-        // Verify the end-to-end happy path: BHP MessageAccepted, BHK MessagesReceived,
-        // AHK MessageQueue.Processed{success:true} all fired.
+        // Verify the end-to-end path: BHP MessageAccepted, BHK MessagesReceived and
+        // AHK MessageQueue.Processed{success:true} all occurred.
         this.logger.section('Bridge Delivery Verification');
         const verifier = new BridgeVerifier(this.logger, {
           outboundPalletName: 'BridgeKusamaMessages',
@@ -718,7 +722,7 @@ export class NetworkCoordinator {
     // bridged Whitelist.whitelist_call(hash) into AHK, run an AHK public referendum on the
     // WhitelistedCaller track whose proposal is
     // Whitelist.dispatch_whitelisted_call_with_preimage(call_X). Approval + scheduler
-    // dispatch then actually executes call_X on AHK.
+    // dispatch then executes call_X on AHK.
     if (stepHasGovernance(step)) {
       this.logger.section('Bridged-Target Public Referendum (AHK whitelistedcaller)');
       // Existing AHK governance referendum (`-r`), or undefined when creating one.
@@ -739,19 +743,19 @@ export class NetworkCoordinator {
       // The dispatched call may fan XCM out to the other Kusama chains (e.g. a
       // network-wide `authorize_upgrade`). AHK has already queued those messages on
       // each target's inbound queue; build blocks on every other Kusama-side chain
-      // until each one actually *processes* the fan-out message addressed to it, then
-      // report what each one did.
+      // until each one processes the fan-out message addressed to it, then report the
+      // result for each chain.
       const downstream = run.kusamaChains.filter((chain) => chain !== kusama.ahk);
       if (downstream.length > 0) {
         this.logger.section('Downstream Fan-Out Settlement (Kusama system chains)');
         // Identifiers of the XCM the AHK referendum dispatched outward. settleDownstream
         // waits until each target processes one of these (a `MessageQueue.Processed`
-        // whose `id` is in this set) — a call-agnostic completion signal, instead of
-        // advancing a fixed number of blocks and racing the cross-chain delivery.
+        // whose `id` is in this set). This is a call-agnostic completion signal, instead of
+        // advancing a fixed number of blocks, which can read state before delivery completes.
         const expectedMessageIds = collectOutboundXcmIds(ahkResult.events);
         const settleResults = await connector.settleDownstream(downstream, expectedMessageIds);
-        // Report only the fan-out targets; AHK is the source and its own
-        // UpgradeAuthorized is already surfaced during the public-referendum simulation.
+        // Report only the fan-out targets; AHK is the source, and the public-referendum
+        // simulation already reports its UpgradeAuthorized.
         this.reportDownstreamFanOut(connector, downstream, settleResults);
       }
     }
@@ -760,11 +764,11 @@ export class NetworkCoordinator {
   }
 
   /**
-   * Summarise, per chain, what the AHK fan-out actually did downstream: whether the chain
-   * *processed* the fan-out message addressed to it (the call-agnostic settlement signal,
-   * from `settleResults`) and — if the carried call was a runtime upgrade — which code hash
-   * it authorized (`System.UpgradeAuthorized`). Reads events from the connector's
-   * accumulated log, which `settleDownstream` has just topped up.
+   * Report, per chain, the result of the AHK fan-out: whether the chain processed the fan-out
+   * message addressed to it (the call-agnostic settlement signal, from `settleResults`) and, when
+   * the message contained a runtime upgrade, which code hash it authorized
+   * (`System.UpgradeAuthorized`). Reads events from the connector's accumulated log, which
+   * `settleDownstream` has just updated.
    */
   private reportDownstreamFanOut(
     connector: BridgeConnector,
@@ -780,9 +784,9 @@ export class NetworkCoordinator {
         (e) => e.section === 'System' && e.method === 'UpgradeAuthorized'
       );
       if (settle && !settle.matched) {
-        // The fan-out message never showed up as processed within the round cap — an
-        // honest timeout, not a silent pass. (Storage may still settle a block later;
-        // bump --bridge-pump-rounds if this recurs.)
+        // The fan-out message was not processed within the round limit. Report a timeout
+        // instead of passing. Storage may still settle a block later; increase
+        // --bridge-pump-rounds if this recurs.
         this.logger.warn(
           `  ${chain.label}: fan-out message NOT observed processed within ${settle.rounds} round(s) — possible delivery lag`
         );
@@ -799,8 +803,8 @@ export class NetworkCoordinator {
           );
         }
       } else {
-        // Message processed, but the carried call didn't authorize an upgrade here. That's
-        // expected for non-upgrade referenda (spends, config changes, …).
+        // The message was processed, but the call it contained did not authorize an upgrade
+        // here. This is expected for non-upgrade referenda (spends, config changes, …).
         this.logger.info(
           `  ${chain.label}: fan-out message processed (no UpgradeAuthorized — call was not an upgrade for this chain)`
         );
@@ -813,9 +817,9 @@ export class NetworkCoordinator {
     }
   }
 
-  /** Adopt a bridged fork; a failed identity read falls back to the network key as its label. */
-  private async adoptBridgeChain(key: string, ctx: ChopsticksContext): Promise<BridgeChain> {
-    const fork = await this.adoptFork(ctx, async (api, endpoint) => {
+  /** Connect a bridged fork. When the identity read fails, use the network key as the label. */
+  private async connectBridgeChain(key: string, ctx: ChopsticksContext): Promise<BridgeChain> {
+    const fork = await this.connectFork(ctx, async (api, endpoint) => {
       try {
         return await getChainInfo(api, endpoint);
       } catch (error) {

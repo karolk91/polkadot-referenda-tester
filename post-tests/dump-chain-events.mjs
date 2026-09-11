@@ -1,10 +1,10 @@
 // Post-referendum test: dump decoded events from every forked chain, in-process.
 //
-// Reads events straight from the live chopsticks `Blockchain` objects instead of over the fork's
-// WebSocket RPC, so it still works when the tool's own `--additional-chains` event collector hits a
-// "No response received from RPC endpoint in 60s" timeout. For each chain it prints the events of
+// Reads events directly from the live chopsticks `Blockchain` objects instead of over the fork's
+// WebSocket RPC, so it still works when the tool's own `--additional-chains` event collector
+// reports a "No response received from RPC endpoint in 60s" timeout. For each chain it prints the events of
 // the current head (the block the tool already built after the referendum), then builds `blocks`
-// more blocks and prints those too, flagging anything that looks like a failure.
+// more blocks and prints those too, flagging every event that matches the failure pattern.
 //
 //   yarn cli test ... --post-test post-tests/dump-chain-events.mjs --post-test-args '{"blocks":1}'
 //
@@ -14,8 +14,8 @@
 //   all      true to include `main` as well
 //   verbose  print full event data (default: truncated to 300 chars, or ctx.verbose)
 //
-// Never throws on chain content — it is a reporter. It throws only if a chain has no usable
-// in-process `chain` object.
+// Never throws on chain content; this script only reports. It throws only when a chain has no
+// usable in-process `chain` object.
 
 import { log, printBlock, ROUTINE, RULE, section } from './lib/chopsticks-block.mjs';
 

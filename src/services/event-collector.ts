@@ -3,7 +3,7 @@ import { displayChainEvents } from '../utils/event-serializer';
 import type { Logger } from '../utils/logger';
 import type { ChopsticksManager } from './chopsticks-manager';
 
-/** A live fork whose events can be settled and displayed (a `Fork` from the coordinator). */
+/** A live fork this collector builds blocks on and reads events from (a `Fork` from the coordinator). */
 export interface CollectableChain {
   label: string;
   manager: ChopsticksManager;
@@ -72,9 +72,9 @@ export class EventCollector {
   }
 
   /**
-   * Build a block on every other fork so it processes the XCM the referendum just sent, then show
-   * what each one did. Each fork's own long-lived client is reused, so a chained run doesn't
-   * reconnect (and re-download metadata for) every chain on every step.
+   * Build a block on every other fork so it processes the XCM the referendum sent, then print the
+   * resulting events. This reuses each fork's long-lived client, so a chained run does not
+   * reconnect to every chain and re-download its metadata on every step.
    */
   async collectAdditionalChainEvents(chains: CollectableChain[]): Promise<void> {
     this.logger.debug(`collectAdditionalChainEvents called with ${chains.length} chains`);

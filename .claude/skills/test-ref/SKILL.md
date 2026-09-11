@@ -43,9 +43,9 @@ Recognize this from the user's request when they mention: "bridge", "bridged", "
   - If ambiguous, ask the user.
 
 ### Chained Referenda
-- "then", "and then", "followed by", "after that" -> the request is a **chain** of referendum steps run in order on one forked network. Each step is parsed like a standalone request (governance ID and/or fellowship ID, or creation/preimage hex).
-- "apply the upgrade", "on the new runtime", "after upgrading" between steps -> the earlier step gets `--post-test apply-authorized-upgrade --post-test-args '{"release":"<fellows release URL or tag>"}'`; ask for the release tag if the user didn't name one.
-- Later steps see the state the earlier ones left behind, so a referendum whose call only decodes on the upgraded runtime must come after the upgrade step.
+- "then", "and then", "followed by", "after that" -> the request is a **chain** of referendum steps run in order on one forked network. Parse each step like a standalone request (governance ID and/or fellowship ID, or creation/preimage hex).
+- "apply the upgrade", "on the new runtime", "after upgrading" between steps -> add `--post-test apply-authorized-upgrade --post-test-args '{"release":"<fellows release URL or tag>"}'` to the earlier step. Request the release tag if the user did not provide one.
+- Later steps run on the state the earlier steps produced, so a referendum whose call only decodes on the upgraded runtime must come after the upgrade step.
 
 ### Other Options
 - "keep running" or "no cleanup" -> add `--no-cleanup`
@@ -160,7 +160,7 @@ Scan the output file for these key data points:
 - `Downstream Fan-Out Settlement (Kusama system chains)` — followed by per-chain lines `<chain>: System.UpgradeAuthorized — code_hash=0x…` (or `<chain>: no UpgradeAuthorized (MessageQueue.Processed{success}=x/y)`). These are the fan-out targets actually executing the bridged call.
 
 ### Chained-run markers
-- `Referendum Chain (N steps)` lists the steps up front; each step then opens with `Step i/N: <description>` and contains the usual sections for that step (creation, simulation, XCM delivery, `Post-Referendum Test`). A failing step stops the run; later steps never start.
+- `Referendum Chain (N steps)` lists the steps first. Each step then starts with `Step i/N: <description>` and contains the usual sections for that step (creation, simulation, XCM delivery, `Post-Referendum Test`). A failing step stops the run, and the later steps do not execute.
 
 ### Final Status
 - Single-network: "Both referenda executed successfully", "Fellowship workflow completed", "Referendum executed successfully", or error messages.
