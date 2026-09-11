@@ -26,8 +26,8 @@ export interface BridgeChain {
   client: PolkadotClient;
   /** Human-friendly label for log lines (e.g. "BridgeHubPolkadot"). */
   label: string;
-  /** Detected chain identity, when the adoption could read it (used to describe post-test chains). */
-  info?: ChainInfo;
+  /** Chain identity (used to describe post-test chains); `unknown` fields when detection failed. */
+  info: ChainInfo;
 }
 
 export interface BridgePolkadotSide {

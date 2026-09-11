@@ -39,7 +39,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { hexToU8a, u8aToHex } from '@polkadot/util';
-import { blake2AsHex } from '@polkadot/util-crypto';
+import { blake2AsHex, cryptoWaitReady } from '@polkadot/util-crypto';
 import {
   eventKey,
   humanJson,
@@ -144,10 +144,11 @@ export function indexWasmsByHash(files) {
   for (const f of files) {
     const bytes = readFileSync(f.file);
     const specVersion = f.name.match(/-v(\d+)\./)?.[1];
-    byHash.set(blake2AsHex(bytes, 256), {
+    const hash = blake2AsHex(bytes, 256);
+    byHash.set(hash, {
       ...f,
       size: bytes.length,
-      hash: blake2AsHex(bytes, 256),
+      hash,
       specVersion: specVersion ? Number(specVersion) : undefined,
     });
   }
@@ -337,6 +338,9 @@ async function upgradeChain(ptChain, wasmsByHash, opts) {
 // ---------------------------------------------------------------------------------------------
 
 export default async function run(ctx) {
+  // Without this @polkadot/util-crypto falls back to the pure-JS blake2, ~10x slower than the
+  // wasm one — and this script hashes every release asset plus each chain's 2 MB `:code`.
+  await cryptoWaitReady();
   const args = ctx.args && typeof ctx.args === 'object' ? ctx.args : {};
   const opts = {
     blocksAfterUpgrade: Number(args.blocksAfterUpgrade ?? DEFAULT_BLOCKS_AFTER),

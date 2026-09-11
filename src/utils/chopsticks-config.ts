@@ -1,4 +1,5 @@
 import { BuildBlockMode } from '@acala-network/chopsticks-core';
+import { createHash } from 'crypto';
 import { mkdirSync } from 'fs';
 import * as path from 'path';
 import { ALICE_ACCOUNT_INJECTION, FELLOWSHIP_STORAGE_INJECTION } from './storage-constants';
@@ -22,8 +23,11 @@ export function defaultDbPath(endpoint: string): string {
   const slug = endpoint
     .replace(/[^a-zA-Z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '')
-    .slice(0, 120);
-  return path.join(dir, `${slug || 'chain'}.sqlite`);
+    .slice(0, 60);
+  // The slug is truncated, so two endpoints can share a prefix (easy with query-string RPC URLs);
+  // the digest of the full endpoint keeps their files distinct while staying stable across runs.
+  const digest = createHash('sha1').update(endpoint).digest('hex').slice(0, 10);
+  return path.join(dir, `${slug || 'chain'}-${digest}.sqlite`);
 }
 
 /**

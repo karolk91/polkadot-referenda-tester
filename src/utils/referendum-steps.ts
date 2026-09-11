@@ -1,5 +1,6 @@
 import * as path from 'path';
 import type { ReferendumStep, TestOptions } from '../types';
+import { listBundledPostTests } from './bundled-post-tests';
 
 /**
  * Referendum chaining — the step model.
@@ -72,8 +73,7 @@ export const STEP_FIELDS: ReadonlyArray<StepField> = [
   {
     key: 'postTest',
     flags: '--post-test <module>',
-    description:
-      'Post-referendum test module run against the live post-execution network: a bundled name (apply-authorized-upgrade, dump-chain-events) or a path to your own module (./my-post-test.mjs, .ts/.js/.cjs/.mjs). It exports a function (default/postTest/run) receiving { main, chains, args, step } where each chain has { label, specName, network, kind, wsEndpoint, chain }; it drives the forks via dev RPCs or the in-process chain and throws to fail.',
+    description: `Post-referendum test module run against the live post-execution network: a bundled name (${listBundledPostTests().join(', ') || 'none bundled'}) or a path to your own module (./my-post-test.mjs, .ts/.js/.cjs/.mjs). It exports a function (default/postTest/run) receiving { main, chains, args, step } where each chain has { label, specName, network, kind, wsEndpoint, chain }; it drives the forks via dev RPCs or the in-process chain and throws to fail.`,
   },
   {
     key: 'postTestArgs',
@@ -109,6 +109,31 @@ export function stepHasFellowship(step: ReferendumStep): boolean {
 
 export function stepHasReferendum(step: ReferendumStep): boolean {
   return stepHasGovernance(step) || stepHasFellowship(step);
+}
+
+/** One half of a step: the existing referendum ID, or the calls that create it. */
+export interface StepHalf {
+  referendumId?: number;
+  callHex?: string;
+  preimageHex?: string;
+}
+
+/**
+ * The governance or fellowship half of a step. Every caller that runs one referendum picks the
+ * same three fields, so they are selected here once instead of at each site.
+ */
+export function stepHalf(step: ReferendumStep, isFellowship: boolean): StepHalf {
+  return isFellowship
+    ? {
+        referendumId: step.fellowship,
+        callHex: step.callToCreateFellowshipReferendum,
+        preimageHex: step.callToNotePreimageForFellowshipReferendum,
+      }
+    : {
+        referendumId: step.referendum,
+        callHex: step.callToCreateGovernanceReferendum,
+        preimageHex: step.callToNotePreimageForGovernanceReferendum,
+      };
 }
 
 /** Short human label for logs, e.g. `fellowship #612 + governance #1942 + post-test x.mjs`. */

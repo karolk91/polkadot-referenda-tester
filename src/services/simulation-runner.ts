@@ -32,8 +32,8 @@ import { ReferendumSimulator } from './referendum-simulator';
 export interface CreateReferendumParams {
   api: SubstrateApi;
   chopsticks: ChopsticksManager;
-  callHex: string | undefined;
-  preimageHex: string | undefined;
+  callHex?: string;
+  preimageHex?: string;
   isFellowship: boolean;
 }
 

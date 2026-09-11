@@ -24,7 +24,8 @@ describe('NetworkCoordinator step routing', () => {
     setupForkedNetwork: vi
       .spyOn(coordinator as any, 'setupForkedNetwork')
       .mockResolvedValue(fakeNetwork),
-    runStep: vi.spyOn(coordinator as any, 'runStep').mockResolvedValue(undefined),
+    runStep: vi.spyOn(coordinator as any, 'runStep').mockResolvedValue({ main: undefined }),
+    maybeRunPostTest: vi.spyOn(coordinator as any, 'maybeRunPostTest').mockResolvedValue(undefined),
     teardownForkedNetwork: vi
       .spyOn(coordinator as any, 'teardownForkedNetwork')
       .mockResolvedValue(undefined),
@@ -38,9 +39,6 @@ describe('NetworkCoordinator step routing', () => {
     mockTopology = {
       getFellowshipEndpoint: vi.fn(),
       getGovernanceEndpoint: vi.fn(),
-      getFellowshipBlock: vi.fn().mockReturnValue(undefined),
-      getGovernanceBlock: vi.fn().mockReturnValue(undefined),
-      hasAdditionalChains: vi.fn().mockReturnValue(false),
       detectChainTypes: vi.fn().mockResolvedValue(undefined),
       governanceChain: undefined,
       fellowshipChain: undefined,
@@ -66,7 +64,7 @@ describe('NetworkCoordinator step routing', () => {
         fellowship: undefined,
       });
       expect(spies.runStep).toHaveBeenCalledOnce();
-      expect(spies.runStep).toHaveBeenCalledWith(fakeNetwork, { referendum: 1 }, 0, 1, false);
+      expect(spies.runStep).toHaveBeenCalledWith(fakeNetwork, { referendum: 1 }, 0);
     });
 
     it('forks only the fellowship chain for a fellowship-only step', async () => {
@@ -117,18 +115,23 @@ describe('NetworkCoordinator step routing', () => {
         { callToCreateGovernanceReferendum: '0xaa' },
       ];
 
-      await coordinator.runSteps(steps, false, { verbose: true } as any);
+      await coordinator.runSteps(steps, false);
 
       expect(spies.setupForkedNetwork).toHaveBeenCalledOnce();
-      expect(spies.runStep.mock.calls.map((call) => [call[1], call[2], call[3]])).toEqual([
-        [steps[0], 0, 3],
-        [steps[1], 1, 3],
-        [steps[2], 2, 3],
+      expect(spies.runStep.mock.calls.map((call) => [call[1], call[2]])).toEqual([
+        [steps[0], 0],
+        [steps[1], 1],
+        [steps[2], 2],
       ]);
       for (const call of spies.runStep.mock.calls) {
         expect(call[0]).toBe(fakeNetwork);
-        expect(call[4]).toBe(true);
       }
+      // Every step's post-test runs before the next step starts.
+      expect(spies.maybeRunPostTest.mock.calls.map((call) => call[2])).toEqual([
+        { index: 1, count: 3 },
+        { index: 2, count: 3 },
+        { index: 3, count: 3 },
+      ]);
       expect(spies.teardownForkedNetwork).toHaveBeenCalledOnce();
       expect(spies.teardownForkedNetwork).toHaveBeenCalledWith(fakeNetwork, false);
     });
@@ -155,6 +158,7 @@ describe('NetworkCoordinator step routing', () => {
 
   describe('runStep', () => {
     const makeChain = (label: string) => ({
+      label,
       manager: { id: `${label}-manager` },
       client: { destroy: vi.fn() },
       api: { id: `${label}-api` },
@@ -171,22 +175,19 @@ describe('NetworkCoordinator step routing', () => {
     it('runs a governance-only step, settles XCM on the other forks and runs its post-test', async () => {
       const governance = makeChain('asset-hub');
       const fellowship = makeChain('collectives');
-      const extra = { label: 'bridge-hub', manager: { id: 'bridge-hub-manager' } };
+      const extra = makeChain('bridge-hub');
       const network = { governance, fellowship, additional: [extra] };
       const fetchAndSimulate = vi.fn().mockResolvedValue({ referendumId: 1944, events: [] });
       const collectAdditionalChainEvents = vi.fn().mockResolvedValue(undefined);
       (coordinator as any).runner = { fetchAndSimulate };
       (coordinator as any).eventCollector = { collectAdditionalChainEvents };
-      const postTest = vi
-        .spyOn(coordinator as any, 'maybeRunPostTest')
-        .mockResolvedValue(undefined);
       const step: ReferendumStep = {
         referendum: 1944,
         postTest: 'dump.mjs',
         postTestArgs: '{"blocks":1}',
       };
 
-      await (coordinator as any).runStep(network, step, 1, 2, true);
+      const outcome = await (coordinator as any).runStep(network, step, 1);
 
       expect(fetchAndSimulate).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -197,16 +198,15 @@ describe('NetworkCoordinator step routing', () => {
         })
       );
       // The fellowship fork and the additional chain both build a block to process the XCM.
-      const settled = collectAdditionalChainEvents.mock.calls[0][0] as Map<string, unknown>;
-      expect([...settled.keys()]).toEqual(['collectives', 'bridge-hub']);
-      expect(postTest).toHaveBeenCalledWith(
-        step,
-        { mainLabel: 'asset-hub', referendumId: 1944, fellowshipReferendumId: undefined },
-        { index: 2, count: 2 },
-        expect.any(Array),
-        true
-      );
-      const forks = postTest.mock.calls[0][3] as Array<{ label: string }>;
+      const settled = collectAdditionalChainEvents.mock.calls[0][0] as Array<{ label: string }>;
+      expect(settled.map((fork) => fork.label)).toEqual(['collectives', 'bridge-hub']);
+      expect(outcome).toEqual({
+        main: governance,
+        referendumId: 1944,
+        fellowshipReferendumId: undefined,
+      });
+      // Everything the post-test can drive, main first.
+      const forks = (coordinator as any).forks(network) as Array<{ label: string }>;
       expect(forks.map((fork) => fork.label)).toEqual(['asset-hub', 'collectives', 'bridge-hub']);
     });
 
@@ -222,16 +222,11 @@ describe('NetworkCoordinator step routing', () => {
       const displayPostExecutionEvents = vi.fn().mockResolvedValue(undefined);
       (coordinator as any).runner = { createReferendumIfNeeded, simulateMultiChainReferenda };
       (coordinator as any).eventCollector = { displayPostExecutionEvents };
-      const postTest = vi
-        .spyOn(coordinator as any, 'maybeRunPostTest')
-        .mockResolvedValue(undefined);
 
-      await (coordinator as any).runStep(
+      const outcome = await (coordinator as any).runStep(
         network,
         { fellowship: 612, callToCreateGovernanceReferendum: '0xaa' },
-        0,
-        1,
-        false
+        0
       );
 
       expect(simulateMultiChainReferenda).toHaveBeenCalledWith({
@@ -239,13 +234,11 @@ describe('NetworkCoordinator step routing', () => {
         governance: expect.objectContaining({ referendumId: 1950, label: 'asset-hub' }),
       });
       expect(displayPostExecutionEvents).toHaveBeenCalledOnce();
-      expect(postTest).toHaveBeenCalledWith(
-        expect.anything(),
-        { mainLabel: 'asset-hub', referendumId: 1950, fellowshipReferendumId: 612 },
-        { index: 1, count: 1 },
-        expect.any(Array),
-        false
-      );
+      expect(outcome).toEqual({
+        main: governance,
+        referendumId: 1950,
+        fellowshipReferendumId: 612,
+      });
     });
 
     it('runs a dual step sequentially when both referenda share one fork', async () => {
@@ -256,18 +249,16 @@ describe('NetworkCoordinator step routing', () => {
       const collectAdditionalChainEvents = vi.fn().mockResolvedValue(undefined);
       (coordinator as any).runner = { createReferendumIfNeeded, simulateSequentialReferenda };
       (coordinator as any).eventCollector = { collectAdditionalChainEvents };
-      vi.spyOn(coordinator as any, 'maybeRunPostTest').mockResolvedValue(undefined);
-
-      await (coordinator as any).runStep(network, { fellowship: 7, referendum: 9 }, 0, 1, false);
+      await (coordinator as any).runStep(network, { fellowship: 7, referendum: 9 }, 0);
 
       expect(simulateSequentialReferenda).toHaveBeenCalledWith(shared.api, shared.manager, 7, 9);
     });
 
     it('fails clearly when a step needs a chain that was not forked', async () => {
       const network = { governance: makeChain('asset-hub'), additional: [] };
-      await expect(
-        (coordinator as any).runStep(network, { fellowship: 1 }, 0, 1, false)
-      ).rejects.toThrow('Step needs the fellowship chain but it was not forked');
+      await expect((coordinator as any).runStep(network, { fellowship: 1 }, 0)).rejects.toThrow(
+        'Step needs the fellowship chain but it was not forked'
+      );
     });
   });
 

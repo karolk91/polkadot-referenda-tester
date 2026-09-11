@@ -158,23 +158,24 @@ export function createApiForChain(client: PolkadotClient): SubstrateApi {
  */
 export function fetchRuntimeSpecName(endpoint: string, timeoutMs = 20000): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    let settled = false;
     let connection: { disconnect: () => void } | undefined;
-    const finish = (fn: () => void): void => {
-      if (settled) return;
-      settled = true;
+    let done = false;
+    // Tear the socket down before settling. `resolve`/`reject` are already idempotent, so this
+    // only has to guard the teardown itself.
+    const cleanup = (): void => {
+      if (done) return;
+      done = true;
       clearTimeout(timer);
       try {
         connection?.disconnect();
       } catch {
         // ignore teardown errors
       }
-      fn();
     };
-    const timer = setTimeout(
-      () => finish(() => reject(new Error(`Timed out reading runtime version from ${endpoint}`))),
-      timeoutMs
-    );
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Timed out reading runtime version from ${endpoint}`));
+    }, timeoutMs);
     try {
       const provider = getWsProvider(endpoint);
       // polkadot-api's provider delivers already-parsed JSON-RPC messages and `send` takes a request
@@ -182,16 +183,19 @@ export function fetchRuntimeSpecName(endpoint: string, timeoutMs = 20000): Promi
       const conn = provider((msg) => {
         if (msg.id !== 1) return;
         if ('error' in msg && msg.error) {
-          finish(() => reject(new Error(msg.error.message || 'state_getRuntimeVersion failed')));
+          cleanup();
+          reject(new Error(msg.error.message || 'state_getRuntimeVersion failed'));
         } else if ('result' in msg) {
           const result = msg.result as { specName?: string } | undefined;
-          finish(() => resolve(String(result?.specName ?? 'unknown')));
+          cleanup();
+          resolve(String(result?.specName ?? 'unknown'));
         }
       });
       connection = conn;
       conn.send({ jsonrpc: '2.0', id: 1, method: 'state_getRuntimeVersion', params: [] });
     } catch (error) {
-      finish(() => reject(error as Error));
+      cleanup();
+      reject(error as Error);
     }
   });
 }

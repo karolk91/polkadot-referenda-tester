@@ -17,7 +17,7 @@
 // Never throws on chain content — it is a reporter. It throws only if a chain has no usable
 // in-process `chain` object.
 
-import { log, printBlock, ROUTINE, RULE } from './lib/chopsticks-block.mjs';
+import { log, printBlock, ROUTINE, RULE, section } from './lib/chopsticks-block.mjs';
 
 const FAILISH = /Failed|Error|Incomplete|Overweight|BadOrigin|ItemFailed|WithErrors|Trapped/;
 
@@ -31,7 +31,7 @@ export default async function run(ctx) {
     return args.all ? true : c.label !== ctx.main.label;
   });
 
-  log(`\n${RULE}\nPost-test: dump chain events (${targets.map((c) => c.label).join(', ')})\n${RULE}`);
+  section(`Post-test: dump chain events (${targets.map((c) => c.label).join(', ')})`);
   const flagged = [];
   const dump = async (label, block, tag) => {
     const r = await printBlock(label, block, { max, tag, hide: ROUTINE, flag: FAILISH });

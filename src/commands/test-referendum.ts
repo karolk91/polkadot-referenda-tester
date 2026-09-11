@@ -244,7 +244,7 @@ export async function testReferendum(options: TestOptions): Promise<void> {
         additionalKusama,
       });
     } else {
-      await coordinator.runSteps(steps, cleanupEnabled, options);
+      await coordinator.runSteps(steps, cleanupEnabled);
     }
 
     if (cleanupEnabled) {

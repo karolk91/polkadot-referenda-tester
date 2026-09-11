@@ -95,6 +95,9 @@ export function parseThenSegment(args: string[], label: string): ReferendumStep 
     throw error;
   }
   const step = stepFromOptions(parser.opts() as StepOptions, label);
+  // The same rules `buildSteps` applies, run here too so a bad segment is reported by commander
+  // (`error: --then #1: …`, exit 1) before any chain is forked. Both paths call `validateStep`,
+  // so the rules themselves live in one place.
   validateStep(step, label);
   return step;
 }

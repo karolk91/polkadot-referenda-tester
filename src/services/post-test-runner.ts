@@ -1,15 +1,14 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
+import {
+  BUNDLED_POST_TESTS_DIR,
+  bundledPostTests,
+  listBundledPostTests,
+} from '../utils/bundled-post-tests';
 import type { Logger } from '../utils/logger';
 
-/**
- * The post-tests that ship with the tool. `__dirname` is `<pkg>/src/services` when running from
- * source and `<pkg>/dist/services` when built, so one relative path finds `<pkg>/post-tests` in
- * both cases — and therefore also inside an `npx`/global install, where the caller has no idea
- * where the package lives.
- */
-const BUNDLED_POST_TESTS_DIR = path.resolve(__dirname, '../../post-tests');
+export { listBundledPostTests };
 
 /**
  * True when the specifier names a file rather than a bundled post-test: absolute, containing a
@@ -20,31 +19,18 @@ function isPathSpecifier(specifier: string): boolean {
   return path.isAbsolute(specifier) || /[\\/]/.test(specifier) || /\.[cm]?[jt]s$/i.test(specifier);
 }
 
-/** Bundled post-test names (file stems of `post-tests/*.mjs`), for help and error messages. */
-export function listBundledPostTests(dir: string = BUNDLED_POST_TESTS_DIR): string[] {
-  try {
-    return fs
-      .readdirSync(dir)
-      .filter((file) => /\.[cm]?js$/.test(file))
-      .map((file) => file.replace(/\.[cm]?js$/, ''))
-      .sort();
-  } catch {
-    return [];
-  }
-}
-
 /**
- * Turn a `--post-test` value into an absolute file path. A bare name resolves against the tool's
- * own bundled directory; anything path-shaped resolves against the working directory, so a
- * user-supplied module still works from wherever it was invoked.
+ * Turn a `--post-test` value into an absolute file path. A bare name is looked up among the
+ * bundled post-tests (whatever extension they ship with); anything path-shaped resolves against
+ * the working directory, so a user-supplied module still works from wherever it was invoked.
  */
 export function resolvePostTestModule(
   modulePath: string,
   bundledDir: string = BUNDLED_POST_TESTS_DIR
 ): string {
-  if (path.isAbsolute(modulePath)) return modulePath;
   if (isPathSpecifier(modulePath)) return path.resolve(process.cwd(), modulePath);
-  return path.join(bundledDir, `${modulePath}.mjs`);
+  // The join is the not-found case: `runPostTest` turns the missing file into a clear error.
+  return bundledPostTests(bundledDir).get(modulePath) ?? path.join(bundledDir, `${modulePath}.mjs`);
 }
 
 /**
@@ -82,12 +68,6 @@ export interface PostTestChain {
 }
 
 /**
- * Context passed to a post-referendum test script. The referendum has already been executed on
- * `main`; every chain in `chains` (including `main`) is a live Chopsticks fork with the standard
- * `dev_newBlock` / `dev_setStorage` / `dev_timeTravel` RPCs available on its `wsEndpoint`. A script
- * connects with its own client (e.g. polkadot-api), drives the chains, and throws to fail.
- */
-/**
  * Which referendum step of the run a post-test follows (1-based) and how many steps the run has,
  * plus the IDs that step executed (resolved after any creation call).
  */
@@ -98,6 +78,12 @@ export interface PostTestStepInfo {
   fellowshipReferendumId?: number;
 }
 
+/**
+ * Context passed to a post-referendum test script. The referendum has already been executed on
+ * `main`; every chain in `chains` (including `main`) is a live Chopsticks fork with the standard
+ * `dev_newBlock` / `dev_setStorage` / `dev_timeTravel` RPCs available on its `wsEndpoint`. A script
+ * connects with its own client (e.g. polkadot-api), drives the chains, and throws to fail.
+ */
 export interface PostTestContext {
   /** The chain the referendum executed on. */
   main: PostTestChain;
@@ -148,7 +134,7 @@ function parseArgs(raw: string | undefined): unknown {
 export async function runPostTest(
   logger: Logger,
   modulePath: string,
-  context: PostTestContext,
+  context: Omit<PostTestContext, 'args'>,
   argsRaw?: string,
   // Seam for tests: how the module URL is loaded. Production uses the real dynamic import.
   load: (specifier: string) => Promise<unknown> = dynamicImport
