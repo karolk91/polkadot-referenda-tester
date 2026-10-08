@@ -44,8 +44,8 @@
     "@acala-network/chopsticks": "^1.5.0",
     "@acala-network/chopsticks-core": "^1.5.0",
     "@acala-network/chopsticks-testing": "^1.5.0",
-    "@polkadot-api/metadata-builders": "0.15.1",
-    "@polkadot-api/substrate-bindings": "0.21.1",
+    "@polkadot-api/metadata-builders": "0.15.2",
+    "@polkadot-api/substrate-bindings": "0.21.2",
     "@polkadot-api/utils": "0.4.0",
     "@polkadot/api": "^16.5.4",
     "@polkadot/keyring": "^13.0.0",
@@ -56,7 +56,7 @@
     "commander": "^14.0.1",
     "js-yaml": "^4.3.2",
     "nanospinner": "^1.1.0",
-    "polkadot-api": "3.1.0",
+    "polkadot-api": "3.2.0",
     "scale-ts": "^1.6.1"
   },
   "devDependencies": {
