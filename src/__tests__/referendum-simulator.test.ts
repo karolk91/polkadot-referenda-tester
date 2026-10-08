@@ -283,6 +283,7 @@ describe('ReferendumSimulator', () => {
       const api = createMockApi();
       const simulator = new ReferendumSimulator(logger, chopsticks, api, false);
       (simulator as any).scheduler = {
+        moveOrInjectNudge: vi.fn().mockResolvedValue(undefined),
         moveScheduledCallToNextBlock: vi
           .fn()
           .mockResolvedValue({ block: 121, taskIndex: 0, taskId: undefined }),
@@ -380,7 +381,12 @@ describe('ReferendumSimulator', () => {
   // ═══════════════════════════════════════════════════════════════════════
 
   describe('buildPassingReferendumStorage()', () => {
-    function callBuild(isFellowship: boolean, totalIssuance: bigint, currentBlock: number) {
+    function callBuild(
+      isFellowship: boolean,
+      totalIssuance: bigint,
+      currentBlock: number,
+      inQueue = false
+    ) {
       const logger = createSilentLogger();
       const chopsticks = createMockChopsticks();
       const api = createMockApi();
@@ -393,7 +399,7 @@ describe('ReferendumSimulator', () => {
         submitted: 50,
         submission_deposit: { who: '0x1234', amount: 100n },
         decision_deposit: { who: '0x1234', amount: 200n },
-        in_queue: false,
+        in_queue: inQueue,
       };
 
       return (simulator as any).buildPassingReferendumStorage(
@@ -445,6 +451,12 @@ describe('ReferendumSimulator', () => {
       const result = callBuild(false, 1000000n, 100);
       expect(result.ongoing.track).toBe(1);
       expect(result.ongoing.submitted).toBe(50);
+    });
+
+    it('takes a queued referendum out of the track queue (in_queue: false)', () => {
+      const result = callBuild(false, 1000000n, 100, true);
+      expect(result.ongoing.in_queue).toBe(false);
+      expect(result.ongoing.deciding).toEqual({ since: 99, confirming: 99 });
     });
   });
 
