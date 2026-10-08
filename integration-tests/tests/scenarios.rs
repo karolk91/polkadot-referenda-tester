@@ -12,7 +12,7 @@ use crate::common::tool_runner::{report_results, SubTestResult, ToolArgs, ToolRu
 
 /// Suite: CLI argument validation tests — no network required.
 ///
-/// Each sub-test invokes `yarn cli test` with intentionally invalid or
+/// Each sub-test invokes `npm run cli -- test` with intentionally invalid or
 /// incomplete arguments and asserts that the tool fails with the expected
 /// error message. All sub-tests run concurrently.
 #[tokio::test(flavor = "multi_thread")]

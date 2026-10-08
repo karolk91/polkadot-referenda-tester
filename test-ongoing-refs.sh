@@ -62,7 +62,7 @@ echo "Chain URL: $CHAIN_URL"
 echo ""
 
 # Fetch and parse ongoing referendums, skip track=1
-REF_IDS=$(npx -y github:karolk91/polkadot-referenda-tester list \
+REF_IDS=$(npx -y polkadot-referenda-tester@latest list \
   $CHAIN_URL_FLAG "$CHAIN_URL" \
   --status ongoing 2>&1 | \
   grep -E '^[0-9]+,ongoing' | \
@@ -90,7 +90,7 @@ for REF_ID in $REF_IDS; do
   echo "========================================"
   echo ""
 
-  npx -y github:karolk91/polkadot-referenda-tester test \
+  npx -y polkadot-referenda-tester@latest test \
     $CHAIN_URL_FLAG "$CHAIN_URL" \
     $REF_ID_FLAG "$REF_ID"
 

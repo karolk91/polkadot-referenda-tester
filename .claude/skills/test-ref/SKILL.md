@@ -88,9 +88,9 @@ Use this to label chains in the summary:
 
 ## Step 3: Build the CLI Command
 
-Working directory: the project root (where `package.json` is). `yarn cli` runs via ts-node from source — no build step needed.
+Working directory: the project root (where `package.json` is). `npm run cli --` runs via ts-node from source — no build step needed.
 
-Base: `yarn cli test -v`
+Base: `npm run cli -- test -v`
 
 ### Single-network rules
 - Governance ref ID provided -> add `-r <id>` and `--governance-chain-url <url>`

@@ -1,0 +1,156 @@
+name: Release
+
+# Stages a release on npm when a GitHub release is published; its tag must be
+# `v<package.json version>`. The version goes public only after a maintainer approves it with
+# `npm stage approve <stage-id>`, which requires npm 2FA. Uses npm trusted publishing (OIDC): no
+# npm token is stored anywhere, and npm attaches a provenance attestation.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  # --- Checks run without publish rights ---
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    name: verify
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+
+      - name: Check the tag matches package.json
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "Release tag ${GITHUB_REF_NAME} does not match package.json version ${version}"
+            exit 1
+          fi
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Verify registry signatures
+        run: npm audit signatures
+
+      - name: Lint and format check
+        run: npm run check
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build TypeScript CLI
+        run: npm run build
+
+  # --- Publish: the only job that can obtain an npm token, and it can only stage ---
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: verify
+    name: publish
+    # Restrict this environment to `v*` tags in the repository settings and name it in the npm
+    # trusted-publisher settings, so no other job or workflow can stage a release.
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+
+      # Staged publishing needs npm >= 11.15.0 (trusted publishing alone needs 11.5.1).
+      - name: Check npm supports staged publishing
+        run: |
+          node -e '
+            const v = process.argv[1];
+            const [major, minor] = v.split(".").map(Number);
+            if (major < 11 || (major === 11 && minor < 15)) {
+              console.error(`npm ${v} is too old for staged publishing (needs >= 11.15.0)`);
+              process.exit(1);
+            }
+          ' "$(npm --version)"
+
+      # This job can publish, so it must not run third-party install scripts: a malicious one could
+      # request the job's OIDC token and publish on its own. Building and packing don't need them.
+      - name: Install JS dependencies without install scripts
+        run: npm ci --ignore-scripts
+
+      - name: Verify registry signatures
+        run: npm audit signatures
+
+      - name: Build TypeScript CLI
+        run: npm run build
+
+      # Ship the lockfile so users install exactly the dependency versions the verify job tested.
+      - name: Turn the lockfile into npm-shrinkwrap.json
+        run: npm shrinkwrap
+
+      # Staged, not published: the npm trusted publisher allows stage-publish only, so nothing in
+      # this workflow can make a version public. `npm stage approve` with 2FA does that.
+      - name: Stage the release on npm
+        run: npm stage publish --provenance
+
+  # --- Once approved, install the published version the way users do ---
+  smoke-test:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    needs: publish
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [22, 24]
+
+    name: smoke-test (${{ matrix.os }}, node ${{ matrix.node }})
+
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node }}
+
+      # Runs outside a checkout so npx installs from the registry instead of using this repo.
+      - name: Install and run the published version with npx
+        working-directory: ${{ runner.temp }}
+        env:
+          npm_config_cache: ${{ runner.temp }}/npm-cache
+        run: |
+          spec="polkadot-referenda-tester@${GITHUB_REF_NAME#v}"
+          # The version appears on npm once the staged release is approved; wait up to an hour.
+          for attempt in $(seq 1 120); do
+            npm view "${spec}" version > /dev/null 2>&1 && break
+            if [ "${attempt}" = 120 ]; then
+              echo "${spec} is not on npm yet: approve the staged release, then re-run this job"
+              exit 1
+            fi
+            sleep 30
+          done
+          if [ "$(npm view "${spec}" _hasShrinkwrap)" != "true" ]; then
+            echo "${spec} was published without npm-shrinkwrap.json"
+            exit 1
+          fi
+          npx --yes "${spec}" --help
+          npx --yes "${spec}" test --help

@@ -40,10 +40,10 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-          cache: yarn
+          cache: npm
 
       - name: Install JS dependencies
-        run: yarn install --immutable
+        run: npm ci
 
       - name: Download test binary
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -79,16 +79,36 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-          cache: yarn
+          cache: npm
 
       - name: Install JS dependencies
-        run: yarn install --immutable
+        run: npm ci
+
+      # Checks every installed package against the npm registry's signing keys (and
+      # provenance attestations, where published), so a tampered tarball fails the build.
+      - name: Verify registry signatures
+        run: npm audit signatures
 
       - name: Lint and format check
-        run: yarn check
+        run: npm run check
+
+      - name: Unit tests
+        run: npm test
 
       - name: Build TypeScript CLI
-        run: yarn build
+        run: npm run build
+
+      # Install the tool from the tarball npm would publish, in a clean directory with an empty
+      # cache, so a file missing from `files` or a broken `bin` fails here instead of after a release.
+      - name: Pack and run the CLI from the tarball
+        env:
+          npm_config_cache: ${{ runner.temp }}/npm-cache
+        run: |
+          tarball="$(npm pack --pack-destination "${RUNNER_TEMP}" | tail -1)"
+          cd "${RUNNER_TEMP}"
+          npx --yes --package="./${tarball}" -- polkadot-referenda-tester test --help
+          # `--post-test <name>` resolves the bundled post-tests from the installed package
+          ls "${npm_config_cache}"/_npx/*/node_modules/polkadot-referenda-tester/post-tests/{apply-authorized-upgrade,dump-chain-events}.mjs
 
       - name: Upload dist
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -214,10 +234,10 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-          cache: yarn
+          cache: npm
 
       - name: Install JS dependencies
-        run: yarn install --immutable
+        run: npm ci
 
       - name: Download test binary
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0

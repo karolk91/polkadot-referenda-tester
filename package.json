@@ -2,19 +2,31 @@
   "name": "polkadot-referenda-tester",
   "version": "1.0.0",
   "description": "CLI tool to test Polkadot referenda execution using Chopsticks",
-  "main": "dist/cli.js",
+  "keywords": [
+    "polkadot",
+    "kusama",
+    "governance",
+    "opengov",
+    "referendum",
+    "fellowship",
+    "chopsticks",
+    "dry-run",
+    "cli"
+  ],
   "bin": {
-    "polkadot-referenda-tester": "./dist/cli.js",
-    "prt": "./dist/cli.js"
+    "polkadot-referenda-tester": "dist/cli.js",
+    "prt": "dist/cli.js"
   },
-  "license": "MIT",
+  "license": "MIT-0",
   "type": "commonjs",
   "files": [
     "dist",
     "src",
+    "!src/__tests__",
     "post-tests",
-    "tsconfig.json"
+    "npm-shrinkwrap.json"
   ],
+  "homepage": "https://github.com/karolk91/polkadot-referenda-tester#readme",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/karolk91/polkadot-referenda-tester.git"
@@ -23,10 +35,19 @@
     "url": "https://github.com/karolk91/polkadot-referenda-tester/issues"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "provenance": true
   },
   "dependencies": {
+    "@acala-network/chopsticks": "^1.5.0",
+    "@acala-network/chopsticks-core": "^1.5.0",
     "@acala-network/chopsticks-testing": "^1.5.0",
+    "@polkadot-api/metadata-builders": "0.15.1",
+    "@polkadot-api/substrate-bindings": "0.21.1",
+    "@polkadot-api/utils": "0.4.0",
+    "@polkadot/api": "^16.5.4",
     "@polkadot/keyring": "^13.0.0",
     "@polkadot/util": "^14.0.1",
     "@polkadot/util-crypto": "^14.0.1",
@@ -35,7 +56,8 @@
     "commander": "^14.0.1",
     "js-yaml": "^4.3.2",
     "nanospinner": "^1.1.0",
-    "polkadot-api": "3.1.0"
+    "polkadot-api": "3.1.0",
+    "scale-ts": "^1.6.1"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.0.0",
@@ -58,6 +80,5 @@
     "check:fix": "biome check --write src/",
     "test": "vitest run",
     "test:watch": "vitest"
-  },
-  "packageManager": "yarn@4.10.3"
+  }
 }
