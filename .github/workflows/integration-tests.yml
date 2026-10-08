@@ -98,6 +98,18 @@ jobs:
       - name: Build TypeScript CLI
         run: npm run build
 
+      # Install the tool from the tarball npm would publish, in a clean directory with an empty
+      # cache, so a file missing from `files` or a broken `bin` fails here instead of after a release.
+      - name: Pack and run the CLI from the tarball
+        env:
+          npm_config_cache: ${{ runner.temp }}/npm-cache
+        run: |
+          tarball="$(npm pack --pack-destination "${RUNNER_TEMP}" | tail -1)"
+          cd "${RUNNER_TEMP}"
+          npx --yes --package="./${tarball}" -- polkadot-referenda-tester test --help
+          # `--post-test <name>` resolves the bundled post-tests from the installed package
+          ls "${npm_config_cache}"/_npx/*/node_modules/polkadot-referenda-tester/post-tests/{apply-authorized-upgrade,dump-chain-events}.mjs
+
       - name: Upload dist
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

@@ -84,12 +84,6 @@ A step may use an existing ID or a creation call, and a run may mix both (for ex
 
 Each release on npm ships an `npm-shrinkwrap.json`, so `npx` installs exactly the dependency versions that were tested for that release, and each release is published from GitHub Actions with a provenance attestation showing which commit and workflow built it. Pin a version (`npx polkadot-referenda-tester@1.0.0 …`) to run the same tool every time.
 
-To try unreleased changes from `main`, run from GitHub instead: `npx github:karolk91/polkadot-referenda-tester test …`. This builds the tool on your machine and resolves the dependencies it runs with fresh from the npm registry on every install, so a newly published version of any of them reaches you straight away. With npm 11.20 or newer, `--min-release-age` skips versions published in the last N days, which gives a compromised release time to be caught and removed before it reaches you:
-
-```bash
-npx --min-release-age=7 github:karolk91/polkadot-referenda-tester test ...
-```
-
 ## Post-tests
 
 `--post-test` runs a module against the live forks after a referendum executes, so a run can check the effects of the proposal. The tool includes two post-tests. Reference them by bare name; this works from a clone, a global install, or `npx`:
