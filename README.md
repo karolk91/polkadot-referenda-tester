@@ -4,62 +4,62 @@ CLI for dry-running Polkadot/Kusama referenda against local Chopsticks forks.
 
 ## Usage
 
-Run directly from GitHub without installing:
+Run with `npx` without installing (requires Node.js 22 or newer):
 
 ```bash
 # Single-chain execution
-npx github:karolk91/polkadot-referenda-tester test \
+npx polkadot-referenda-tester@latest test \
   --governance-chain-url wss://asset-hub-polkadot-rpc.n.dwellir.com \
   --referendum 1777
 
 # With fellowship companion
-npx github:karolk91/polkadot-referenda-tester test \
+npx polkadot-referenda-tester@latest test \
   --governance-chain-url wss://asset-hub-polkadot-rpc.n.dwellir.com \
   --fellowship-chain-url wss://polkadot-collectives-rpc.polkadot.io \
   --referendum 1777 \
   --fellowship 425
 
 # With fellowship companion using state at specific blocks
-npx github:karolk91/polkadot-referenda-tester test \
+npx polkadot-referenda-tester@latest test \
   --governance-chain-url wss://asset-hub-polkadot-rpc.n.dwellir.com \
   --fellowship-chain-url wss://polkadot-collectives-rpc.polkadot.io \
   --referendum 1777 \
   --fellowship 425
 
 # List fellowship ongoing referendas at specific block
-npx github:karolk91/polkadot-referenda-tester list \
+npx polkadot-referenda-tester@latest list \
   --fellowship-chain-url wss://polkadot-collectives-rpc.polkadot.io,7473112 \
   --status ongoing
 
 # Test some fellowship ref alone
-npx github:karolk91/polkadot-referenda-tester test \
+npx polkadot-referenda-tester@latest test \
   --fellowship-chain-url wss://polkadot-collectives-rpc.polkadot.io \
   --fellowship 425
 
 # Create and test a governance referendum from call data
-npx github:karolk91/polkadot-referenda-tester test \
+npx polkadot-referenda-tester@latest test \
   --governance-chain-url wss://asset-hub-polkadot-rpc.n.dwellir.com \
   --call-to-create-governance-referendum 0x1503...
 
 # Create and test a governance referendum with a preimage
-npx github:karolk91/polkadot-referenda-tester test \
+npx polkadot-referenda-tester@latest test \
   --governance-chain-url wss://asset-hub-polkadot-rpc.n.dwellir.com \
   --call-to-note-preimage-for-governance-referendum 0x1e00... \
   --call-to-create-governance-referendum 0x1503...
 
 # Create and test a fellowship referendum from call data
-npx github:karolk91/polkadot-referenda-tester test \
+npx polkadot-referenda-tester@latest test \
   --fellowship-chain-url wss://polkadot-collectives-rpc.polkadot.io \
   --call-to-create-fellowship-referendum 0x1703...
 
 # Create and test a fellowship referendum with a preimage
-npx github:karolk91/polkadot-referenda-tester test \
+npx polkadot-referenda-tester@latest test \
   --fellowship-chain-url wss://polkadot-collectives-rpc.polkadot.io \
   --call-to-note-preimage-for-fellowship-referendum 0x1e00... \
   --call-to-create-fellowship-referendum 0x1703...
 
 # Create both governance and fellowship referenda from call data
-npx github:karolk91/polkadot-referenda-tester test \
+npx polkadot-referenda-tester@latest test \
   --governance-chain-url wss://asset-hub-polkadot-rpc.n.dwellir.com \
   --fellowship-chain-url wss://polkadot-collectives-rpc.polkadot.io \
   --call-to-create-governance-referendum 0x1503... \
@@ -71,7 +71,7 @@ npx github:karolk91/polkadot-referenda-tester test \
 # --post-test, --post-test-args); chain URLs and other run-level flags go first.
 # This example authorizes the v2.5.0 upgrade (1942, whitelisted by fellowship 612), applies
 # the release WASMs with a post-test, then runs 1944, whose call only decodes on v2.5.0.
-npx github:karolk91/polkadot-referenda-tester test \
+npx polkadot-referenda-tester@latest test \
   --governance-chain-url wss://asset-hub-polkadot-rpc.n.dwellir.com \
   --fellowship-chain-url wss://polkadot-collectives-rpc.polkadot.io \
   --referendum 1942 --fellowship 612 \
@@ -81,6 +81,14 @@ npx github:karolk91/polkadot-referenda-tester test \
 ```
 
 A step may use an existing ID or a creation call, and a run may mix both (for example create a referendum first, then execute an existing one). A failing step stops the run, and the later steps do not execute. Each step's post-test receives `step: { index, count, referendumId, fellowshipReferendumId }` in its context.
+
+Each release on npm ships an `npm-shrinkwrap.json`, so `npx` installs exactly the dependency versions that were tested for that release, and each release is published from GitHub Actions with a provenance attestation showing which commit and workflow built it. Pin a version (`npx polkadot-referenda-tester@1.0.0 …`) to run the same tool every time.
+
+To try unreleased changes from `main`, run from GitHub instead: `npx github:karolk91/polkadot-referenda-tester test …`. This builds the tool on your machine and resolves the dependencies it runs with fresh from the npm registry on every install, so a newly published version of any of them reaches you straight away. With npm 11.20 or newer, `--min-release-age` skips versions published in the last N days, which gives a compromised release time to be caught and removed before it reaches you:
+
+```bash
+npx --min-release-age=7 github:karolk91/polkadot-referenda-tester test ...
+```
 
 ## Post-tests
 
@@ -94,10 +102,12 @@ A step may use an existing ID or a creation call, and a run may mix both (for ex
 A value containing a path separator or a file extension loads your own module instead, resolved against the working directory:
 
 ```bash
-yarn cli test --governance-chain-url <url> -r 1777 --post-test ./my-post-test.mjs
+npx polkadot-referenda-tester@latest test --governance-chain-url <url> -r 1777 --post-test ./my-post-test.mjs
 ```
 
 A post-test exports a function as `default`, `postTest`, or `run`, receives `{ main, chains, args, step }`, and throws to fail the run. Each entry in `chains` contains `{ label, specName, network, kind, wsEndpoint, chain }`, where `chain` is the live Chopsticks `Blockchain`. Build blocks with `chain.newBlock()` so cross-chain message delivery works. `.mjs`, `.js` and `.cjs` always load; `.ts` requires Node with type stripping (>= 22.18 or >= 23.6).
+
+A post-test is ordinary JavaScript that runs with your user's permissions, so only run post-tests you trust.
 
 ## Bridged referenda (Polkadot Fellowship → Kusama governance)
 
@@ -109,7 +119,7 @@ When `--fellowship-chain-url` points at a Polkadot chain (Collectives) and `--go
 4. If `--call-to-create-governance-referendum` is also supplied, runs the Kusama Asset Hub WhitelistedCaller referendum so the whitelisted call actually dispatches.
 
 ```bash
-yarn cli test \
+npx polkadot-referenda-tester@latest test \
   --fellowship-chain-url 'wss://polkadot-collectives-rpc.polkadot.io' \
   --governance-chain-url 'wss://kusama-asset-hub-rpc.polkadot.io' \
   --bridge-hub-polkadot-url 'wss://polkadot-bridge-hub-rpc.polkadot.io' \
@@ -130,11 +140,11 @@ Notes:
 ## Local Development
 
 ```bash
-yarn install
-yarn build
+npm ci
+npm run build
 
 # Run locally
-yarn cli test \
+npm run cli -- test \
   --governance-chain-url wss://asset-hub-polkadot-rpc.n.dwellir.com \
   --referendum 1777
 ```
@@ -170,9 +180,17 @@ yarn cli test \
 ## Dev Scripts
 
 ```bash
-yarn build       # compile to dist/
-yarn cli test    # run directly with ts-node
-yarn lint        # check code with eslint
-yarn lint:fix    # fix code with eslint + prettier
-yarn format      # format code with prettier
+npm run build          # compile to dist/
+npm run cli -- test    # run directly with ts-node
+npm run lint           # lint with Biome
+npm run lint:fix       # fix lint issues with Biome
+npm run format         # format with Biome
 ```
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for how to report a vulnerability privately.
+
+## License
+
+[MIT-0](LICENSE) (MIT No Attribution): you may use, copy, modify and distribute this software for any purpose, without attribution. It is provided "as is", without warranty of any kind.

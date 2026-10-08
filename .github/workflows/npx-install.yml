@@ -1,0 +1,70 @@
+name: npx install
+
+# Installs and runs the tool the way the README tells users to: `npx github:...` from an empty
+# npm cache. npx builds the tool with this repo's lockfile but resolves the dependencies it runs
+# with fresh from the registry, so this is the only job that sees the tree users actually get.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Users' dependencies float, so an upstream release can break the tool without any commit here.
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  npx:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [22, 24]
+
+    name: npx (${{ matrix.os }}, node ${{ matrix.node }})
+
+    env:
+      # A PR installs its head commit (from the fork, if any); push and scheduled runs install
+      # the commit they ran for.
+      TOOL_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+      TOOL_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Install and run the CLI with npx
+        env:
+          npm_config_cache: ${{ runner.temp }}/npm-cache
+        run: |
+          spec="github:${TOOL_REPO}#${TOOL_REF}"
+          echo "Installing ${spec} from an empty npm cache"
+          npx --yes "${spec}" --help
+          npx --yes "${spec}" test --help
+          # `--post-test <name>` resolves the bundled post-tests from the installed package
+          ls "${npm_config_cache}"/_npx/*/node_modules/polkadot-referenda-tester/post-tests/{apply-authorized-upgrade,dump-chain-events}.mjs
+
+      # npx can fail without printing why: it builds a git dependency in a nested npm whose output
+      # is dropped. Rebuilding the same commit with the same lockfile shows the actual error.
+      - name: Checkout the installed commit
+        if: failure()
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.2.2
+        with:
+          repository: ${{ env.TOOL_REPO }}
+          ref: ${{ env.TOOL_REF }}
+
+      - name: Rebuild it to show the error
+        if: failure()
+        run: npm ci

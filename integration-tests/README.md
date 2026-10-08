@@ -5,7 +5,7 @@ Rust integration tests using [zombienet-sdk](https://github.com/paritytech/zombi
 ## Prerequisites
 
 - Rust toolchain (stable + nightly for formatting)
-- Node.js + Yarn (for the TypeScript CLI)
+- Node.js 22+ with npm (for the TypeScript CLI)
 - ~20 GB disk space (binaries, runtimes, chain specs, build cache)
 
 ## Setup (step by step)
@@ -15,8 +15,8 @@ All commands run from the **project root**.
 ### 1. Build the TypeScript CLI
 
 ```bash
-yarn install
-yarn build
+npm ci
+npm run build
 ```
 
 ### 2. Download Polkadot SDK binaries

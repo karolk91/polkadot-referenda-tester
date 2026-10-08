@@ -16,7 +16,7 @@ import {
 import { getReferendaPallet } from './chain-registry';
 import type { ChopsticksManager } from './chopsticks-manager';
 
-export { ALICE_ADDRESS, FELLOWSHIP_STORAGE_INJECTION, ALICE_ACCOUNT_INJECTION };
+export { ALICE_ACCOUNT_INJECTION, ALICE_ADDRESS, FELLOWSHIP_STORAGE_INJECTION };
 
 export interface ReferendumCreationResult {
   referendumId: number;
