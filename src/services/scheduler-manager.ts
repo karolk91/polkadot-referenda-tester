@@ -80,6 +80,67 @@ export class SchedulerManager {
       );
     }
 
+    return this.relocateScheduledCall(match, callType, targetBlock);
+  }
+
+  /**
+   * Move the referendum's scheduled nudge to the next block, or inject a fresh
+   * Root `nudge_referendum` call there when none exists. A referendum waiting in
+   * its track queue (`in_queue: true`, never entered Deciding) has no nudge alarm
+   * in the scheduler, so there is nothing to move.
+   */
+  async moveOrInjectNudge(referendumId: number): Promise<void> {
+    const { targetBlock } = await this.getSchedulingBlocks();
+    const { match } = await this.findMatchingScheduledCall(referendumId, 'nudge');
+
+    if (match) {
+      await this.relocateScheduledCall(match, 'nudge', targetBlock);
+      return;
+    }
+
+    this.logger.info(
+      `No scheduled nudge found for referendum ${referendumId} (likely queued for a deciding slot) - injecting one`
+    );
+    await this.injectNudgeCall(referendumId, targetBlock);
+  }
+
+  private async injectNudgeCall(referendumId: number, targetBlock: number): Promise<void> {
+    const palletName = getReferendaPalletName(this.isFellowship);
+    const callData = await this.api.tx[palletName]
+      .nudge_referendum({
+        index: referendumId,
+      })
+      .getEncodedData();
+    const callHex = toHexString(callData) as string;
+
+    // Append to whatever is already scheduled at the target block rather than replacing it.
+    const existing = await this.api.query.Scheduler.Agenda.getValue(targetBlock);
+    const agenda = [
+      ...convertAgendaToStorageFormat(existing ?? []),
+      { call: { Inline: callHex }, origin: { system: 'Root' } },
+    ];
+
+    this.logger.info(`\u{1F4CB} Injecting nudge call:`);
+    this.logger.info(`   To block: ${targetBlock}`);
+    this.logger.info(`   Call hex: ${callHex}`);
+
+    await this.chopsticks.setStorageBatch({
+      Scheduler: {
+        Agenda: [[[targetBlock], agenda]],
+      },
+    });
+  }
+
+  private async relocateScheduledCall(
+    match: {
+      keyArgs: unknown[];
+      agendaItems: ScheduledEntry[];
+      scheduledEntry: ScheduledEntry;
+      matchIndex: number;
+    },
+    callType: 'nudge' | 'execute',
+    targetBlock: number
+  ): Promise<{ block: number; taskIndex: number; taskId: Uint8Array | undefined }> {
     const { keyArgs, agendaItems, scheduledEntry, matchIndex } = match;
 
     this.logger.debug(
