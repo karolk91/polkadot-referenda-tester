@@ -1,4 +1,3 @@
-import { Binary } from '@polkadot-api/substrate-bindings';
 import { describe, expect, it, vi } from 'vitest';
 import { ReferendaFetcher } from '../services/referenda-fetcher';
 import type { Logger } from '../utils/logger';
@@ -89,7 +88,7 @@ describe('ReferendaFetcher.fetchReferendum (Approved)', () => {
     const agendaEntry = {
       call: {
         type: 'Lookup',
-        value: { hash: Binary.fromBytes(proposalHash), len: 42 },
+        value: { hash: proposalHash, len: 42 },
       },
       maybeId: undefined,
       origin: undefined,
@@ -158,7 +157,7 @@ describe('ReferendaFetcher.fetchReferendum (Approved)', () => {
     const inlineBytes = new Uint8Array([0x00, 0x07, 0x10, 0xde, 0xad, 0xbe, 0xef]);
     api.query.Scheduler.Agenda.getValue.mockResolvedValue([
       {
-        call: { type: 'Inline', value: Binary.fromBytes(inlineBytes) },
+        call: { type: 'Inline', value: inlineBytes },
         maybeId: undefined,
         origin: undefined,
       },
