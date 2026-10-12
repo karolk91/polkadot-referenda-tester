@@ -2,7 +2,7 @@
 //
 // Usage (after a referendum that emitted `System.UpgradeAuthorized` on the chains):
 //
-//   yarn cli test ... \
+//   npm run cli -- test ... \
 //     --post-test post-tests/apply-authorized-upgrade.mjs \
 //     --post-test-args '{"release":"https://github.com/polkadot-fellows/runtimes/releases/tag/v2.5.0"}'
 //

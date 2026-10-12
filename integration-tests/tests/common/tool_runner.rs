@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use super::config::TOOL_EXECUTION_TIMEOUT_SECS;
 
-/// Arguments for `yarn cli test`.
+/// Arguments for `npm run cli -- test`.
 #[derive(Default)]
 pub struct ToolArgs {
     pub governance_chain_url: Option<String>,
@@ -151,7 +151,7 @@ impl ToolRunner {
         Self { project_dir }
     }
 
-    /// Run `yarn cli test` with the given arguments and the default timeout.
+    /// Run `npm run cli -- test` with the given arguments and the default timeout.
     pub async fn run_test_referendum(&self, args: ToolArgs) -> Result<ToolOutput> {
         self.run_test_referendum_with_timeout(
             args,
@@ -160,7 +160,7 @@ impl ToolRunner {
         .await
     }
 
-    /// Run `yarn cli test` with the given arguments and an explicit timeout.
+    /// Run `npm run cli -- test` with the given arguments and an explicit timeout.
     ///
     /// The bridged scenario forks five chains and pumps the bridge to
     /// delivery, which can exceed the default single-network budget — callers
@@ -170,8 +170,16 @@ impl ToolRunner {
         args: ToolArgs,
         timeout: Duration,
     ) -> Result<ToolOutput> {
-        let mut cmd = tokio::process::Command::new("yarn");
-        cmd.current_dir(&self.project_dir).arg("cli").arg("test");
+        // `--silent` keeps npm's `> polkadot-referenda-tester@… cli` banner (which echoes the
+        // arguments) out of the stdout the checks inspect; `--` hands the flags below to the CLI
+        // instead of npm.
+        let mut cmd = tokio::process::Command::new("npm");
+        cmd.current_dir(&self.project_dir)
+            .arg("run")
+            .arg("--silent")
+            .arg("cli")
+            .arg("--")
+            .arg("test");
 
         if let Some(ref url) = args.governance_chain_url {
             cmd.arg("--governance-chain-url").arg(url);
@@ -227,8 +235,8 @@ impl ToolRunner {
             cmd.arg("--verbose");
         }
 
-        // `kill_on_drop` reaps the child yarn process if the run times out or the
-        // test task is dropped — otherwise a leaked yarn holds the chopsticks port
+        // `kill_on_drop` reaps the child npm process if the run times out or the
+        // test task is dropped — otherwise a leaked npm holds the chopsticks port
         // (9000+) and breaks subsequent runs. tokio defaults to `false`.
         cmd.stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -236,7 +244,7 @@ impl ToolRunner {
 
         log::info!("Running tool: {cmd:?}");
 
-        let child = cmd.spawn().context("Failed to spawn yarn cli process")?;
+        let child = cmd.spawn().context("Failed to spawn npm cli process")?;
 
         let output = tokio::time::timeout(timeout, child.wait_with_output())
             .await

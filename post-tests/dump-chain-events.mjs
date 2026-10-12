@@ -6,7 +6,7 @@
 // the current head (the block the tool already built after the referendum), then builds `blocks`
 // more blocks and prints those too, flagging every event that matches the failure pattern.
 //
-//   yarn cli test ... --post-test post-tests/dump-chain-events.mjs --post-test-args '{"blocks":1}'
+//   npm run cli -- test ... --post-test post-tests/dump-chain-events.mjs --post-test-args '{"blocks":1}'
 //
 // Args (JSON, all optional):
 //   blocks   extra blocks to build per chain after printing the head (default 1)

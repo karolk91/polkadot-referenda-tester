@@ -1,0 +1,35 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    # Only propose releases that are at least a week old: most malicious versions are caught and
+    # pulled from the registry within days. Security updates are not delayed.
+    cooldown:
+      default-days: 7
+    groups:
+      # polkadot-api pins its @polkadot-api/* internals exactly, and src/ imports some of them
+      # directly, so they have to move together.
+      polkadot-api:
+        patterns:
+          - polkadot-api
+          - '@polkadot-api/*'
+      minor-and-patch:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # Keep types for the oldest supported Node (see `engines`); newer majors describe APIs it lacks.
+      - dependency-name: '@types/node'
+        update-types:
+          - version-update:semver-major
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7

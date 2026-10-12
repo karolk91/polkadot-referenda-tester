@@ -28,10 +28,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
 
       - name: Download dist
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dist
           path: dist/
@@ -40,13 +40,13 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-          cache: yarn
+          cache: npm
 
       - name: Install JS dependencies
-        run: yarn install --immutable
+        run: npm ci
 
       - name: Download test binary
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: test-binary
           path: integration-tests/
@@ -67,11 +67,11 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
 
       - name: Free disk space
         if: runner.environment == 'github-hosted'
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6
         with:
           tool-cache: false
 
@@ -79,19 +79,39 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-          cache: yarn
+          cache: npm
 
       - name: Install JS dependencies
-        run: yarn install --immutable
+        run: npm ci
+
+      # Checks every installed package against the npm registry's signing keys (and
+      # provenance attestations, where published), so a tampered tarball fails the build.
+      - name: Verify registry signatures
+        run: npm audit signatures
 
       - name: Lint and format check
-        run: yarn check
+        run: npm run check
+
+      - name: Unit tests
+        run: npm test
 
       - name: Build TypeScript CLI
-        run: yarn build
+        run: npm run build
+
+      # Install the tool from the tarball npm would publish, in a clean directory with an empty
+      # cache, so a file missing from `files` or a broken `bin` fails here instead of after a release.
+      - name: Pack and run the CLI from the tarball
+        env:
+          npm_config_cache: ${{ runner.temp }}/npm-cache
+        run: |
+          tarball="$(npm pack --pack-destination "${RUNNER_TEMP}" | tail -1)"
+          cd "${RUNNER_TEMP}"
+          npx --yes --package="./${tarball}" -- polkadot-referenda-tester test --help
+          # `--post-test <name>` resolves the bundled post-tests from the installed package
+          ls "${npm_config_cache}"/_npx/*/node_modules/polkadot-referenda-tester/post-tests/{apply-authorized-upgrade,dump-chain-events}.mjs
 
       - name: Upload dist
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist
           path: dist/
@@ -134,7 +154,7 @@ jobs:
           cat build.log
 
       - name: Upload test binaries
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-binary
           path: |
@@ -176,17 +196,17 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
 
       - name: Free disk space
         if: runner.environment == 'github-hosted'
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6
         with:
           tool-cache: false
 
       # --- Cache and download Polkadot SDK binaries ---
       - name: Cache Polkadot SDK binaries
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.2.2
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: bin-cache
         with:
           path: ${{ env.BIN_DIR }}
@@ -205,7 +225,7 @@ jobs:
 
       # --- Download pre-built artifacts ---
       - name: Download dist
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dist
           path: dist/
@@ -214,13 +234,13 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-          cache: yarn
+          cache: npm
 
       - name: Install JS dependencies
-        run: yarn install --immutable
+        run: npm ci
 
       - name: Download test binary
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: test-binary
           path: integration-tests/
@@ -252,7 +272,7 @@ jobs:
       # leaves us with nothing to debug from.
       - name: Upload zombienet logs
         if: ${{ failure() || cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: zombienet-logs-${{ matrix.suite.name }}-${{ github.run_id }}
           path: /tmp/zombie-*/**/*.log
