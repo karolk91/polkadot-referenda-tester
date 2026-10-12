@@ -159,38 +159,58 @@ export class ReferendaFetcher {
     };
 
     const taskName = getEnactmentTaskName(referendumId);
-    let lookup: [number, number] | undefined;
-    try {
-      lookup = await api.query.Scheduler.Lookup.getValue(taskName as unknown as Uint8Array);
-    } catch (error) {
-      this.logger.warn(
-        `Failed to read Scheduler.Lookup for referendum #${referendumId}: ${(error as Error).message}`
-      );
-      return stub;
-    }
+    const taskNameHex = (toHexString(taskName) ?? '').toLowerCase();
 
-    if (!lookup) {
-      this.logger.info(
-        `Referendum #${referendumId} is approved and its scheduled enactment has already executed`
-      );
-      return stub;
-    }
-
-    const [scheduledBlock, agendaIndex] = lookup;
-    let agenda: Awaited<ReturnType<typeof api.query.Scheduler.Agenda.getValue>>;
+    // Locate the enactment entry. Prefer Scheduler.Lookup, but some runtimes expose a Lookup
+    // storage shape polkadot-api cannot decode ("Incompatible runtime entry"); fall back to
+    // scanning Scheduler.Agenda (which stays decodable) for the entry carrying this referendum's
+    // enactment task id.
+    let scheduledBlock: number | undefined;
+    let agendaIndex: number | undefined;
+    let entry: { call?: ScheduledCall } | undefined;
     try {
-      agenda = await api.query.Scheduler.Agenda.getValue(scheduledBlock);
+      const lookup = await api.query.Scheduler.Lookup.getValue(taskName as unknown as Uint8Array);
+      if (lookup) {
+        [scheduledBlock, agendaIndex] = lookup;
+        const agenda = await api.query.Scheduler.Agenda.getValue(scheduledBlock);
+        entry = agenda?.[agendaIndex];
+      }
     } catch (error) {
-      this.logger.warn(
-        `Failed to read Scheduler.Agenda[${scheduledBlock}] for referendum #${referendumId}: ${(error as Error).message}`
+      this.logger.debug(
+        `Scheduler.Lookup unavailable for referendum #${referendumId} (${(error as Error).message}); scanning agenda by task id`
       );
-      return stub;
     }
-    const entry = agenda?.[agendaIndex];
 
     if (!entry?.call) {
-      this.logger.warn(
-        `Referendum #${referendumId} is approved with a scheduler lookup at block ${scheduledBlock} index ${agendaIndex}, but no agenda entry was found there`
+      let entries: Awaited<ReturnType<typeof api.query.Scheduler.Agenda.getEntries>>;
+      try {
+        entries = await api.query.Scheduler.Agenda.getEntries();
+      } catch (error) {
+        this.logger.warn(
+          `Failed to scan Scheduler.Agenda for referendum #${referendumId}: ${(error as Error).message}`
+        );
+        return stub;
+      }
+      outer: for (const agendaEntry of entries) {
+        const items = (agendaEntry.value ?? []) as Array<
+          { maybe_id?: unknown; maybeId?: unknown; call?: ScheduledCall } | undefined
+        >;
+        for (let index = 0; index < items.length; index++) {
+          const item = items[index];
+          const id = item?.maybe_id ?? item?.maybeId;
+          if (id && (toHexString(id) ?? '').toLowerCase() === taskNameHex) {
+            scheduledBlock = Number((agendaEntry.keyArgs as unknown[])[0]);
+            agendaIndex = index;
+            entry = item;
+            break outer;
+          }
+        }
+      }
+    }
+
+    if (!entry?.call || scheduledBlock === undefined) {
+      this.logger.info(
+        `Referendum #${referendumId} is approved and its scheduled enactment has already executed`
       );
       return stub;
     }

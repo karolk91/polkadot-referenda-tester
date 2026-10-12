@@ -229,9 +229,9 @@ export class ReferendumSimulator {
     scheduledTaskId: Uint8Array | undefined;
   }> {
     if (!skipNudge) {
-      this.logger.startSpinner('Moving nudgeReferendum to next block...');
-      await this.scheduler.moveScheduledCallToNextBlock(referendum.id, 'nudge');
-      this.logger.succeedSpinner('nudgeReferendum moved');
+      this.logger.startSpinner('Scheduling nudgeReferendum for next block...');
+      await this.scheduler.moveOrInjectNudge(referendum.id);
+      this.logger.succeedSpinner('nudgeReferendum scheduled');
 
       this.logger.startSpinner('Creating block to trigger referendum nudge...');
       await this.chopsticks.newBlock();
@@ -387,7 +387,8 @@ export class ReferendumSimulator {
           confirming: decidingConfirming,
         },
         tally,
-        in_queue: ongoingData.in_queue || false,
+        // A referendum given `deciding` has left the track queue, even if it was queued before.
+        in_queue: false,
         alarm: [currentBlock + 1, [currentBlock + 1, 0]],
       },
     };

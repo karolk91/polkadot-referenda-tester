@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ReferendaFetcher } from '../services/referenda-fetcher';
 import type { Logger } from '../utils/logger';
+import { getEnactmentTaskName } from '../utils/scheduler-task-name';
 
 function createSilentLogger(): Logger {
   return {
@@ -36,7 +37,7 @@ function createMockApi(overrides: Record<string, unknown> = {}) {
         ReferendumCount: { getValue: vi.fn() },
       },
       Scheduler: {
-        Agenda: { getEntries: vi.fn(), getValue: vi.fn() },
+        Agenda: { getEntries: vi.fn().mockResolvedValue([]), getValue: vi.fn() },
         Lookup: { getValue: vi.fn() },
       },
       Balances: {
@@ -70,6 +71,7 @@ describe('ReferendaFetcher.fetchReferendum (Approved)', () => {
     expect(result?.proposal.hash).toBe('unknown');
     expect(api.query.Scheduler.Lookup.getValue).toHaveBeenCalledTimes(1);
     expect(api.query.Scheduler.Agenda.getValue).not.toHaveBeenCalled();
+    expect(api.query.Scheduler.Agenda.getEntries).toHaveBeenCalledTimes(1);
   });
 
   it('returns proposal info from the Scheduler agenda when the enactment is still scheduled in the future', async () => {
@@ -107,7 +109,7 @@ describe('ReferendaFetcher.fetchReferendum (Approved)', () => {
     expect(api.query.Scheduler.Agenda.getValue).toHaveBeenCalledWith(99999);
   });
 
-  it('returns a stub if Scheduler.Lookup.getValue throws (e.g. malformed key)', async () => {
+  it('returns a stub if Scheduler.Lookup.getValue throws and no agenda entry carries the task id', async () => {
     const logger = createSilentLogger();
     const api = createMockApi();
     api.query.Referenda.ReferendumInfoFor.getValue.mockResolvedValue({
@@ -121,12 +123,13 @@ describe('ReferendaFetcher.fetchReferendum (Approved)', () => {
 
     expect(result).toBeDefined();
     expect(result?.proposal.hash).toBe('unknown');
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('Failed to read Scheduler.Lookup for referendum #1886')
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.stringContaining('Scheduler.Lookup unavailable for referendum #1886')
     );
+    expect(api.query.Scheduler.Agenda.getEntries).toHaveBeenCalledTimes(1);
   });
 
-  it('returns a stub if the Lookup points to an empty agenda slot', async () => {
+  it('returns a stub if the Lookup points to an empty agenda slot and no agenda entry carries the task id', async () => {
     const logger = createSilentLogger();
     const api = createMockApi();
     api.query.Referenda.ReferendumInfoFor.getValue.mockResolvedValue({
@@ -140,8 +143,68 @@ describe('ReferendaFetcher.fetchReferendum (Approved)', () => {
     const result = await fetcher.fetchReferendum(api, 1886, false);
 
     expect(result?.proposal.hash).toBe('unknown');
+    expect(api.query.Scheduler.Agenda.getEntries).toHaveBeenCalledTimes(1);
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining('scheduled enactment has already executed')
+    );
+  });
+
+  it('finds the enactment by scanning Scheduler.Agenda for its task id when Scheduler.Lookup cannot be decoded', async () => {
+    const logger = createSilentLogger();
+    const api = createMockApi();
+    api.query.Referenda.ReferendumInfoFor.getValue.mockResolvedValue({
+      type: 'Approved',
+      value: [12345, undefined, undefined],
+    });
+    api.query.Scheduler.Lookup.getValue.mockRejectedValue(new Error('Incompatible runtime entry'));
+
+    const proposalHash = new Uint8Array(32);
+    proposalHash[0] = 0xab;
+    proposalHash[31] = 0xcd;
+    // Block 88888 holds an unrelated task first, then this referendum's enactment
+    api.query.Scheduler.Agenda.getEntries.mockResolvedValue([
+      {
+        keyArgs: [88888],
+        value: [
+          {
+            maybeId: new Uint8Array(32).fill(1),
+            call: { type: 'Inline', value: new Uint8Array([0x00]) },
+          },
+          {
+            maybeId: getEnactmentTaskName(1886),
+            call: { type: 'Lookup', value: { hash: proposalHash, len: 42 } },
+          },
+        ],
+      },
+    ]);
+
+    const fetcher = new ReferendaFetcher(logger);
+    const result = await fetcher.fetchReferendum(api, 1886, false);
+
+    expect(result?.proposal.type).toBe('Lookup');
+    expect(result?.proposal.hash?.toLowerCase()).toMatch(/^0xab[0-9a-f]+cd$/);
+    expect(result?.proposal.len).toBe(42);
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining('scheduled enactment at block 88888')
+    );
+  });
+
+  it('returns a stub if scanning Scheduler.Agenda fails', async () => {
+    const logger = createSilentLogger();
+    const api = createMockApi();
+    api.query.Referenda.ReferendumInfoFor.getValue.mockResolvedValue({
+      type: 'Approved',
+      value: [12345, undefined, undefined],
+    });
+    api.query.Scheduler.Lookup.getValue.mockResolvedValue(undefined);
+    api.query.Scheduler.Agenda.getEntries.mockRejectedValue(new Error('rpc error'));
+
+    const fetcher = new ReferendaFetcher(logger);
+    const result = await fetcher.fetchReferendum(api, 1886, false);
+
+    expect(result?.proposal.hash).toBe('unknown');
     expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('but no agenda entry was found there')
+      expect.stringContaining('Failed to scan Scheduler.Agenda for referendum #1886')
     );
   });
 
