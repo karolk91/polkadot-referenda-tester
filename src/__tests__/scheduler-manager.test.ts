@@ -364,6 +364,80 @@ describe('SchedulerManager', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════════
+  // moveOrInjectNudge() - queued referenda have no nudge to move
+  // ═══════════════════════════════════════════════════════════════════════
+
+  describe('moveOrInjectNudge()', () => {
+    function createNudgeTxApi() {
+      const nudge = vi.fn().mockReturnValue({
+        getEncodedData: vi.fn().mockResolvedValue(new Uint8Array([0x3e, 0x05, 0x2a, 0, 0, 0])),
+      });
+      const api = createMockApi({ tx: { Referenda: { nudge_referendum: nudge } } });
+      api.query.Scheduler.Agenda.getValue = vi.fn().mockResolvedValue(undefined);
+      return { api, nudge };
+    }
+
+    it('moves the existing nudge when one is scheduled', async () => {
+      const { api, nudge } = createNudgeTxApi();
+      const chopsticks = createMockChopsticks();
+      api.query.Scheduler.Agenda.getEntries.mockResolvedValue([
+        {
+          keyArgs: [500],
+          value: [{ call: { type: 'Inline', value: new Uint8Array([0xab]) }, maybeId: undefined }],
+        },
+      ]);
+      api.txFromCallData.mockResolvedValue({
+        decodedCall: {
+          type: 'Referenda',
+          value: { type: 'nudge_referendum', value: { index: 42 } },
+        },
+      });
+
+      const manager = new SchedulerManager(createSilentLogger(), chopsticks, api, false);
+      await manager.moveOrInjectNudge(42);
+
+      expect(nudge).not.toHaveBeenCalled();
+      const update = chopsticks.setStorageBatch.mock.calls[0][0];
+      expect(update.Scheduler.Agenda[0]).toEqual([[500], null]);
+      expect(update.Scheduler.Agenda[1][0]).toEqual([101]);
+    });
+
+    it('injects a Root nudge_referendum at the target block when none is scheduled', async () => {
+      const { api, nudge } = createNudgeTxApi();
+      const chopsticks = createMockChopsticks();
+
+      const manager = new SchedulerManager(createSilentLogger(), chopsticks, api, false);
+      await manager.moveOrInjectNudge(42);
+
+      expect(nudge).toHaveBeenCalledWith({ index: 42 });
+      expect(chopsticks.setStorageBatch).toHaveBeenCalledWith({
+        Scheduler: {
+          Agenda: [[[101], [{ call: { Inline: '0x3e052a000000' }, origin: { system: 'Root' } }]]],
+        },
+      });
+    });
+
+    it('keeps calls already scheduled at the target block when injecting', async () => {
+      const { api } = createNudgeTxApi();
+      const chopsticks = createMockChopsticks();
+      api.query.Scheduler.Agenda.getValue.mockResolvedValue([
+        {
+          call: { type: 'Inline', value: '0x0102' },
+          maybeId: undefined,
+          origin: { type: 'system', value: { type: 'Root' } },
+        },
+      ]);
+
+      const manager = new SchedulerManager(createSilentLogger(), chopsticks, api, false);
+      await manager.moveOrInjectNudge(42);
+
+      const agenda = chopsticks.setStorageBatch.mock.calls[0][0].Scheduler.Agenda[0][1];
+      expect(agenda).toHaveLength(2);
+      expect(agenda[1].call).toEqual({ Inline: '0x3e052a000000' });
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
   // isNudgeReferendumCall() - nudge detection strategies
   // ═══════════════════════════════════════════════════════════════════════
 

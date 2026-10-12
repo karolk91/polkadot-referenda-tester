@@ -139,5 +139,9 @@ export interface SubstrateApi {
       Tracks(): Promise<TrackInfo[]>;
     };
   };
+  tx: Record<
+    string,
+    Record<string, (args: Record<string, unknown>) => { getEncodedData(): Promise<Uint8Array> }>
+  >;
   txFromCallData(callData: Uint8Array): Promise<DecodedTransaction>;
 }
