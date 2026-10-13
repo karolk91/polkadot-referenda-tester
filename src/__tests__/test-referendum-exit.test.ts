@@ -1,99 +1,82 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-
-const mockRunSteps = vi.fn();
-
-// `new vi.fn(...)` requires a constructible function — arrow functions throw.
-// Declare a named function so biome's useArrowFunction rule doesn't try to rewrite it.
-function MockNetworkCoordinator() {
-  return { runSteps: mockRunSteps };
-}
-
-vi.mock('../services/network-coordinator', () => ({
-  NetworkCoordinator: vi.fn(MockNetworkCoordinator),
-}));
-
-vi.mock('../utils/chain-endpoint-parser', () => ({
-  parseEndpoint: vi.fn((url: string) => ({ url, block: undefined })),
-  parseMultipleEndpoints: vi.fn((urls: string) =>
-    urls.split(',').map((u: string) => ({ url: u, block: undefined }))
-  ),
-}));
-
-vi.mock('../utils/logger', () => {
-  const MockLogger = vi.fn(function (this: Record<string, unknown>) {
-    this.info = vi.fn();
-    this.debug = vi.fn();
-    this.warn = vi.fn();
-    this.error = vi.fn();
-    this.success = vi.fn();
-    this.section = vi.fn();
-    this.isVerbose = () => false;
-    this.startSpinner = vi.fn();
-    this.succeedSpinner = vi.fn();
-    this.failSpinner = vi.fn();
-    this.updateSpinner = vi.fn();
-    this.stopSpinner = vi.fn();
-    this.table = vi.fn();
-  });
-  return { Logger: MockLogger };
-});
-
+import { DEFAULT_BRIDGE_URLS, type TestOptions } from '../commands/test-options';
 import { testReferendum } from '../commands/test-referendum';
-import type { TestOptions } from '../types';
+import { SingleConsensusNetwork } from '../network/single-consensus-network';
+import { runStepsOnNetwork } from '../network/step-runner';
 
-function makeOptions(overrides: Partial<TestOptions> = {}): TestOptions {
+vi.mock('../network/single-consensus-network', () => ({
+  SingleConsensusNetwork: { create: vi.fn(async () => ({})) },
+}));
+vi.mock('../network/step-runner', () => ({ runStepsOnNetwork: vi.fn() }));
+vi.mock('../utils/logger', () => ({
+  Logger: vi.fn(function (this: Record<string, unknown>) {
+    const methods = ['info', 'debug', 'warn', 'error', 'success', 'section'];
+    for (const method of [...methods, 'startSpinner', 'succeedSpinner', 'failSpinner']) {
+      this[method] = vi.fn();
+    }
+    this.isVerbose = () => false;
+  }),
+}));
+
+function options(overrides: Partial<TestOptions> = {}): TestOptions {
   return {
     referendum: '1',
     governanceChainUrl: 'wss://example.com',
-    port: '8000',
-    verbose: false,
+    assetHubPolkadotUrl: DEFAULT_BRIDGE_URLS.assetHubPolkadot,
+    bridgeHubPolkadotUrl: DEFAULT_BRIDGE_URLS.bridgeHubPolkadot,
+    bridgeHubKusamaUrl: DEFAULT_BRIDGE_URLS.bridgeHubKusama,
+    bridgePumpRounds: 8,
     cleanup: true,
+    verbose: false,
     ...overrides,
   };
 }
 
-describe('testReferendum process exit', () => {
-  const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {}) as any);
+describe('testReferendum exit code', () => {
+  const exit = vi.spyOn(process, 'exit').mockImplementation((() => {}) as never);
 
   afterEach(() => {
-    exitSpy.mockClear();
-    mockRunSteps.mockReset();
+    exit.mockClear();
+    vi.mocked(runStepsOnNetwork).mockReset();
   });
 
-  it('calls process.exit(0) after successful workflow with cleanup enabled', async () => {
-    mockRunSteps.mockResolvedValue(undefined);
+  it('exit code 0 after a successful run with cleanup', async () => {
+    vi.mocked(runStepsOnNetwork).mockResolvedValue(undefined);
 
-    await testReferendum(makeOptions({ cleanup: true }));
+    await testReferendum(options());
 
-    expect(mockRunSteps).toHaveBeenCalledOnce();
-    expect(exitSpy).toHaveBeenCalledWith(0);
-  });
-
-  it('calls process.exit(1) when workflow throws an error', async () => {
-    mockRunSteps.mockRejectedValue(new Error('boom'));
-
-    await testReferendum(makeOptions({ cleanup: true }));
-
-    expect(exitSpy).toHaveBeenCalledWith(1);
-  });
-
-  it('does not call process.exit when cleanup is disabled (no-cleanup mode)', async () => {
-    mockRunSteps.mockResolvedValue(undefined);
-
-    await testReferendum(makeOptions({ cleanup: false }));
-
-    expect(mockRunSteps).toHaveBeenCalledOnce();
-    expect(exitSpy).not.toHaveBeenCalled();
-  });
-
-  it('calls process.exit(1) on validation error (no referendum specified)', async () => {
-    await testReferendum(
-      makeOptions({
-        referendum: undefined,
-        fellowship: undefined,
-      })
+    expect(SingleConsensusNetwork.create).toHaveBeenCalledOnce();
+    expect(exit, 'open RPC clients would otherwise prevent the process exit').toHaveBeenCalledWith(
+      0
     );
+  });
 
-    expect(exitSpy).toHaveBeenCalledWith(1);
+  it('exit code 1 for a failed run', async () => {
+    vi.mocked(runStepsOnNetwork).mockRejectedValue(new Error('referendum failed'));
+
+    await testReferendum(options());
+
+    expect(
+      exit,
+      'CI and the integration tests read the result from the exit code'
+    ).toHaveBeenCalledWith(1);
+  });
+
+  it('exit code 1 for invalid options', async () => {
+    await testReferendum(options({ referendum: undefined }));
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(runStepsOnNetwork).not.toHaveBeenCalled();
+  });
+
+  it('no exit after a successful run without cleanup', async () => {
+    vi.mocked(runStepsOnNetwork).mockResolvedValue(undefined);
+
+    await testReferendum(options({ cleanup: false }));
+
+    expect(
+      exit,
+      'an exit would stop the forks that remain for manual inspection'
+    ).not.toHaveBeenCalled();
   });
 });

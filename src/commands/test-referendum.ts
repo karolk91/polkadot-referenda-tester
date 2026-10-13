@@ -1,258 +1,150 @@
-import { classifyAdditionalBridgeChains } from '../services/bridge-topology-builder';
-import type { ChainNetwork } from '../services/chain-registry';
-import { fetchNetworkFromEndpoint } from '../services/chain-registry';
-import { NetworkCoordinator } from '../services/network-coordinator';
-import type { ReferendumStep, TestOptions } from '../types';
 import {
-  inferNetworkFromUrl,
+  type BridgeEndpoints,
+  classifyAdditionalBridgeChains,
+} from '../bridge/bridge-topology-builder';
+import { BridgedNetwork } from '../bridge/bridged-network';
+import { fetchChainInfoFromEndpoint } from '../network/chain-identity';
+import type { SingleConsensusEndpoints } from '../network/chain-topology-builder';
+import { SingleConsensusNetwork } from '../network/single-consensus-network';
+import { runStepsOnNetwork } from '../network/step-runner';
+import type { ReferendumStep } from '../types';
+import {
+  type ParsedEndpoint,
   parseEndpoint,
   parseMultipleEndpoints,
 } from '../utils/chain-endpoint-parser';
 import { Logger } from '../utils/logger';
-import { buildSteps, stepHasFellowship, stepHasGovernance } from '../utils/referendum-steps';
+import { type ChainNetwork, networkFromText } from '../utils/networks';
+import { describeStep, fellowshipSource, governanceSource } from '../utils/referendum-steps';
+import { buildSteps, type TestOptions } from './test-options';
 
-const networkResolutionCache = new Map<string, Promise<ChainNetwork>>();
+export type RunPlan =
+  | { kind: 'single'; steps: ReferendumStep[]; endpoints: SingleConsensusEndpoints }
+  | { kind: 'bridged'; steps: ReferendumStep[]; endpoints: BridgeEndpoints; maxPumpRounds: number };
 
-/**
- * Memoized {@link resolveNetworkUncached}. `isBridgedScenario`, `isCrossNetworkScenario`,
- * `validateOptions`, and `testReferendum` all resolve the same fellowship + governance URLs,
- * so without caching a single run repeats the (potentially WebSocket-backed) lookup several
- * times per URL. Resolution is deterministic for a URL within a run, so caching the in-flight
- * promise is safe and collapses those repeats to one lookup each.
- */
-function resolveNetwork(input: string): Promise<ChainNetwork> {
-  let cached = networkResolutionCache.get(input);
-  if (cached === undefined) {
-    cached = resolveNetworkUncached(input);
-    networkResolutionCache.set(input, cached);
-  }
-  return cached;
-}
-
-/**
- * Resolve a chain's network the cheapest way possible: first try URL substring
- * inference (no I/O, works for mainnet `*.polkadot.io` hostnames), and fall back to
- * a brief WebSocket connect that reads runtime `spec_name`. The fallback is what
- * makes bridged-scenario detection work for local zombienet URLs whose hostname
- * carries no network token.
- *
- * The input is the same form the user provides via `--*-chain-url`: either a raw
- * URL, a `url,block` pair, or a path to a chopsticks YAML config. We feed it
- * through `parseEndpoint` first so only the bare URL reaches `inferNetworkFromUrl`
- * (otherwise `,7` etc. would confuse the substring matcher) and only the bare URL
- * reaches `fetchNetworkFromEndpoint` (otherwise polkadot-api would hang trying to
- * resolve a host like `127.0.0.1:50054,7`).
- *
- * Errors during the connect fallback are swallowed and reported as `'unknown'` so
- * routing decisions remain deterministic from CLI input alone — callers that
- * actually depend on the resolution should surface the resulting `'unknown'` as a
- * validation error.
- */
-async function resolveNetworkUncached(input: string): Promise<ChainNetwork> {
-  let bareUrl: string;
+async function endpointNetwork(endpoint: ParsedEndpoint): Promise<ChainNetwork> {
+  const network = networkFromText(endpoint.url);
+  if (network !== 'unknown') return network;
   try {
-    bareUrl = parseEndpoint(input).url;
-  } catch {
-    return 'unknown';
-  }
-  const inferred = inferNetworkFromUrl(bareUrl);
-  if (inferred !== 'unknown') return inferred;
-  try {
-    return await fetchNetworkFromEndpoint(bareUrl);
+    return (await fetchChainInfoFromEndpoint(endpoint.url)).network;
   } catch {
     return 'unknown';
   }
 }
 
-/**
- * Canonical public-RPC endpoints we default to when the user doesn't supply explicit
- * URLs for the bridge infrastructure parachains. Users can still override via CLI
- * if they want a fork at a specific block or custom YAML config.
- */
-const DEFAULT_BRIDGE_URLS = {
-  assetHubPolkadot: 'wss://polkadot-asset-hub-rpc.polkadot.io',
-  bridgeHubPolkadot: 'wss://polkadot-bridge-hub-rpc.polkadot.io',
-  bridgeHubKusama: 'wss://kusama-bridge-hub-rpc.polkadot.io',
-} as const;
-
-/**
- * Detects the bridged-fellowship scenario by resolving each chain's network with
- * URL substring inference first, then a brief runtime-metadata read if needed.
- * The rule is: fellowship runs on a Polkadot-network chain (Polkadot Collectives)
- * while the governance referendum runs on a Kusama-network chain (Kusama Asset
- * Hub). When the user points both at the same network, this is the regular
- * single-network multi-chain flow.
- */
-export async function isBridgedScenario(options: TestOptions): Promise<boolean> {
-  if (!options.fellowshipChainUrl || !options.governanceChainUrl) return false;
-  const [fellowshipNet, governanceNet] = await Promise.all([
-    resolveNetwork(options.fellowshipChainUrl),
-    resolveNetwork(options.governanceChainUrl),
+async function crossNetworkScenario(
+  fellowship: ParsedEndpoint,
+  governance: ParsedEndpoint
+): Promise<'single' | 'bridged' | 'unsupported'> {
+  const [fellowshipNetwork, governanceNetwork] = await Promise.all([
+    endpointNetwork(fellowship),
+    endpointNetwork(governance),
   ]);
-  // Currently supported: Polkadot fellowship → Kusama governance.
-  return fellowshipNet === 'polkadot' && governanceNet === 'kusama';
+  if (fellowshipNetwork === 'polkadot' && governanceNetwork === 'kusama') return 'bridged';
+  if (
+    fellowshipNetwork !== 'unknown' &&
+    governanceNetwork !== 'unknown' &&
+    fellowshipNetwork !== governanceNetwork
+  ) {
+    return 'unsupported';
+  }
+  return 'single';
 }
 
-/**
- * Returns true when fellowship-chain-url and governance-chain-url resolve to
- * *different* networks (any cross-network combination). Used to surface
- * unsupported directions (e.g. Kusama fellowship → Polkadot governance) as an
- * explicit error rather than letting the non-bridge path mis-handle them.
- */
-async function isCrossNetworkScenario(options: TestOptions): Promise<boolean> {
-  if (!options.fellowshipChainUrl || !options.governanceChainUrl) return false;
-  const [fellowshipNet, governanceNet] = await Promise.all([
-    resolveNetwork(options.fellowshipChainUrl),
-    resolveNetwork(options.governanceChainUrl),
-  ]);
-  if (fellowshipNet === 'unknown' || governanceNet === 'unknown') return false;
-  return fellowshipNet !== governanceNet;
-}
-
-/**
- * Validate the CLI options and return the referendum steps they describe. Per-step consistency
- * (ID vs creation call, at least one referendum) is checked for the top-level step and every
- * `--then` step; the bridged-scenario rules are checked across the whole run.
- */
-export async function validateOptions(options: TestOptions): Promise<ReferendumStep[]> {
+export async function planRun(options: TestOptions, logger: Logger): Promise<RunPlan> {
   const steps = buildSteps(options);
-  const hasFellowshipRef = steps.some(stepHasFellowship);
+  const hasGovernance = steps.some((step) => governanceSource(step) !== undefined);
+  const hasFellowship = steps.some((step) => fellowshipSource(step) !== undefined);
+  if (hasGovernance && !options.governanceChainUrl) {
+    throw new Error('--governance-chain-url is required when testing a governance referendum');
+  }
+  if (hasFellowship && !options.fellowshipChainUrl) {
+    throw new Error('--fellowship-chain-url is required when testing a fellowship referendum');
+  }
 
-  if (await isBridgedScenario(options)) {
-    if (!hasFellowshipRef) {
-      throw new Error(
-        'Bridged scenario (Polkadot fellowship → Kusama governance) requires a fellowship referendum (--fellowship or --call-to-create-fellowship-referendum)'
-      );
-    }
-    if (options.assetHubKusamaUrl && options.assetHubKusamaUrl !== options.governanceChainUrl) {
-      throw new Error(
-        `--asset-hub-kusama-url (${options.assetHubKusamaUrl}) must match --governance-chain-url (${options.governanceChainUrl}) when bridged — they refer to the same chain.`
-      );
-    }
-    if (options.bridgePumpRounds !== undefined) {
-      const n = parseInt(options.bridgePumpRounds, 10);
-      if (Number.isNaN(n) || n <= 0) {
-        throw new Error(`Invalid --bridge-pump-rounds: ${options.bridgePumpRounds}`);
-      }
-    }
-  } else if (await isCrossNetworkScenario(options)) {
-    // The user pointed fellowship and governance at chains on DIFFERENT networks
-    // but in a combination the tool doesn't currently support (only Polkadot
-    // fellowship → Kusama governance is implemented). Fail loudly rather than
-    // letting the non-bridge path mis-route them.
+  const governance = options.governanceChainUrl
+    ? parseEndpoint(options.governanceChainUrl)
+    : undefined;
+  const fellowship = options.fellowshipChainUrl
+    ? parseEndpoint(options.fellowshipChainUrl)
+    : undefined;
+  const additional = options.additionalChains
+    ? parseMultipleEndpoints(options.additionalChains)
+    : [];
+  const scenario =
+    governance && fellowship ? await crossNetworkScenario(fellowship, governance) : 'single';
+
+  if (scenario === 'unsupported') {
     throw new Error(
       'Unsupported direction: only "Polkadot fellowship → Kusama governance" is currently supported. ' +
         'Got fellowship-chain-url + governance-chain-url on different networks in a reversed/unsupported combination. ' +
         'Either use the supported direction or run both referenda on the same network.'
     );
   }
-
-  return steps;
+  if (scenario === 'single' || !governance || !fellowship) {
+    return {
+      kind: 'single',
+      steps,
+      endpoints: {
+        governance: hasGovernance ? governance : undefined,
+        fellowship: hasFellowship ? fellowship : undefined,
+        additional,
+      },
+    };
+  }
+  if (!hasFellowship) {
+    throw new Error(
+      'Bridged scenario (Polkadot fellowship → Kusama governance) requires a fellowship referendum (--fellowship or --call-to-create-fellowship-referendum)'
+    );
+  }
+  const core = {
+    collectives: fellowship,
+    assetHubPolkadot: parseEndpoint(options.assetHubPolkadotUrl),
+    bridgeHubPolkadot: parseEndpoint(options.bridgeHubPolkadotUrl),
+    assetHubKusama: governance,
+    bridgeHubKusama: parseEndpoint(options.bridgeHubKusamaUrl),
+  };
+  const { polkadot, kusama } = await classifyAdditionalBridgeChains(
+    additional,
+    Object.values(core),
+    logger
+  );
+  return {
+    kind: 'bridged',
+    steps,
+    endpoints: { ...core, additionalPolkadot: polkadot, additionalKusama: kusama },
+    maxPumpRounds: options.bridgePumpRounds,
+  };
 }
 
 export async function testReferendum(options: TestOptions): Promise<void> {
   const logger = new Logger(options.verbose);
-  const cleanupEnabled = options.cleanup !== false;
-
   try {
-    const steps = await validateOptions(options);
-    const hasGovernanceRef = steps.some(stepHasGovernance);
-    const hasFellowshipRef = steps.some(stepHasFellowship);
-
-    if (hasGovernanceRef && !options.governanceChainUrl) {
-      throw new Error('--governance-chain-url is required when testing a governance referendum');
-    }
-
-    if (hasFellowshipRef && !options.fellowshipChainUrl) {
-      throw new Error('--fellowship-chain-url is required when testing a fellowship referendum');
-    }
-
-    const governanceParsed = options.governanceChainUrl
-      ? parseEndpoint(options.governanceChainUrl)
-      : undefined;
-
-    const fellowshipParsed = options.fellowshipChainUrl
-      ? parseEndpoint(options.fellowshipChainUrl)
-      : undefined;
-
-    const additionalChainsParsed = options.additionalChains
-      ? parseMultipleEndpoints(options.additionalChains)
-      : [];
-
-    if (hasFellowshipRef) {
-      logger.section('Polkadot Referenda Tester (Fellowship Mode)');
-    } else {
-      logger.section('Polkadot Referenda Tester');
-    }
-
-    const coordinator = new NetworkCoordinator(logger, {
-      governance: governanceParsed?.url,
-      governanceBlock: governanceParsed?.block,
-      governanceBaseConfig: governanceParsed?.baseConfig,
-      fellowship: fellowshipParsed?.url,
-      fellowshipBlock: fellowshipParsed?.block,
-      fellowshipBaseConfig: fellowshipParsed?.baseConfig,
-      additionalChains: additionalChainsParsed,
-    });
-
-    if (await isBridgedScenario(options)) {
-      // Bridged fellowship → Kusama governance path:
-      //   1. spawn Polkadot side + Kusama side (relays come from --additional-chains),
-      //   2. run fellowship referendum on Collectives (bridges whitelist_call to AHK),
-      //   3. drive BridgeConnector to deliver the bridged message and verify CallWhitelisted on AHK,
-      //   4. if --call-to-create-governance-referendum is also supplied, run the AHK public
-      //      whitelistedcaller referendum so the whitelisted call actually dispatches.
-      const collectivesParsed = fellowshipParsed!; // validated by isBridgedScenario
-      // --asset-hub-kusama-url is allowed but redundant; we default it from --governance-chain-url
-      // when bridged (both name the same AHK chain).
-      const ahkEndpoint = options.assetHubKusamaUrl
-        ? parseEndpoint(options.assetHubKusamaUrl)
-        : governanceParsed!;
-      // AHP / BHP / BHK URLs default to the canonical polkadot.io public RPCs when
-      // not explicitly provided. Users override the flag if they want a different
-      // host, a specific fork block, or a chopsticks YAML config.
-      const bridgeEndpoints = {
-        collectives: collectivesParsed,
-        assetHubPolkadot: parseEndpoint(
-          options.assetHubPolkadotUrl ?? DEFAULT_BRIDGE_URLS.assetHubPolkadot
-        ),
-        bridgeHubPolkadot: parseEndpoint(
-          options.bridgeHubPolkadotUrl ?? DEFAULT_BRIDGE_URLS.bridgeHubPolkadot
-        ),
-        assetHubKusama: ahkEndpoint,
-        bridgeHubKusama: parseEndpoint(
-          options.bridgeHubKusamaUrl ?? DEFAULT_BRIDGE_URLS.bridgeHubKusama
-        ),
-      };
-      // Route any --additional-chains onto the correct side (relay + system parachains),
-      // deduping against the five core bridge chains by chain identity (not raw URL).
-      const { polkadot: additionalPolkadot, kusama: additionalKusama } =
-        await classifyAdditionalBridgeChains(
-          additionalChainsParsed,
-          [
-            bridgeEndpoints.collectives,
-            bridgeEndpoints.assetHubPolkadot,
-            bridgeEndpoints.bridgeHubPolkadot,
-            bridgeEndpoints.assetHubKusama,
-            bridgeEndpoints.bridgeHubKusama,
-          ],
-          logger
-        );
-      await coordinator.testFellowshipBridged(steps, cleanupEnabled, options, {
-        ...bridgeEndpoints,
-        additionalPolkadot,
-        additionalKusama,
+    const plan = await planRun(options, logger);
+    const hasFellowship = plan.steps.some((step) => fellowshipSource(step) !== undefined);
+    logger.section(
+      hasFellowship ? 'Polkadot Referenda Tester (Fellowship Mode)' : 'Polkadot Referenda Tester'
+    );
+    if (plan.steps.length > 1) {
+      logger.section(`Referendum Chain (${plan.steps.length} steps)`);
+      plan.steps.forEach((step, index) => {
+        logger.info(`  ${index + 1}. ${describeStep(step)}`);
       });
-    } else {
-      await coordinator.runSteps(steps, cleanupEnabled);
     }
 
-    if (cleanupEnabled) {
-      logger.success('\n\u2713 Workflow completed');
+    const network =
+      plan.kind === 'bridged'
+        ? await BridgedNetwork.create(logger, plan.endpoints, plan.steps, plan.maxPumpRounds)
+        : await SingleConsensusNetwork.create(logger, plan.endpoints, plan.steps);
+    await runStepsOnNetwork(network, plan.steps, options.cleanup, logger);
+
+    if (options.cleanup) {
+      logger.success('\n✓ Workflow completed');
       process.exit(0);
     }
   } catch (error) {
-    logger.error('Test execution failed', error as Error);
+    logger.failSpinner();
+    logger.error('Test execution failed', error);
     process.exit(1);
   }
 }

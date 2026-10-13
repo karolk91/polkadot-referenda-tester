@@ -1,1 +1,10 @@
-// This crate is a test-only crate. All logic lives in tests/.
+pub mod binaries;
+pub mod calls;
+pub mod chains;
+pub mod context;
+pub mod genesis;
+pub mod hrmp;
+pub mod ids;
+pub mod network_config;
+pub mod tool_runner;
+pub mod tracks;

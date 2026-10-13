@@ -17,10 +17,14 @@ export class Logger {
     console.log(chalk.green('✓'), message);
   }
 
-  error(message: string, error?: Error): void {
+  error(message: string, error?: unknown): void {
     console.log(chalk.red('✖'), message);
-    if (error && this.verbose) {
-      console.log(chalk.red(error.stack || error.message));
+    let cause = error;
+    while (cause !== undefined) {
+      const detail =
+        cause instanceof Error ? (this.verbose && cause.stack) || cause.message : String(cause);
+      console.log(chalk.red(`  ${detail}`));
+      cause = cause instanceof Error ? cause.cause : undefined;
     }
   }
 

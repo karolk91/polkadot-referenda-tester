@@ -1,7 +1,8 @@
 import { BuildBlockMode } from '@acala-network/chopsticks-core';
+import type { setupContextWithConfig } from '@acala-network/chopsticks-testing';
 import { createHash } from 'crypto';
-import { mkdirSync } from 'fs';
 import * as path from 'path';
+import type { ParsedEndpoint } from './chain-endpoint-parser';
 import { ALICE_ACCOUNT_INJECTION, FELLOWSHIP_STORAGE_INJECTION } from './storage-constants';
 
 /** Which predefined storage override (if any) to merge into a chain's `import-storage`. */
@@ -11,25 +12,25 @@ export type StorageInjection = 'fellowship' | 'alice-account';
  * Per-chain SQLite cache path. Each forked chain needs its OWN db file: when several chains are
  * forked together (e.g. governance + `--additional-chains`), sharing one file makes the concurrent
  * opens fail with `SQLITE_CANTOPEN`. Deriving the filename from the endpoint reuses the storage
- * cache across runs (same endpoint → same file) and uses a different file per chain.
+ * cache across runs (same endpoint → same file) and uses a different file per chain. The slug is
+ * truncated, so two endpoints can share a prefix; the digest of the full endpoint makes their
+ * file names differ.
  */
-export function defaultDbPath(endpoint: string): string {
-  const dir = path.join(process.cwd(), '.chopsticks-db');
-  try {
-    mkdirSync(dir, { recursive: true });
-  } catch {
-    // best-effort; setup reports an error if the directory is unusable
-  }
+export function dbPath(endpoint: string): string {
   const slug = endpoint
     .replace(/[^a-zA-Z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '')
     .slice(0, 60);
-  // The slug is truncated, so two endpoints can share a prefix (common with query-string RPC
-  // URLs). The digest of the full endpoint gives them different files and does not change
-  // between runs.
   const digest = createHash('sha1').update(endpoint).digest('hex').slice(0, 10);
-  return path.join(dir, `${slug || 'chain'}-${digest}.sqlite`);
+  return path.join(process.cwd(), '.chopsticks-db', `${slug || 'chain'}-${digest}.sqlite`);
 }
+
+const STORAGE_INJECTIONS: Record<StorageInjection, Record<string, unknown>> = {
+  fellowship: FELLOWSHIP_STORAGE_INJECTION,
+  'alice-account': ALICE_ACCOUNT_INJECTION,
+};
+
+export type ForkConfig = Parameters<typeof setupContextWithConfig>[0] & { endpoint: string };
 
 /**
  * Build a single chain's Chopsticks config with the tool's standard precedence layering
@@ -42,49 +43,24 @@ export function defaultDbPath(endpoint: string): string {
  *   5. `import-storage` — the user's block shallow-merged with the tool's storage injection
  *      (the tool's value takes precedence per-pallet, so a user-provided YAML cannot disable
  *      test mechanics such as funding Alice)
- *
- * Shared by {@link ChainTopologyBuilder} and {@link BridgeTopologyBuilder}; they differ only
- * in the default `runtime-log-level` (passed via {@link runtimeLogLevel}).
  */
 export function buildChopsticksChainConfig(
-  endpoint: string,
-  block: number | undefined,
-  storageInjection: StorageInjection | undefined,
-  userBaseConfig: Record<string, unknown> | undefined,
-  runtimeLogLevel: number
-): Record<string, unknown> {
-  const toolDefaults: Record<string, unknown> = {
-    db: defaultDbPath(endpoint),
-    'runtime-log-level': runtimeLogLevel,
-  };
-
-  const mandatory: Record<string, unknown> = {
-    endpoint,
+  endpoint: ParsedEndpoint,
+  options: { injection?: StorageInjection; runtimeLogLevel: number }
+): ForkConfig {
+  const injection = options.injection && STORAGE_INJECTIONS[options.injection];
+  const userImportStorage = endpoint.baseConfig?.['import-storage'] as
+    | Record<string, unknown>
+    | undefined;
+  return {
+    db: dbPath(endpoint.url),
+    'runtime-log-level': options.runtimeLogLevel,
+    ...endpoint.baseConfig,
+    endpoint: endpoint.url,
     'build-block-mode': BuildBlockMode.Manual,
     'mock-signature-host': true,
     'allow-unresolved-imports': true,
-  };
-  if (block !== undefined) {
-    mandatory.block = block;
-  }
-
-  const config: Record<string, unknown> = {
-    ...toolDefaults,
-    ...(userBaseConfig ?? {}),
-    ...mandatory,
-  };
-
-  const injection =
-    storageInjection === 'fellowship'
-      ? FELLOWSHIP_STORAGE_INJECTION
-      : storageInjection === 'alice-account'
-        ? ALICE_ACCOUNT_INJECTION
-        : undefined;
-  if (injection) {
-    const existing =
-      (userBaseConfig?.['import-storage'] as Record<string, unknown> | undefined) ?? {};
-    config['import-storage'] = { ...existing, ...injection };
-  }
-
-  return config;
+    ...(endpoint.block !== undefined && { block: endpoint.block }),
+    ...(injection && { 'import-storage': { ...userImportStorage, ...injection } }),
+  } as ForkConfig;
 }

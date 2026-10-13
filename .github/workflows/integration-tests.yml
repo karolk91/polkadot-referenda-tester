@@ -150,16 +150,13 @@ jobs:
             cp "${binary_path}" "${output}"
           }
           compile_test tests test-binary
-          compile_test bridged bridged-test-binary
           cat build.log
 
       - name: Upload test binaries
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-binary
-          path: |
-            integration-tests/test-binary
-            integration-tests/bridged-test-binary
+          path: integration-tests/test-binary
           retention-days: 1
           compression-level: 6
 
@@ -185,12 +182,13 @@ jobs:
             filter: kusama_governance_all_tracks
           - name: kusama-fellowship
             filter: kusama_fellowship_all_tracks
+          - name: polkadot-governance-approved-enactment
+            filter: polkadot_governance_approved_future_enactment
           # Polkadot->Kusama bridged scenario: spawns both ecosystems
           # locally (relay + AH + Collectives + BH / relay + AH + BH), no
-          # public RPCs. Lives in its own test target, hence its own binary.
+          # public RPCs.
           - name: bridged
             filter: bridged_fellowship_by_id
-            binary: bridged-test-binary
 
     name: ${{ matrix.suite.name }}
 
@@ -248,15 +246,15 @@ jobs:
       # --- Run tests (using pre-compiled binary + committed chain specs) ---
       - name: Run ${{ matrix.suite.name }} tests
         run: |
-          chmod +x "integration-tests/${TEST_BINARY}"
-          "integration-tests/${TEST_BINARY}" "${TEST_FILTER}" --nocapture
+          chmod +x integration-tests/test-binary
+          integration-tests/test-binary "${TEST_FILTER}" --nocapture
         env:
-          TEST_BINARY: ${{ matrix.suite.binary || 'test-binary' }}
           TEST_FILTER: ${{ matrix.suite.filter }}
           POLKADOT_BINARY_PATH: ${{ env.BIN_DIR }}/polkadot
           POLKADOT_PARACHAIN_BINARY_PATH: ${{ env.BIN_DIR }}/polkadot-parachain
           TOOL_PROJECT_DIR: ${{ github.workspace }}
           CHAIN_SPECS_DIR: ${{ github.workspace }}/integration-tests/chain-specs
+          FAST_RUNTIMES_DIR: ${{ github.workspace }}/integration-tests/runtimes/fast
           # `chain_spec=error` silences zombienet's raw-spec override warnings. When a
           # `with_raw_spec_override()` key is missing from the loaded spec it logs a WARN
           # that dumps the whole `genesis.raw.top` map on ONE line — megabytes per key.

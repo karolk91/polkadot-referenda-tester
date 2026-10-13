@@ -1,712 +1,209 @@
+import type { HexString } from 'polkadot-api';
 import { describe, expect, it, vi } from 'vitest';
-import { SchedulerManager } from '../services/scheduler-manager';
-import type { Logger } from '../utils/logger';
+import { FELLOWSHIP, GOVERNANCE } from '../referendum/referenda-kind';
+import { SchedulerManager, scheduledTaskAddress } from '../referendum/scheduler-manager';
+import {
+  createFakeChain,
+  createTestLogger,
+  type FakeChainState,
+  scheduledTask,
+  storageWrite,
+} from './helpers';
 
-function createSilentLogger(): Logger {
-  return {
-    info: vi.fn(),
-    debug: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    success: vi.fn(),
-    isVerbose: () => false,
-    startSpinner: vi.fn(),
-    succeedSpinner: vi.fn(),
-    failSpinner: vi.fn(),
-    updateSpinner: vi.fn(),
-    stopSpinner: vi.fn(),
-    section: vi.fn(),
-    table: vi.fn(),
-  } as unknown as Logger;
+const TASK_NAME = `0x${'ab'.repeat(32)}` as HexString;
+const OTHER_TASK_NAME = `0x${'cd'.repeat(32)}` as HexString;
+
+function schedulerFor(state: FakeChainState) {
+  const chain = createFakeChain(state);
+  const scheduler = new SchedulerManager(createTestLogger(), chain.chopsticks, chain.api);
+  return { ...chain, scheduler };
 }
 
-function createMockChopsticks() {
-  return {
-    newBlock: vi.fn().mockResolvedValue(undefined),
-    setStorageBatch: vi.fn().mockResolvedValue(undefined),
-  } as any;
-}
+describe('scheduledTaskAddress', () => {
+  it('address from Scheduler.Lookup', async () => {
+    const { api } = createFakeChain({ lookup: { [TASK_NAME]: [99999, 2] } });
+    expect(
+      await scheduledTaskAddress(api, TASK_NAME, createTestLogger()),
+      'polkadot-api 3 encodes the [u8; 32] task name key from a hex string'
+    ).toEqual({ block: 99999, index: 2 });
+  });
 
-function createMockApi(overrides: Record<string, unknown> = {}) {
-  return {
-    query: {
-      System: {
-        Number: { getValue: vi.fn().mockResolvedValue(100) },
+  it('address from an agenda scan when Scheduler.Lookup cannot be read', async () => {
+    const { api } = createFakeChain({
+      agenda: {
+        88888: [
+          scheduledTask({ maybe_id: OTHER_TASK_NAME }),
+          scheduledTask({ maybe_id: TASK_NAME }),
+        ],
       },
-      ParachainSystem: undefined as any,
-      Scheduler: {
-        Agenda: { getEntries: vi.fn().mockResolvedValue([]) },
-        Lookup: { getValue: vi.fn().mockResolvedValue(null) },
+    });
+    vi.mocked(api.query.Scheduler.Lookup.getValue).mockRejectedValue(
+      new Error('Incompatible runtime entry')
+    );
+    expect(await scheduledTaskAddress(api, TASK_NAME, createTestLogger())).toEqual({
+      block: 88888,
+      index: 1,
+    });
+  });
+
+  it('no address for a task that is not scheduled', async () => {
+    const { api } = createFakeChain({});
+    expect(await scheduledTaskAddress(api, TASK_NAME, createTestLogger())).toBeUndefined();
+  });
+});
+
+describe('SchedulerManager.moveTask', () => {
+  it('task name, period and other tasks of the target block after a move', async () => {
+    const { scheduler, writes } = schedulerFor({
+      agenda: {
+        100: [scheduledTask({ maybe_id: TASK_NAME, maybe_periodic: [10, 3] })],
+        51: [scheduledTask({ priority: 1 })],
       },
-    },
-    txFromCallData: vi.fn(),
-    ...overrides,
-  } as any;
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// getSchedulingBlocks() - block number selection
-// ═══════════════════════════════════════════════════════════════════════
-
-describe('SchedulerManager', () => {
-  describe('getSchedulingBlocks()', () => {
-    it('returns parachain blocks when no ParachainSystem pallet exists', async () => {
-      const api = createMockApi();
-      api.query.ParachainSystem = undefined;
-
-      const manager = new SchedulerManager(
-        createSilentLogger(),
-        createMockChopsticks(),
-        api,
-        false
-      );
-      const result = await manager.getSchedulingBlocks();
-
-      expect(result.currentBlock).toBe(100);
-      expect(result.targetBlock).toBe(101);
     });
 
-    it('returns parachain blocks for fellowship even when relay blocks available', async () => {
-      const api = createMockApi();
-      api.query.ParachainSystem = {
-        LastRelayChainBlockNumber: { getValue: vi.fn().mockResolvedValue(5000) },
-      };
+    const target = await scheduler.moveTask({ block: 100, index: 0 }, 51);
 
-      // isFellowship=true should skip relay block logic
-      const manager = new SchedulerManager(createSilentLogger(), createMockChopsticks(), api, true);
-      const result = await manager.getSchedulingBlocks();
-
-      expect(result.currentBlock).toBe(100);
-      expect(result.targetBlock).toBe(101);
-    });
-
-    it('uses relay chain blocks for governance on parachains', async () => {
-      const api = createMockApi();
-      api.query.ParachainSystem = {
-        LastRelayChainBlockNumber: { getValue: vi.fn().mockResolvedValue(5000) },
-      };
-
-      const manager = new SchedulerManager(
-        createSilentLogger(),
-        createMockChopsticks(),
-        api,
-        false
-      );
-      const result = await manager.getSchedulingBlocks();
-
-      // relayBlock=5000, so currentBlock=4999, targetBlock=5000
-      expect(result.currentBlock).toBe(4999);
-      expect(result.targetBlock).toBe(5000);
-    });
-
-    it('falls back to parachain blocks if LastRelayChainBlockNumber read fails', async () => {
-      const api = createMockApi();
-      api.query.ParachainSystem = {
-        LastRelayChainBlockNumber: {
-          getValue: vi.fn().mockRejectedValue(new Error('decode error')),
-        },
-      };
-
-      const manager = new SchedulerManager(
-        createSilentLogger(),
-        createMockChopsticks(),
-        api,
-        false
-      );
-      const result = await manager.getSchedulingBlocks();
-
-      expect(result.currentBlock).toBe(100);
-      expect(result.targetBlock).toBe(101);
-    });
-
-    it('falls back to parachain blocks if relay block is null', async () => {
-      const api = createMockApi();
-      api.query.ParachainSystem = {
-        LastRelayChainBlockNumber: { getValue: vi.fn().mockResolvedValue(null) },
-      };
-
-      const manager = new SchedulerManager(
-        createSilentLogger(),
-        createMockChopsticks(),
-        api,
-        false
-      );
-      const result = await manager.getSchedulingBlocks();
-
-      expect(result.currentBlock).toBe(100);
-      expect(result.targetBlock).toBe(101);
-    });
+    expect(target).toEqual({ block: 51, index: 1 });
+    const targetAgenda = storageWrite(writes, 'Scheduler', 'Agenda', [51]) as Array<
+      Record<string, unknown>
+    >;
+    expect(targetAgenda, 'tasks already scheduled at the target block must still run').toHaveLength(
+      2
+    );
+    expect(targetAgenda[0].priority).toBe(1);
+    expect(targetAgenda[1].maybe_id, 'the task name identifies the enactment').toBe(TASK_NAME);
+    expect(targetAgenda[1].maybe_periodic, 'a periodic task must stay periodic').toEqual([10, 3]);
+    expect(
+      storageWrite(writes, 'Scheduler', 'Lookup', [TASK_NAME]),
+      'the scheduler finds a task by name through Lookup'
+    ).toEqual([51, 1]);
   });
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // moveScheduledCallToNextBlock() - error messages
-  // ═══════════════════════════════════════════════════════════════════════
-
-  describe('moveScheduledCallToNextBlock()', () => {
-    it('throws diagnostic error when agenda is empty', async () => {
-      const api = createMockApi();
-      api.query.Scheduler.Agenda.getEntries.mockResolvedValue([]);
-
-      const manager = new SchedulerManager(
-        createSilentLogger(),
-        createMockChopsticks(),
-        api,
-        false
-      );
-
-      await expect(manager.moveScheduledCallToNextBlock(42, 'nudge')).rejects.toThrow(
-        'Searched 0 agenda blocks (0 total items)'
-      );
+  it('positions of the other tasks of the source block after a move', async () => {
+    const { scheduler, writes } = schedulerFor({
+      agenda: {
+        100: [
+          scheduledTask({ priority: 1 }),
+          scheduledTask({ maybe_id: TASK_NAME }),
+          scheduledTask({ maybe_id: OTHER_TASK_NAME }),
+        ],
+      },
     });
 
-    it('includes block numbers in diagnostic error', async () => {
-      const api = createMockApi();
-      api.query.Scheduler.Agenda.getEntries.mockResolvedValue([
-        { keyArgs: [200], value: [{ call: { type: 'Inline', value: new Uint8Array([0]) } }] },
-        { keyArgs: [300], value: [{ call: { type: 'Inline', value: new Uint8Array([1]) } }] },
-      ]);
-      // txFromCallData will fail to decode, so nothing matches
-      api.txFromCallData.mockRejectedValue(new Error('decode fail'));
+    await scheduler.moveTask({ block: 100, index: 1 }, 51);
 
-      const manager = new SchedulerManager(
-        createSilentLogger(),
-        createMockChopsticks(),
-        api,
-        false
-      );
-
-      await expect(manager.moveScheduledCallToNextBlock(42, 'nudge')).rejects.toThrow(
-        'at blocks: [200, 300]'
-      );
-    });
-
-    it('includes item count in diagnostic error', async () => {
-      const api = createMockApi();
-      api.query.Scheduler.Agenda.getEntries.mockResolvedValue([
-        {
-          keyArgs: [200],
-          value: [
-            { call: { type: 'Inline', value: new Uint8Array([0]) } },
-            { call: { type: 'Inline', value: new Uint8Array([1]) } },
-          ],
-        },
-      ]);
-      api.txFromCallData.mockRejectedValue(new Error('decode fail'));
-
-      const manager = new SchedulerManager(
-        createSilentLogger(),
-        createMockChopsticks(),
-        api,
-        false
-      );
-
-      await expect(manager.moveScheduledCallToNextBlock(42, 'nudge')).rejects.toThrow(
-        '2 total items'
-      );
-    });
-
-    it('finds and moves a matching nudge call', async () => {
-      const api = createMockApi();
-      const chopsticks = createMockChopsticks();
-
-      // Create a call that matches via txFromCallData decode
-      const callBytes = new Uint8Array([0xab, 0xcd]);
-      api.query.Scheduler.Agenda.getEntries.mockResolvedValue([
-        {
-          keyArgs: [500],
-          value: [
-            {
-              call: { type: 'Inline', value: callBytes },
-              maybeId: undefined,
-            },
-          ],
-        },
-      ]);
-
-      api.txFromCallData.mockResolvedValue({
-        decodedCall: {
-          type: 'Referenda',
-          value: {
-            type: 'nudge_referendum',
-            value: { index: 42 },
-          },
-        },
-      });
-
-      const manager = new SchedulerManager(createSilentLogger(), chopsticks, api, false);
-      const result = await manager.moveScheduledCallToNextBlock(42, 'nudge');
-
-      expect(result.block).toBe(101); // parachain block 100 + 1
-      expect(result.taskIndex).toBe(0);
-      expect(chopsticks.setStorageBatch).toHaveBeenCalled();
-    });
-
-    it('finds a Lookup execute call matching proposal hash', async () => {
-      const api = createMockApi();
-      const chopsticks = createMockChopsticks();
-
-      api.query.Scheduler.Agenda.getEntries.mockResolvedValue([
-        {
-          keyArgs: [600],
-          value: [
-            {
-              call: {
-                type: 'Lookup',
-                value: { hash: new Uint8Array([0xaa, 0xbb, 0xcc, 0xdd]) },
-              },
-              maybeId: undefined,
-            },
-          ],
-        },
-      ]);
-
-      const manager = new SchedulerManager(createSilentLogger(), chopsticks, api, false);
-      const result = await manager.moveScheduledCallToNextBlock(42, 'execute', '0xaabbccdd');
-
-      expect(result.block).toBe(101);
-      expect(result.taskIndex).toBe(0);
-    });
-
-    it('updates Lookup when scheduledEntry has maybeId', async () => {
-      const api = createMockApi();
-      const chopsticks = createMockChopsticks();
-      const taskId = new Uint8Array([1, 2, 3, 4]);
-
-      api.query.Scheduler.Agenda.getEntries.mockResolvedValue([
-        {
-          keyArgs: [500],
-          value: [
-            {
-              call: { type: 'Lookup', value: { hash: new Uint8Array([0xaa]) } },
-              maybeId: taskId,
-            },
-          ],
-        },
-      ]);
-      api.query.Scheduler.Lookup.getValue.mockResolvedValue([500, 0]);
-
-      const manager = new SchedulerManager(createSilentLogger(), chopsticks, api, false);
-      await manager.moveScheduledCallToNextBlock(42, 'execute');
-
-      // Should have been called twice: once for agenda, once for lookup
-      expect(chopsticks.setStorageBatch).toHaveBeenCalledTimes(2);
-      const lookupCall = chopsticks.setStorageBatch.mock.calls[1][0];
-      expect(lookupCall.Scheduler.Lookup).toBeDefined();
-    });
-
-    it('skips Lookup update when lookup query fails', async () => {
-      const api = createMockApi();
-      const chopsticks = createMockChopsticks();
-      const taskId = new Uint8Array([1, 2, 3, 4]);
-
-      api.query.Scheduler.Agenda.getEntries.mockResolvedValue([
-        {
-          keyArgs: [500],
-          value: [
-            {
-              call: { type: 'Lookup', value: { hash: new Uint8Array([0xaa]) } },
-              maybeId: taskId,
-            },
-          ],
-        },
-      ]);
-      api.query.Scheduler.Lookup.getValue.mockRejectedValue(new Error('not found'));
-
-      const manager = new SchedulerManager(createSilentLogger(), chopsticks, api, false);
-      await manager.moveScheduledCallToNextBlock(42, 'execute');
-
-      // Only the agenda update, no lookup update
-      expect(chopsticks.setStorageBatch).toHaveBeenCalledTimes(1);
-    });
-
-    it('skips entries with no call', async () => {
-      const api = createMockApi();
-      api.query.Scheduler.Agenda.getEntries.mockResolvedValue([
-        {
-          keyArgs: [200],
-          value: [
-            null, // null entry
-            { call: null }, // entry with null call
-          ],
-        },
-      ]);
-
-      const manager = new SchedulerManager(
-        createSilentLogger(),
-        createMockChopsticks(),
-        api,
-        false
-      );
-
-      await expect(manager.moveScheduledCallToNextBlock(42, 'nudge')).rejects.toThrow(
-        'call not found'
-      );
-    });
-
-    it('skips entries with empty value array', async () => {
-      const api = createMockApi();
-      api.query.Scheduler.Agenda.getEntries.mockResolvedValue([
-        { keyArgs: [200], value: [] },
-        { keyArgs: [300], value: null },
-      ]);
-
-      const manager = new SchedulerManager(
-        createSilentLogger(),
-        createMockChopsticks(),
-        api,
-        false
-      );
-
-      await expect(manager.moveScheduledCallToNextBlock(42, 'nudge')).rejects.toThrow(
-        'call not found'
-      );
-    });
+    const sourceAgenda = storageWrite(writes, 'Scheduler', 'Agenda', [100]) as Array<Record<
+      string,
+      unknown
+    > | null>;
+    expect(sourceAgenda).toHaveLength(3);
+    expect(sourceAgenda[1]).toBeNull();
+    expect(
+      sourceAgenda[2]?.maybe_id,
+      'Scheduler.Lookup addresses tasks by index, so the indices must not shift'
+    ).toBe(OTHER_TASK_NAME);
   });
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // moveOrInjectNudge() - queued referenda have no nudge to move
-  // ═══════════════════════════════════════════════════════════════════════
-
-  describe('moveOrInjectNudge()', () => {
-    function createNudgeTxApi() {
-      const nudge = vi.fn().mockReturnValue({
-        getEncodedData: vi.fn().mockResolvedValue(new Uint8Array([0x3e, 0x05, 0x2a, 0, 0, 0])),
-      });
-      const api = createMockApi({ tx: { Referenda: { nudge_referendum: nudge } } });
-      api.query.Scheduler.Agenda.getValue = vi.fn().mockResolvedValue(undefined);
-      return { api, nudge };
-    }
-
-    it('moves the existing nudge when one is scheduled', async () => {
-      const { api, nudge } = createNudgeTxApi();
-      const chopsticks = createMockChopsticks();
-      api.query.Scheduler.Agenda.getEntries.mockResolvedValue([
-        {
-          keyArgs: [500],
-          value: [{ call: { type: 'Inline', value: new Uint8Array([0xab]) }, maybeId: undefined }],
-        },
-      ]);
-      api.txFromCallData.mockResolvedValue({
-        decodedCall: {
-          type: 'Referenda',
-          value: { type: 'nudge_referendum', value: { index: 42 } },
-        },
-      });
-
-      const manager = new SchedulerManager(createSilentLogger(), chopsticks, api, false);
-      await manager.moveOrInjectNudge(42);
-
-      expect(nudge).not.toHaveBeenCalled();
-      const update = chopsticks.setStorageBatch.mock.calls[0][0];
-      expect(update.Scheduler.Agenda[0]).toEqual([[500], null]);
-      expect(update.Scheduler.Agenda[1][0]).toEqual([101]);
-    });
-
-    it('injects a Root nudge_referendum at the target block when none is scheduled', async () => {
-      const { api, nudge } = createNudgeTxApi();
-      const chopsticks = createMockChopsticks();
-
-      const manager = new SchedulerManager(createSilentLogger(), chopsticks, api, false);
-      await manager.moveOrInjectNudge(42);
-
-      expect(nudge).toHaveBeenCalledWith({ index: 42 });
-      expect(chopsticks.setStorageBatch).toHaveBeenCalledWith({
-        Scheduler: {
-          Agenda: [[[101], [{ call: { Inline: '0x3e052a000000' }, origin: { system: 'Root' } }]]],
-        },
-      });
-    });
-
-    it('keeps calls already scheduled at the target block when injecting', async () => {
-      const { api } = createNudgeTxApi();
-      const chopsticks = createMockChopsticks();
-      api.query.Scheduler.Agenda.getValue.mockResolvedValue([
-        {
-          call: { type: 'Inline', value: '0x0102' },
-          maybeId: undefined,
-          origin: { type: 'system', value: { type: 'Root' } },
-        },
-      ]);
-
-      const manager = new SchedulerManager(createSilentLogger(), chopsticks, api, false);
-      await manager.moveOrInjectNudge(42);
-
-      const agenda = chopsticks.setStorageBatch.mock.calls[0][0].Scheduler.Agenda[0][1];
-      expect(agenda).toHaveLength(2);
-      expect(agenda[1].call).toEqual({ Inline: '0x3e052a000000' });
-    });
+  it('no storage write for a task already at the target block', async () => {
+    const { scheduler, writes } = schedulerFor({ agenda: { 51: [scheduledTask()] } });
+    expect(await scheduler.moveTask({ block: 51, index: 0 }, 51)).toEqual({ block: 51, index: 0 });
+    expect(writes).toEqual([]);
   });
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // isNudgeReferendumCall() - nudge detection strategies
-  // ═══════════════════════════════════════════════════════════════════════
+  it('error for an empty slot', async () => {
+    const { scheduler } = schedulerFor({ agenda: { 100: [undefined] } });
+    await expect(scheduler.moveTask({ block: 100, index: 0 }, 51)).rejects.toThrow(
+      'No scheduled task at [100, 0]'
+    );
+  });
+});
 
-  describe('nudge call detection', () => {
-    it('detects nudge via txFromCallData decode (strategy 1)', async () => {
-      const api = createMockApi();
-      api.txFromCallData.mockResolvedValue({
-        decodedCall: {
-          type: 'Referenda',
-          value: {
-            type: 'nudge_referendum',
-            value: { index: 42 },
-          },
-        },
-      });
-
-      const manager = new SchedulerManager(
-        createSilentLogger(),
-        createMockChopsticks(),
-        api,
-        false
-      );
-      const result = await (manager as any).isNudgeReferendumCall(
-        { type: 'Inline', value: new Uint8Array([1, 2]) },
-        42
-      );
-      expect(result).toBe(true);
+describe('SchedulerManager.appendInlineCall', () => {
+  it('inline call after the tasks of the target block', async () => {
+    const { scheduler, writes } = schedulerFor({
+      agenda: { 51: [scheduledTask({ priority: 1 })] },
     });
 
-    it('rejects nudge for different referendum ID', async () => {
-      const api = createMockApi();
-      api.txFromCallData.mockResolvedValue({
-        decodedCall: {
-          type: 'Referenda',
-          value: {
-            type: 'nudge_referendum',
-            value: { index: 99 }, // different ID
-          },
-        },
-      });
+    const address = await scheduler.appendInlineCall('0x0102', { system: 'Root' }, 51);
 
-      const manager = new SchedulerManager(
-        createSilentLogger(),
-        createMockChopsticks(),
-        api,
-        false
-      );
-      const result = await (manager as any).isNudgeReferendumCall(
-        { type: 'Inline', value: new Uint8Array([1, 2]) },
-        42
-      );
-      expect(result).toBe(false);
-    });
-
-    it('falls back to property matching when decode fails', async () => {
-      const api = createMockApi();
-      api.txFromCallData.mockRejectedValue(new Error('decode fail'));
-
-      const manager = new SchedulerManager(
-        createSilentLogger(),
-        createMockChopsticks(),
-        api,
-        false
-      );
-      const result = await (manager as any).isNudgeReferendumCall(
-        {
-          type: 'Inline',
-          value: {
-            type: 'Referenda',
-            value: { type: 'nudge_referendum', value: {} },
-          },
-        },
-        42
-      );
-      expect(result).toBe(true);
-    });
-
-    it('detects nudge via method property (strategy 2)', async () => {
-      const api = createMockApi();
-      const manager = new SchedulerManager(
-        createSilentLogger(),
-        createMockChopsticks(),
-        api,
-        false
-      );
-
-      const result = await (manager as any).isNudgeReferendumCall(
-        { method: 'nudge_referendum' },
-        42
-      );
-      expect(result).toBe(true);
-    });
-
-    it('detects nudge via pallet + method value (strategy 2)', async () => {
-      const api = createMockApi();
-      const manager = new SchedulerManager(
-        createSilentLogger(),
-        createMockChopsticks(),
-        api,
-        false
-      );
-
-      const result = await (manager as any).isNudgeReferendumCall(
-        {
-          type: 'Referenda',
-          value: { type: 'nudgeReferendum' },
-        },
-        42
-      );
-      expect(result).toBe(true);
-    });
-
-    it('uses FellowshipReferenda pallet for fellowship', async () => {
-      const api = createMockApi();
-      api.txFromCallData.mockResolvedValue({
-        decodedCall: {
-          type: 'FellowshipReferenda',
-          value: {
-            type: 'nudge_referendum',
-            value: { index: 7 },
-          },
-        },
-      });
-
-      const manager = new SchedulerManager(createSilentLogger(), createMockChopsticks(), api, true);
-      const result = await (manager as any).isNudgeReferendumCall(
-        { type: 'Inline', value: new Uint8Array([1, 2]) },
-        7
-      );
-      expect(result).toBe(true);
-    });
-
-    it('returns false for non-nudge call', async () => {
-      const api = createMockApi();
-      api.txFromCallData.mockResolvedValue({
-        decodedCall: {
-          type: 'Referenda',
-          value: {
-            type: 'submit',
-            value: { index: 42 },
-          },
-        },
-      });
-
-      const manager = new SchedulerManager(
-        createSilentLogger(),
-        createMockChopsticks(),
-        api,
-        false
-      );
-      const result = await (manager as any).isNudgeReferendumCall(
-        { type: 'Inline', value: new Uint8Array([1, 2]) },
-        42
-      );
-      expect(result).toBe(false);
-    });
-
-    it('returns false for null call data', async () => {
-      const api = createMockApi();
-      const manager = new SchedulerManager(
-        createSilentLogger(),
-        createMockChopsticks(),
-        api,
-        false
-      );
-      const result = await (manager as any).isNudgeReferendumCall(null, 42);
-      expect(result).toBe(false);
+    expect(address).toEqual({ block: 51, index: 1 });
+    const targetAgenda = storageWrite(writes, 'Scheduler', 'Agenda', [51]) as Array<
+      Record<string, unknown>
+    >;
+    expect(targetAgenda[0].priority, 'a pre-call must not delete scheduled tasks').toBe(1);
+    expect(targetAgenda[1]).toMatchObject({
+      call: { Inline: '0x0102' },
+      origin: { system: 'Root' },
     });
   });
+});
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // isProposalExecutionCall() - proposal hash matching
-  // ═══════════════════════════════════════════════════════════════════════
+describe('SchedulerManager.scheduleNudge', () => {
+  const NUDGE_CALL = new Uint8Array([0x3e, 0x07]);
 
-  describe('proposal execution call detection', () => {
-    it('matches Lookup call by hash', () => {
-      const api = createMockApi();
-      const manager = new SchedulerManager(
-        createSilentLogger(),
-        createMockChopsticks(),
-        api,
-        false
-      );
+  function withNudgeDecoder(api: ReturnType<typeof createFakeChain>['api'], pallet: string) {
+    vi.mocked(api.txFromCallData).mockImplementation(async (callData: Uint8Array) => ({
+      decodedCall: {
+        type: callData === NUDGE_CALL ? pallet : 'System',
+        value: { type: 'nudge_referendum', value: { index: 7 } },
+      },
+      create: vi.fn(),
+      getEncodedData: vi.fn(),
+    }));
+  }
 
-      const result = (manager as any).isProposalExecutionCall(
-        { type: 'Lookup', value: { hash: new Uint8Array([0xaa, 0xbb]) } },
-        '0xaabb'
-      );
-      expect(result).toBe(true);
+  it('alarm of the referendum moved to the target block', async () => {
+    const { scheduler, writes, api } = schedulerFor({
+      agenda: { 200: [scheduledTask({ call: { type: 'Inline', value: NUDGE_CALL } })] },
     });
+    withNudgeDecoder(api, 'Referenda');
 
-    it('rejects Lookup call with non-matching hash', () => {
-      const api = createMockApi();
-      const manager = new SchedulerManager(
-        createSilentLogger(),
-        createMockChopsticks(),
-        api,
-        false
-      );
+    expect(await scheduler.scheduleNudge(GOVERNANCE, 7, 51)).toEqual({ block: 51, index: 0 });
+    expect(storageWrite(writes, 'Scheduler', 'Agenda', [200])).toEqual([null]);
+  });
 
-      const result = (manager as any).isProposalExecutionCall(
-        { type: 'Lookup', value: { hash: new Uint8Array([0xaa, 0xbb]) } },
-        '0xccdd'
-      );
-      expect(result).toBe(false);
+  it('Root nudge for a referendum without an alarm', async () => {
+    const { scheduler, writes, api } = schedulerFor({ agenda: { 51: [scheduledTask()] } });
+    withNudgeDecoder(api, 'Referenda');
+    const nudgeReferendum = vi.fn(() => ({
+      getEncodedData: async () => new Uint8Array([0x3e, 0x09]),
+    }));
+    (api as unknown as { tx: unknown }).tx = { Referenda: { nudge_referendum: nudgeReferendum } };
+
+    expect(
+      await scheduler.scheduleNudge(GOVERNANCE, 7, 51),
+      'a queued referendum has no alarm, so the tool schedules the nudge itself'
+    ).toEqual({ block: 51, index: 1 });
+    expect(nudgeReferendum).toHaveBeenCalledWith({ index: 7 });
+    expect(storageWrite(writes, 'Scheduler', 'Agenda', [51])).toMatchObject([
+      {},
+      { call: { Inline: '0x3e09' }, origin: { system: 'Root' } },
+    ]);
+  });
+
+  it('alarm search in the FellowshipReferenda pallet for a fellowship referendum', async () => {
+    const { scheduler, api } = schedulerFor({
+      agenda: { 200: [scheduledTask({ call: { type: 'Inline', value: NUDGE_CALL } })] },
     });
+    withNudgeDecoder(api, 'FellowshipReferenda');
+    expect(await scheduler.scheduleNudge(FELLOWSHIP, 7, 51)).toEqual({ block: 51, index: 0 });
+  });
+});
 
-    it('accepts any Lookup call when no proposalHash given', () => {
-      const api = createMockApi();
-      const manager = new SchedulerManager(
-        createSilentLogger(),
-        createMockChopsticks(),
-        api,
-        false
-      );
+describe('SchedulerManager.nextAgendaBlock', () => {
+  it('Scheduler.IncompleteSince, in the block numbers of the scheduler', async () => {
+    const { scheduler } = schedulerFor({ blockNumber: 100, incompleteSince: 5001 });
+    expect(
+      await scheduler.nextAgendaBlock(),
+      'the next block services the agendas from IncompleteSince; Asset Hub keys them by relay block number'
+    ).toBe(5001);
+  });
 
-      const result = (manager as any).isProposalExecutionCall(
-        { type: 'Lookup', value: { hash: new Uint8Array([0xaa]) } },
-        undefined
-      );
-      expect(result).toBe(true);
-    });
-
-    it('accepts any Inline call when no proposalHash given', () => {
-      const api = createMockApi();
-      const manager = new SchedulerManager(
-        createSilentLogger(),
-        createMockChopsticks(),
-        api,
-        false
-      );
-
-      const result = (manager as any).isProposalExecutionCall(
-        { type: 'Inline', value: new Uint8Array([0xab, 0xcd]) },
-        undefined
-      );
-      expect(result).toBe(true);
-    });
-
-    it('matches Inline call data against proposalHash', () => {
-      const api = createMockApi();
-      const manager = new SchedulerManager(
-        createSilentLogger(),
-        createMockChopsticks(),
-        api,
-        false
-      );
-
-      const result = (manager as any).isProposalExecutionCall(
-        { type: 'Inline', value: new Uint8Array([0xab, 0xcd]) },
-        '0xabcd'
-      );
-      expect(result).toBe(true);
-    });
-
-    it('performs case-insensitive matching for Inline calls', () => {
-      const api = createMockApi();
-      const manager = new SchedulerManager(
-        createSilentLogger(),
-        createMockChopsticks(),
-        api,
-        false
-      );
-
-      const result = (manager as any).isProposalExecutionCall(
-        { type: 'Inline', value: new Uint8Array([0xab, 0xcd]) },
-        '0xABCD'
-      );
-      expect(result).toBe(true);
-    });
+  it('next local block without Scheduler.IncompleteSince', async () => {
+    const { scheduler } = schedulerFor({ blockNumber: 100 });
+    expect(
+      await scheduler.nextAgendaBlock(),
+      'a scheduler without IncompleteSince services the agenda of the next local block'
+    ).toBe(101);
   });
 });

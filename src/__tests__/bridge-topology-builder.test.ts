@@ -1,314 +1,251 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   type AdditionalBridgeChain,
-  BridgeTopologyBuilder,
-  type BridgeTopologyConfig,
+  type BridgeEndpoints,
+  type BridgeInjections,
   classifyAdditionalBridgeChains,
-  KUSAMA_SIDE_KEYS,
-  POLKADOT_SIDE_KEYS,
-} from '../services/bridge-topology-builder';
-import type { ChainInfo } from '../services/chain-registry';
+  kusamaSideSpecs,
+  polkadotSideSpecs,
+} from '../bridge/bridge-topology-builder';
+import type { ChainInfo } from '../network/chain-identity';
+import type { ForkSpec } from '../network/fork';
 import type { ParsedEndpoint } from '../utils/chain-endpoint-parser';
-import type { Logger } from '../utils/logger';
+import { createTestLogger } from './helpers';
 
-function createSilentLogger(): Logger {
-  return {
-    info: vi.fn(),
-    debug: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    success: vi.fn(),
-    isVerbose: () => false,
-    startSpinner: vi.fn(),
-    succeedSpinner: vi.fn(),
-    failSpinner: vi.fn(),
-    updateSpinner: vi.fn(),
-    stopSpinner: vi.fn(),
-    section: vi.fn(),
-    table: vi.fn(),
-  } as unknown as Logger;
+const ENDPOINTS: BridgeEndpoints = {
+  collectives: { url: 'wss://polkadot-collectives-rpc.polkadot.io', block: 100 },
+  assetHubPolkadot: { url: 'wss://polkadot-asset-hub-rpc.polkadot.io', block: 200 },
+  bridgeHubPolkadot: { url: 'wss://polkadot-bridge-hub-rpc.polkadot.io', block: 300 },
+  assetHubKusama: { url: 'wss://kusama-asset-hub-rpc.polkadot.io', block: 50 },
+  bridgeHubKusama: { url: 'wss://kusama-bridge-hub-rpc.polkadot.io' },
+  additionalPolkadot: [],
+  additionalKusama: [],
+};
+
+const NO_CREATIONS: BridgeInjections = {
+  fellowshipStorageOnCollectives: false,
+  aliceOnAssetHubKusama: false,
+};
+
+function specByKey(specs: ForkSpec[], key: string): ForkSpec {
+  const spec = specs.find((candidate) => candidate.key === key);
+  if (!spec) throw new Error(`no fork spec for ${key}`);
+  return spec;
 }
 
-const COLLECTIVES = { url: 'wss://polkadot-collectives-rpc.polkadot.io', block: 100 };
-const AHP = { url: 'wss://polkadot-asset-hub-rpc.polkadot.io', block: 200 };
-const BHP = { url: 'wss://polkadot-bridge-hub-rpc.polkadot.io', block: 300 };
-const AHK = { url: 'wss://kusama-asset-hub-rpc.polkadot.io', block: 50 };
-const BHK = { url: 'wss://kusama-bridge-hub-rpc.polkadot.io' };
-
-function makeBuilder(overrides: Partial<BridgeTopologyConfig> = {}): BridgeTopologyBuilder {
-  return new BridgeTopologyBuilder(createSilentLogger(), {
-    collectives: COLLECTIVES,
-    assetHubPolkadot: AHP,
-    bridgeHubPolkadot: BHP,
-    assetHubKusama: AHK,
-    bridgeHubKusama: BHK,
-    ...overrides,
-  });
+function bothSides(endpoints: BridgeEndpoints, injections: BridgeInjections): ForkSpec[] {
+  const logger = createTestLogger();
+  return [
+    ...polkadotSideSpecs(endpoints, injections, logger).specs,
+    ...kusamaSideSpecs(endpoints, injections, logger).specs,
+  ];
 }
 
-describe('BridgeTopologyBuilder', () => {
-  describe('buildPolkadotSide()', () => {
-    it('produces a config with the three Polkadot parachains under the expected keys', () => {
-      const builder = makeBuilder();
-      const { networkConfig, keys } = builder.buildPolkadotSide();
-      expect(Object.keys(networkConfig).sort()).toEqual(
-        [
-          POLKADOT_SIDE_KEYS.collectives,
-          POLKADOT_SIDE_KEYS.assetHub,
-          POLKADOT_SIDE_KEYS.bridgeHub,
-        ].sort()
-      );
-      expect(keys).toBe(POLKADOT_SIDE_KEYS);
-    });
+function relay(url: string, label: string): AdditionalBridgeChain {
+  return { endpoint: { url }, kind: 'relay', label };
+}
 
-    it('does NOT include a relay key — the shortcut path never spawns the relay', () => {
-      const builder = makeBuilder();
-      const { networkConfig } = builder.buildPolkadotSide();
-      expect(networkConfig).not.toHaveProperty('polkadot');
-    });
+function parachain(url: string, label: string): AdditionalBridgeChain {
+  return { endpoint: { url }, kind: 'parachain', label };
+}
 
-    it('passes through fork blocks for each parachain', () => {
-      const builder = makeBuilder();
-      const { networkConfig } = builder.buildPolkadotSide();
-      const collectivesCfg = networkConfig[POLKADOT_SIDE_KEYS.collectives] as Record<
-        string,
-        unknown
-      >;
-      const ahpCfg = networkConfig[POLKADOT_SIDE_KEYS.assetHub] as Record<string, unknown>;
-      const bhpCfg = networkConfig[POLKADOT_SIDE_KEYS.bridgeHub] as Record<string, unknown>;
-      expect(collectivesCfg.block).toBe(100);
-      expect(ahpCfg.block).toBe(200);
-      expect(bhpCfg.block).toBe(300);
-    });
+describe('bridge side specs', () => {
+  it('core chains of each side at the requested blocks, without a relay', () => {
+    const logger = createTestLogger();
+    const polkadot = polkadotSideSpecs(ENDPOINTS, NO_CREATIONS, logger);
+    const kusama = kusamaSideSpecs(ENDPOINTS, NO_CREATIONS, logger);
 
-    it('injects fellowship storage on Collectives when requested', () => {
-      const builder = makeBuilder({ injectFellowshipStorage: true });
-      const { networkConfig } = builder.buildPolkadotSide();
-      const collectivesCfg = networkConfig[POLKADOT_SIDE_KEYS.collectives] as Record<
-        string,
-        unknown
-      >;
-      expect(collectivesCfg).toHaveProperty('import-storage');
-      const inj = collectivesCfg['import-storage'] as Record<string, unknown>;
-      expect(inj).toHaveProperty('FellowshipCollective');
-    });
-
-    it('does not inject any storage by default', () => {
-      const builder = makeBuilder();
-      const { networkConfig } = builder.buildPolkadotSide();
-      const collectivesCfg = networkConfig[POLKADOT_SIDE_KEYS.collectives] as Record<
-        string,
-        unknown
-      >;
-      expect(collectivesCfg).not.toHaveProperty('import-storage');
-    });
-
-    it('marks each chain config with manual block-mode and signature host mock', () => {
-      const builder = makeBuilder();
-      const { networkConfig } = builder.buildPolkadotSide();
-      for (const key of Object.values(POLKADOT_SIDE_KEYS)) {
-        const cfg = networkConfig[key] as Record<string, unknown>;
-        // BuildBlockMode.Manual is a TS enum value ('Manual'); chopsticks accepts it.
-        expect(String(cfg['build-block-mode']).toLowerCase()).toBe('manual');
-        expect(cfg['mock-signature-host']).toBe(true);
-      }
-    });
+    expect(polkadot.specs.map((spec) => [spec.key, spec.kind, spec.config.block])).toEqual([
+      ['collectives', 'parachain', 100],
+      ['assetHubPolkadot', 'parachain', 200],
+      ['bridgeHubPolkadot', 'parachain', 300],
+    ]);
+    expect(kusama.specs.map((spec) => [spec.key, spec.kind, spec.config.block])).toEqual([
+      ['assetHubKusama', 'parachain', 50],
+      ['bridgeHubKusama', 'parachain', undefined],
+    ]);
+    expect(polkadot.additionalKeys).toEqual([]);
+    expect(kusama.additionalKeys).toEqual([]);
   });
 
-  describe('buildKusamaSide()', () => {
-    it('produces a config with AHK + BHK under the expected keys', () => {
-      const builder = makeBuilder();
-      const { networkConfig, keys } = builder.buildKusamaSide();
-      expect(Object.keys(networkConfig).sort()).toEqual(
-        [KUSAMA_SIDE_KEYS.assetHub, KUSAMA_SIDE_KEYS.bridgeHub].sort()
-      );
-      expect(keys).toBe(KUSAMA_SIDE_KEYS);
-    });
-
-    it('does NOT include a relay key — the shortcut path never spawns the Kusama relay', () => {
-      const builder = makeBuilder();
-      const { networkConfig } = builder.buildKusamaSide();
-      expect(networkConfig).not.toHaveProperty('kusama');
-    });
-
-    it('passes through fork blocks for parachains', () => {
-      const builder = makeBuilder();
-      const { networkConfig } = builder.buildKusamaSide();
-      const ahkCfg = networkConfig[KUSAMA_SIDE_KEYS.assetHub] as Record<string, unknown>;
-      expect(ahkCfg.block).toBe(50);
-    });
-
-    it('injects Alice funded account on AHK when requested (needed for AHK public referendum)', () => {
-      const builder = makeBuilder({ injectAliceOnAssetHubKusama: true });
-      const { networkConfig } = builder.buildKusamaSide();
-      const ahkCfg = networkConfig[KUSAMA_SIDE_KEYS.assetHub] as Record<string, unknown>;
-      expect(ahkCfg).toHaveProperty('import-storage');
-      const inj = ahkCfg['import-storage'] as Record<string, unknown>;
-      // ALICE_ACCOUNT_INJECTION writes a System.Account entry for Alice.
-      expect(inj).toHaveProperty('System');
-    });
-
-    it('does not inject Alice on AHK by default', () => {
-      const builder = makeBuilder();
-      const { networkConfig } = builder.buildKusamaSide();
-      const ahkCfg = networkConfig[KUSAMA_SIDE_KEYS.assetHub] as Record<string, unknown>;
-      expect(ahkCfg).not.toHaveProperty('import-storage');
-    });
+  it('manual block building and mock signatures on every fork', () => {
+    for (const spec of bothSides(ENDPOINTS, NO_CREATIONS)) {
+      expect(
+        String(spec.config['build-block-mode']).toLowerCase(),
+        'the tool builds every block itself to control the scheduler'
+      ).toBe('manual');
+      expect(spec.config['mock-signature-host'], 'Alice signs with a fake signature').toBe(true);
+    }
   });
 
-  it('Polkadot- and Kusama-side network configs have disjoint chain keys', () => {
-    const builder = makeBuilder();
-    const polkadot = builder.buildPolkadotSide();
-    const kusama = builder.buildKusamaSide();
-    expect(Object.keys(polkadot.networkConfig)).not.toEqual(
-      expect.arrayContaining(Object.keys(kusama.networkConfig))
-    );
+  it('Alice funded on both Bridge Hubs', () => {
+    const specs = bothSides(ENDPOINTS, NO_CREATIONS);
+    for (const key of ['bridgeHubPolkadot', 'bridgeHubKusama']) {
+      expect(
+        specByKey(specs, key).config['import-storage'],
+        'the relayer signs delivery and confirmation transactions with Alice and pays their fees'
+      ).toHaveProperty('System.Account');
+    }
   });
 
-  describe('additional-chains routing', () => {
-    const relay = (url: string): AdditionalBridgeChain => ({
-      endpoint: { url },
-      kind: 'relay',
-      label: url.includes('kusama') ? 'kusama' : 'polkadot',
-    });
-    const para = (url: string, label: string): AdditionalBridgeChain => ({
-      endpoint: { url },
-      kind: 'parachain',
-      label,
-    });
+  it('storage injections only for referendum creations', () => {
+    const plain = bothSides(ENDPOINTS, NO_CREATIONS);
+    expect(specByKey(plain, 'collectives').config).not.toHaveProperty('import-storage');
+    expect(specByKey(plain, 'assetHubKusama').config).not.toHaveProperty('import-storage');
 
-    it('places a Kusama relay under the reserved `kusama` key and parachains under `extra_<n>`', () => {
-      const builder = makeBuilder({
-        additionalKusama: [
-          relay('wss://kusama-rpc.example'),
-          para('wss://encointer.example', 'encointer-parachain'),
-          para('wss://coretime-kusama.example', 'coretime-kusama'),
-        ],
-      });
-      const { networkConfig } = builder.buildKusamaSide();
-      expect(Object.keys(networkConfig).sort()).toEqual(
-        [
-          KUSAMA_SIDE_KEYS.assetHub,
-          KUSAMA_SIDE_KEYS.bridgeHub,
-          'kusama',
-          'extra_0',
-          'extra_1',
-        ].sort()
-      );
-      expect((networkConfig.kusama as Record<string, unknown>).endpoint).toBe(
-        'wss://kusama-rpc.example'
-      );
+    const creations = bothSides(ENDPOINTS, {
+      fellowshipStorageOnCollectives: true,
+      aliceOnAssetHubKusama: true,
     });
+    expect(
+      specByKey(creations, 'collectives').config['import-storage'],
+      'Alice submits the fellowship referendum as a ranked fellow'
+    ).toHaveProperty('FellowshipCollective.Members');
+    expect(
+      specByKey(creations, 'assetHubKusama').config['import-storage'],
+      'Alice pays the submission deposit of the governance referendum'
+    ).toHaveProperty('System.Account');
+  });
 
-    it('routes Polkadot-side additional parachains onto the Polkadot side only', () => {
-      const builder = makeBuilder({
-        additionalPolkadot: [para('wss://people-polkadot.example', 'people-polkadot')],
-      });
-      const { networkConfig } = builder.buildPolkadotSide();
-      expect(networkConfig).toHaveProperty('extra_0');
-      expect(networkConfig).not.toHaveProperty('kusama');
-    });
+  it('additional chains on their own side, with at most one relay per side', () => {
+    const logger = createTestLogger();
+    const endpoints: BridgeEndpoints = {
+      ...ENDPOINTS,
+      additionalPolkadot: [parachain('wss://people-polkadot.example', 'people-polkadot')],
+      additionalKusama: [
+        relay('wss://kusama-rpc.a', 'kusama'),
+        parachain('wss://encointer.example', 'encointer-parachain'),
+        relay('wss://kusama-rpc.b', 'kusama'),
+      ],
+    };
+    const polkadot = polkadotSideSpecs(endpoints, NO_CREATIONS, logger);
+    const kusama = kusamaSideSpecs(endpoints, NO_CREATIONS, logger);
 
-    it('honours only one relay per side (a second relay is dropped)', () => {
-      const builder = makeBuilder({
-        additionalKusama: [relay('wss://kusama-rpc.a'), relay('wss://kusama-rpc.b')],
-      });
-      const { networkConfig } = builder.buildKusamaSide();
-      const relayKeys = Object.keys(networkConfig).filter((k) => k === 'kusama');
-      expect(relayKeys).toHaveLength(1);
-      expect(networkConfig).not.toHaveProperty('extra_0');
-    });
+    expect(
+      polkadot.additionalKeys.map((key) => specByKey(polkadot.specs, key).config.endpoint)
+    ).toEqual(['wss://people-polkadot.example']);
+    expect(
+      kusama.additionalKeys.map((key) => {
+        const spec = specByKey(kusama.specs, key);
+        return [spec.config.endpoint, spec.kind];
+      }),
+      'every parachain fork of a side connects to the one relay fork of that side'
+    ).toEqual([
+      ['wss://kusama-rpc.a', 'relay'],
+      ['wss://encointer.example', 'parachain'],
+    ]);
+    expect(logger.warn).toHaveBeenCalledOnce();
   });
 });
 
 describe('classifyAdditionalBridgeChains', () => {
-  const ep = (url: string): ParsedEndpoint => ({ url });
-  const info = (
+  const endpoint = (url: string): ParsedEndpoint => ({ url });
+  const chainInfo = (
     network: ChainInfo['network'],
     kind: ChainInfo['kind'],
     label: string,
-    endpoint: string
-  ): ChainInfo => ({ id: label, label, endpoint, network, kind, specName: label });
+    url: string
+  ): ChainInfo => ({ label, endpoint: url, network, kind, specName: label });
 
-  // The five core bridge chains, by URL.
-  const CORE = [
-    ep('wss://collectives.dot'),
-    ep('wss://ahp.dot'),
-    ep('wss://bhp.dot'),
-    ep('wss://ahk.ksm'), // governance / AHK
-    ep('wss://bhk.ksm'),
+  const CORE_ENDPOINTS = [
+    endpoint('wss://collectives.dot'),
+    endpoint('wss://ahp.dot'),
+    endpoint('wss://bhp.dot'),
+    endpoint('wss://ahk.ksm'),
+    endpoint('wss://bhk.ksm'),
   ];
 
-  // Resolver maps a URL to its chain identity. Two URLs resolve to the SAME AHK chain
-  // identity (statemine) to exercise identity-based dedup across differing hosts.
-  const resolve = async (url: string): Promise<ChainInfo> => {
-    const table: Record<string, ChainInfo> = {
-      'wss://collectives.dot': info('polkadot', 'parachain', 'collectives', url),
-      'wss://ahp.dot': info('polkadot', 'parachain', 'statemint', url),
-      'wss://bhp.dot': info('polkadot', 'parachain', 'bridge-hub-polkadot', url),
-      'wss://ahk.ksm': info('kusama', 'parachain', 'statemine', url),
-      'wss://bhk.ksm': info('kusama', 'parachain', 'bridge-hub-kusama', url),
-      // additional chains
-      'wss://kusama-rpc.dwellir': info('kusama', 'relay', 'kusama', url),
-      'wss://encointer.dwellir': info('kusama', 'parachain', 'encointer-parachain', url),
-      'wss://ahk-other-host.dwellir': info('kusama', 'parachain', 'statemine', url), // == AHK
-      'wss://people-polkadot.dot': info('polkadot', 'parachain', 'people-polkadot', url),
-    };
-    if (!table[url]) throw new Error(`unreachable: ${url}`);
-    return table[url];
+  const CHAIN_INFO_BY_URL: Record<string, ChainInfo> = {
+    'wss://collectives.dot': chainInfo(
+      'polkadot',
+      'parachain',
+      'collectives',
+      'wss://collectives.dot'
+    ),
+    'wss://ahp.dot': chainInfo('polkadot', 'parachain', 'statemint', 'wss://ahp.dot'),
+    'wss://bhp.dot': chainInfo('polkadot', 'parachain', 'bridge-hub-polkadot', 'wss://bhp.dot'),
+    'wss://ahk.ksm': chainInfo('kusama', 'parachain', 'statemine', 'wss://ahk.ksm'),
+    'wss://bhk.ksm': chainInfo('kusama', 'parachain', 'bridge-hub-kusama', 'wss://bhk.ksm'),
+    'wss://kusama-rpc.dwellir': chainInfo('kusama', 'relay', 'kusama', 'wss://kusama-rpc.dwellir'),
+    'wss://encointer.dwellir': chainInfo(
+      'kusama',
+      'parachain',
+      'encointer-parachain',
+      'wss://encointer.dwellir'
+    ),
+    'wss://ahk-other-host.dwellir': chainInfo(
+      'kusama',
+      'parachain',
+      'statemine',
+      'wss://ahk-other-host.dwellir'
+    ),
+    'wss://people-polkadot.dot': chainInfo(
+      'polkadot',
+      'parachain',
+      'people-polkadot',
+      'wss://people-polkadot.dot'
+    ),
   };
 
-  it('routes chains to the correct side and keeps the relay', async () => {
+  const chainInfoLookup = async (url: string): Promise<ChainInfo> => {
+    const info = CHAIN_INFO_BY_URL[url];
+    if (!info) throw new Error(`unreachable: ${url}`);
+    return info;
+  };
+
+  it('side and kind of each additional chain', async () => {
     const { polkadot, kusama } = await classifyAdditionalBridgeChains(
       [
-        ep('wss://kusama-rpc.dwellir'),
-        ep('wss://encointer.dwellir'),
-        ep('wss://people-polkadot.dot'),
+        endpoint('wss://kusama-rpc.dwellir'),
+        endpoint('wss://encointer.dwellir'),
+        endpoint('wss://people-polkadot.dot'),
       ],
-      CORE,
-      createSilentLogger(),
-      resolve
+      CORE_ENDPOINTS,
+      createTestLogger(),
+      chainInfoLookup
     );
-    expect(kusama.map((c) => c.label).sort()).toEqual(['encointer-parachain', 'kusama']);
-    expect(kusama.find((c) => c.label === 'kusama')?.kind).toBe('relay');
-    expect(polkadot.map((c) => c.label)).toEqual(['people-polkadot']);
+
+    expect(kusama.map((chain) => [chain.label, chain.kind])).toEqual([
+      ['kusama', 'relay'],
+      ['encointer-parachain', 'parachain'],
+    ]);
+    expect(polkadot.map((chain) => chain.label)).toEqual(['people-polkadot']);
   });
 
-  it('dedups a core chain reached via a different host (AHK identity match)', async () => {
-    const { kusama } = await classifyAdditionalBridgeChains(
-      [ep('wss://ahk-other-host.dwellir'), ep('wss://encointer.dwellir')],
-      CORE,
-      createSilentLogger(),
-      resolve
-    );
-    // AHK (statemine) is a core chain → dropped despite the different URL; only encointer remains.
-    expect(kusama.map((c) => c.label)).toEqual(['encointer-parachain']);
+  it('no second fork of a core chain, at the same URL or on another host', async () => {
+    for (const duplicate of ['wss://ahk.ksm', 'wss://ahk-other-host.dwellir']) {
+      const { kusama } = await classifyAdditionalBridgeChains(
+        [endpoint(duplicate), endpoint('wss://encointer.dwellir')],
+        CORE_ENDPOINTS,
+        createTestLogger(),
+        chainInfoLookup
+      );
+      expect(
+        kusama.map((chain) => chain.label),
+        'a second fork of Kusama Asset Hub would not see the bridged XCM'
+      ).toEqual(['encointer-parachain']);
+    }
   });
 
-  it('dedups a core chain reached via the exact same URL', async () => {
-    const { kusama } = await classifyAdditionalBridgeChains(
-      [ep('wss://ahk.ksm'), ep('wss://encointer.dwellir')],
-      CORE,
-      createSilentLogger(),
-      resolve
-    );
-    expect(kusama.map((c) => c.label)).toEqual(['encointer-parachain']);
-  });
-
-  it('skips chains it cannot resolve and chains off the polkadot/kusama networks', async () => {
-    const logger = createSilentLogger();
-    const offNetwork = async (url: string): Promise<ChainInfo> => {
-      if (url === 'wss://paseo.rpc') return info('paseo', 'relay', 'paseo', url);
-      throw new Error('boom');
+  it('warnings instead of chains without chain info or outside Polkadot and Kusama', async () => {
+    const logger = createTestLogger();
+    const paseoOnly = async (url: string): Promise<ChainInfo> => {
+      if (url === 'wss://paseo.rpc') return chainInfo('paseo', 'relay', 'paseo', url);
+      throw new Error('connection refused');
     };
+
     const { polkadot, kusama } = await classifyAdditionalBridgeChains(
-      [ep('wss://paseo.rpc'), ep('wss://dead.rpc')],
+      [endpoint('wss://paseo.rpc'), endpoint('wss://dead.rpc')],
       [],
       logger,
-      offNetwork
+      paseoOnly
     );
-    expect(polkadot).toHaveLength(0);
-    expect(kusama).toHaveLength(0);
-    expect(logger.warn).toHaveBeenCalled();
+
+    expect(polkadot).toEqual([]);
+    expect(kusama).toEqual([]);
+    expect(vi.mocked(logger.warn).mock.calls.map(([message]) => message)).toEqual([
+      "Skipping additional chain paseo (wss://paseo.rpc): network 'paseo' is not part of the Polkadot↔Kusama bridge topology",
+      'Skipping additional chain wss://dead.rpc: chain info lookup failed: connection refused',
+    ]);
   });
 });

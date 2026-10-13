@@ -58,17 +58,17 @@ export type RawReferendumInfo = Enum<{
 // --- Scheduler types ---
 
 export type ScheduledCall = Enum<{
+  Legacy: { hash: HexString };
   Inline: Uint8Array;
   Lookup: { hash: HexString; len: number };
 }>;
 
 export interface ScheduledEntry {
+  maybe_id: HexString | undefined;
+  priority: number;
   call: ScheduledCall;
-  maybeId: Uint8Array | undefined;
+  maybe_periodic: [number, number] | undefined;
   origin: unknown;
-  priority?: number;
-  maybePeriodic?: unknown;
-  [key: string]: unknown;
 }
 
 // --- Transaction type (returned by txFromCallData) ---
@@ -82,29 +82,21 @@ export interface DecodedTransaction {
 // --- Runtime version ---
 
 export interface RuntimeVersion {
-  spec_name?: string;
-  specName?: string;
-  spec_version?: number;
-  [key: string]: unknown;
+  spec_name: string;
+  spec_version: number;
 }
-
-// --- Track info: [trackId, { name, ... }] ---
-
-export type TrackInfo = [number, { name: string; [key: string]: unknown }];
 
 // --- Referenda pallet interface (shared by Referenda + FellowshipReferenda) ---
 
 export interface ReferendaPallet {
-  ReferendumInfoFor: StorageMap<number, RawReferendumInfo>;
+  ReferendumInfoFor: StorageEntries<number, RawReferendumInfo>;
   ReferendumCount: StorageValue<number>;
 }
 
-// --- System event (kept loose — parsed via parseBlockEvent()) ---
-
-export interface SystemEvent {
-  type: string;
-  value: unknown;
-  [key: string]: unknown;
+export interface EventRecord {
+  phase: { type: string; value?: unknown };
+  event: { type: string; value: { type: string; value?: unknown } };
+  topics: unknown[];
 }
 
 // --- The main API interface ---
@@ -113,30 +105,22 @@ export interface SubstrateApi {
   query: {
     System: {
       Number: StorageValue<number>;
-      Events: StorageValue<SystemEvent[]>;
+      Events: StorageValue<EventRecord[]>;
     };
     Referenda: ReferendaPallet;
     FellowshipReferenda: ReferendaPallet;
     Scheduler: {
-      Agenda: StorageEntries<number, ScheduledEntry[]>;
-      Lookup: StorageMap<Uint8Array, [number, number]>;
+      Agenda: StorageEntries<number, Array<ScheduledEntry | undefined>>;
+      Lookup: StorageMap<HexString, [number, number]>;
+      IncompleteSince: StorageValue<number | undefined>;
     };
     Balances: {
       TotalIssuance: StorageValue<bigint>;
-    };
-    ParachainSystem?: {
-      LastRelayChainBlockNumber: StorageValue<number>;
     };
   };
   constants: {
     System: {
       Version(): Promise<RuntimeVersion>;
-    };
-    Referenda: {
-      Tracks(): Promise<TrackInfo[]>;
-    };
-    FellowshipReferenda: {
-      Tracks(): Promise<TrackInfo[]>;
     };
   };
   tx: Record<

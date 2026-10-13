@@ -1,1395 +1,685 @@
-//! Comprehensive integration tests.
-//!
-//! Each test function spawns a single zombienet network and runs all relevant
-//! sub-tests against it sequentially. This avoids the ~5 min network spawn
-//! overhead that would be incurred by separate test functions.
-//!
-//! Test suites:
-//! - `polkadot_governance_all_tracks` — 16 governance tracks + scenario tests on Polkadot AH
-//! - `polkadot_fellowship_tracks_part1` — fellowship tracks 1-15 on Polkadot Collectives
-//! - `polkadot_fellowship_tracks_part2` — fellowship tracks 21-33 + multi-chain scenarios
-//! - `kusama_governance_all_tracks` — 16 governance tracks + scenario tests on Kusama AH
-//! - `kusama_fellowship_all_tracks` — 10 fellowship tracks + scenario tests on Kusama relay
-//!
-//! By-number tests are enabled by injecting raw storage into genesis via
-//! `with_raw_spec_override()`:
-//! - **AhMigrator**: `MigrationDone` unlocks `Referenda.submit` on Asset Hub
-//! - **FellowshipCollective**: Alice registered as rank-9 fellow on Collectives/relay
-
 use anyhow::Result;
 
-use crate::common::call_data;
-use crate::common::config;
-use crate::common::context::{GovernanceTestContext, KusamaTestContext, MultiChainTestContext};
-use crate::common::extrinsic_submitter;
-use crate::common::network::{initialize_network, verify_binaries};
-use crate::common::port_allocator;
-use crate::common::raw_storage;
-use crate::common::run_and_bail;
-use crate::common::tool_runner::{ToolArgs, ToolRunner};
-use crate::common::tracks;
+use harness::calls::{
+    self, lookup_proposal, Origin, ProposalReference, ReferendaPallet, ReferendumCalls, ROOT,
+};
+use harness::chains::{
+    KUSAMA_NETWORK, POLKADOT_ASSET_HUB, POLKADOT_FELLOWSHIP_NETWORK, POLKADOT_GOVERNANCE_NETWORK,
+};
+use harness::context::{ChainEndpoint, TestContext};
+use harness::genesis::{bob_account, EXISTING_FELLOW_RANK};
+use harness::network_config::{runtime_path, spawn_network};
+use harness::tool_runner::{sub_test, StepArgs, ToolArgs, ToolOutput, ToolRunner};
+use harness::tracks::{
+    Track, GOVERNANCE_TRACKS, KUSAMA_FELLOWSHIP_TRACKS, POLKADOT_FELLOWSHIP_TRACKS,
+};
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Polkadot Governance — all 16 tracks + scenario tests
-// ═══════════════════════════════════════════════════════════════════════════
+const POLKADOT_FELLOWSHIP_FIRST_HALF: usize = 15;
+
+fn label(context: &TestContext, name: &str) -> String {
+    format!("{}{name}", context.label_prefix)
+}
+
+async fn tool_output(args: ToolArgs) -> Result<ToolOutput> {
+    ToolRunner::default().run(&args).await
+}
+
+fn governance_args(context: &TestContext, step: StepArgs) -> ToolArgs {
+    ToolArgs {
+        governance_chain_url: Some(context.governance.fork_point()),
+        steps: vec![step],
+        ..Default::default()
+    }
+}
+
+fn fellowship_args(context: &TestContext, step: StepArgs) -> ToolArgs {
+    ToolArgs {
+        fellowship_chain_url: Some(context.fellowship().fork_point()),
+        steps: vec![step],
+        ..Default::default()
+    }
+}
+
+fn governance_calls(
+    chain: &ChainEndpoint,
+    origin: Origin,
+    proposal: &[u8],
+    reference: ProposalReference,
+) -> Result<ReferendumCalls> {
+    calls::referendum_calls(
+        &chain.client,
+        ReferendaPallet::Governance,
+        origin,
+        proposal,
+        reference,
+    )
+}
+
+fn fellowship_calls(
+    context: &TestContext,
+    variant: &'static str,
+    proposal: &[u8],
+    reference: ProposalReference,
+) -> Result<ReferendumCalls> {
+    calls::referendum_calls(
+        &context.fellowship().client,
+        ReferendaPallet::Fellowship,
+        Origin::fellowship(context.fellowship_origin_caller, variant),
+        proposal,
+        reference,
+    )
+}
+
+fn authorize_upgrade_calls(context: &TestContext) -> Result<ReferendumCalls> {
+    let proposal = calls::authorize_upgrade(&context.governance.client)?;
+    governance_calls(
+        &context.governance,
+        ROOT,
+        &proposal,
+        ProposalReference::Lookup,
+    )
+}
+
+fn fellows_remark_calls(context: &TestContext, text: &str) -> Result<ReferendumCalls> {
+    let proposal = calls::remark(&context.fellowship().client, text)?;
+    fellowship_calls(context, "Fellows", &proposal, ProposalReference::Lookup)
+}
+
+async fn governance_track_sub_tests(context: &TestContext) {
+    for track in GOVERNANCE_TRACKS {
+        sub_test(
+            &label(context, &format!("gov_create_{}", track.name)),
+            governance_track_creation(context, track),
+        )
+        .await;
+        sub_test(
+            &label(context, &format!("gov_bynum_{}", track.name)),
+            governance_track_by_number(context, track),
+        )
+        .await;
+    }
+}
+
+async fn fellowship_track_sub_tests(context: &TestContext, tracks: &[Track]) {
+    for track in tracks {
+        sub_test(
+            &label(context, &format!("fell_create_{}", track.name)),
+            fellowship_track_creation(context, track),
+        )
+        .await;
+        sub_test(
+            &label(context, &format!("fell_bynum_{}", track.name)),
+            fellowship_track_by_number(context, track),
+        )
+        .await;
+    }
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn polkadot_governance_all_tracks() {
-    env_logger::try_init().ok();
-    verify_binaries().expect("binary verification failed");
-
-    let network_config =
-        config::build_polkadot_with_asset_hub().expect("failed to build network config");
-    let network = initialize_network(network_config)
+    let network = spawn_network(&POLKADOT_GOVERNANCE_NETWORK)
         .await
-        .expect("failed to spawn zombienet");
-    let mut ctx = GovernanceTestContext::from_network(&network)
+        .expect("zombienet spawn failed");
+    let mut context = TestContext::polkadot_governance(&network)
         .await
-        .expect("failed to build context");
+        .expect("test network not ready");
 
-    let runner = ToolRunner::new();
-    let mut errors: Vec<String> = Vec::new();
-
-    // ── Per-track tests (create + by-number for each track) ──────────────
-
-    for track in tracks::GOVERNANCE_TRACKS {
-        run_and_bail!(
-            errors,
-            format!("gov_create_{}", track.name),
-            run_gov_create_test(&ctx, &runner, track)
-        );
-        run_and_bail!(
-            errors,
-            format!("gov_bynum_{}", track.name),
-            run_gov_bynum_test(&ctx, &runner, track)
-        );
-    }
-
-    // ── Scenario tests ───────────────────────────────────────────────────
-
-    ctx.refresh_fork_blocks()
+    governance_track_sub_tests(&context).await;
+    context
+        .refresh_fork_blocks()
         .await
-        .expect("failed to refresh fork blocks");
-
-    run_and_bail!(
-        errors,
-        "gov_happy_path",
-        run_governance_happy_path(&ctx, &runner)
-    );
-    run_and_bail!(
-        errors,
+        .expect("fork block refresh failed");
+    sub_test("gov_happy_path", governance_happy_path(&context)).await;
+    sub_test(
         "gov_dispatch_failure",
-        run_governance_dispatch_failure(&ctx, &runner)
-    );
-    run_and_bail!(
-        errors,
-        "gov_pre_call_remark",
-        run_governance_with_pre_call(&ctx, &runner)
-    );
-    run_and_bail!(
-        errors,
-        "gov_remark_proposal",
-        run_governance_remark_proposal(&ctx, &runner)
-    );
-    run_and_bail!(
-        errors,
-        "gov_invalid_hex",
-        run_governance_invalid_hex(&ctx, &runner)
-    );
-    run_and_bail!(
-        errors,
+        governance_dispatch_failure(&context),
+    )
+    .await;
+    sub_test("gov_pre_call_remark", governance_pre_call(&context, "Root")).await;
+    sub_test(
         "gov_pre_call_non_root_origin",
-        run_governance_pre_call_non_root_origin(&ctx, &runner)
-    );
-    run_and_bail!(
-        errors,
+        governance_pre_call(&context, "Treasurer"),
+    )
+    .await;
+    sub_test(
         "gov_pre_call_invalid_origin",
-        run_governance_pre_call_invalid_origin(&ctx, &runner)
-    );
-    run_and_bail!(
-        errors,
+        governance_pre_call_invalid_origin(&context),
+    )
+    .await;
+    sub_test("gov_remark_proposal", governance_remark_proposal(&context)).await;
+    sub_test("gov_invalid_hex", governance_invalid_call_data(&context)).await;
+    sub_test(
         "gov_create_no_preimage",
-        run_governance_create_no_preimage(&ctx, &runner)
-    );
-    run_and_bail!(
-        errors,
-        "gov_inline_create",
-        run_governance_inline_create(&ctx, &runner)
-    );
-    run_and_bail!(
-        errors,
-        "gov_inline_bynum",
-        run_governance_inline_bynum(&ctx, &runner)
-    );
+        governance_without_preimage(&context),
+    )
+    .await;
+    sub_test("gov_inline_create", governance_inline_creation(&context)).await;
+    sub_test("gov_inline_bynum", governance_inline_by_number(&context)).await;
+    sub_test(
+        "gov_steps_with_post_test",
+        governance_steps_with_post_test(&context),
+    )
+    .await;
+    sub_test(
+        "gov_apply_authorized_upgrade",
+        governance_upgrade_with_post_test(&context),
+    )
+    .await;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Polkadot Fellowship — split into two halves for CI parallelism
-// Each spawns its own network; scenarios run in part2 only.
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Tracks 1-15 (Members through RetainAt5Dan): 15 tracks × 2 = 30 sub-tests.
 #[tokio::test(flavor = "multi_thread")]
 async fn polkadot_fellowship_tracks_part1() {
-    env_logger::try_init().ok();
-    verify_binaries().expect("binary verification failed");
-
-    let network_config =
-        config::build_polkadot_with_system_parachains().expect("failed to build network config");
-    let network = initialize_network(network_config)
+    let network = spawn_network(&POLKADOT_FELLOWSHIP_NETWORK)
         .await
-        .expect("failed to spawn zombienet");
-    let ctx = MultiChainTestContext::from_network(&network)
+        .expect("zombienet spawn failed");
+    let context = TestContext::polkadot_fellowship(&network)
         .await
-        .expect("failed to build context");
+        .expect("test network not ready");
 
-    let runner = ToolRunner::new();
-    let mut errors: Vec<String> = Vec::new();
-
-    for track in &tracks::POLKADOT_FELLOWSHIP_TRACKS[..15] {
-        run_and_bail!(
-            errors,
-            format!("fell_create_{}", track.name),
-            run_polkadot_fellowship_create_test(&ctx, &runner, track)
-        );
-        run_and_bail!(
-            errors,
-            format!("fell_bynum_{}", track.name),
-            run_polkadot_fellowship_bynum_test(&ctx, &runner, track)
-        );
-    }
+    fellowship_track_sub_tests(
+        &context,
+        &POLKADOT_FELLOWSHIP_TRACKS[..POLKADOT_FELLOWSHIP_FIRST_HALF],
+    )
+    .await;
 }
 
-/// Tracks 21-33 (PromoteTo1Dan through FastPromoteTo3Dan): 9 tracks × 2 = 18 sub-tests
-/// + 6 multi-chain scenario tests = 24 sub-tests total.
 #[tokio::test(flavor = "multi_thread")]
 async fn polkadot_fellowship_tracks_part2() {
-    env_logger::try_init().ok();
-    verify_binaries().expect("binary verification failed");
-
-    let network_config =
-        config::build_polkadot_with_system_parachains().expect("failed to build network config");
-    let network = initialize_network(network_config)
+    let network = spawn_network(&POLKADOT_FELLOWSHIP_NETWORK)
         .await
-        .expect("failed to spawn zombienet");
-    let mut ctx = MultiChainTestContext::from_network(&network)
+        .expect("zombienet spawn failed");
+    let mut context = TestContext::polkadot_fellowship(&network)
         .await
-        .expect("failed to build context");
+        .expect("test network not ready");
 
-    let runner = ToolRunner::new();
-    let mut errors: Vec<String> = Vec::new();
-
-    for track in &tracks::POLKADOT_FELLOWSHIP_TRACKS[15..] {
-        run_and_bail!(
-            errors,
-            format!("fell_create_{}", track.name),
-            run_polkadot_fellowship_create_test(&ctx, &runner, track)
-        );
-        run_and_bail!(
-            errors,
-            format!("fell_bynum_{}", track.name),
-            run_polkadot_fellowship_bynum_test(&ctx, &runner, track)
-        );
-    }
-
-    // ── Multi-chain scenario tests ───────────────────────────────────────
-
-    ctx.refresh_fork_blocks()
+    fellowship_track_sub_tests(
+        &context,
+        &POLKADOT_FELLOWSHIP_TRACKS[POLKADOT_FELLOWSHIP_FIRST_HALF..],
+    )
+    .await;
+    context
+        .refresh_fork_blocks()
         .await
-        .expect("failed to refresh fork blocks");
-
-    run_and_bail!(
-        errors,
+        .expect("fork block refresh failed");
+    sub_test(
         "multichain_happy_path",
-        run_multichain_happy_path(&ctx, &runner)
-    );
-    run_and_bail!(
-        errors,
-        "fellowship_only",
-        run_fellowship_only(&ctx, &runner)
-    );
-    run_and_bail!(
-        errors,
-        "nonexistent_referendum",
-        run_nonexistent_referendum(&ctx, &runner)
-    );
-    run_and_bail!(
-        errors,
+        fellowship_then_governance(&context),
+    )
+    .await;
+    sub_test("fellowship_only", fellowship_only(&context)).await;
+    sub_test("nonexistent_referendum", nonexistent_referendum(&context)).await;
+    sub_test(
         "fellowship_create_no_preimage",
-        run_fellowship_create_no_preimage(&ctx, &runner)
-    );
-    run_and_bail!(
-        errors,
+        fellowship_without_preimage(&context),
+    )
+    .await;
+    sub_test(
         "gov_with_additional_chains",
-        run_governance_with_additional_chains(&ctx, &runner)
-    );
-    run_and_bail!(
-        errors,
+        governance_with_relay_events(&context),
+    )
+    .await;
+    sub_test(
         "fell_with_additional_chains",
-        run_fellowship_with_additional_chains(&ctx, &runner)
-    );
-    run_and_bail!(
-        errors,
-        "fell_inline_create",
-        run_fellowship_inline_create(&ctx, &runner)
-    );
-    run_and_bail!(
-        errors,
-        "fell_inline_bynum",
-        run_fellowship_inline_bynum(&ctx, &runner)
-    );
-    run_and_bail!(
-        errors,
+        fellowship_with_relay_events(&context),
+    )
+    .await;
+    sub_test("fell_inline_create", fellowship_inline_creation(&context)).await;
+    sub_test("fell_inline_bynum", fellowship_inline_by_number(&context)).await;
+    sub_test(
         "fell_core_approve_existing_member",
-        run_fellowship_core_approve_existing_member(&ctx, &runner)
-    );
+        fellowship_core_approve_existing_member(&context),
+    )
+    .await;
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Kusama Governance — all 16 tracks + scenario tests
-// ═══════════════════════════════════════════════════════════════════════════
 
 #[tokio::test(flavor = "multi_thread")]
 async fn kusama_governance_all_tracks() {
-    env_logger::try_init().ok();
-    verify_binaries().expect("binary verification failed");
-
-    let network_config =
-        config::build_kusama_with_asset_hub().expect("failed to build network config");
-    let network = initialize_network(network_config)
+    let network = spawn_network(&KUSAMA_NETWORK)
         .await
-        .expect("failed to spawn zombienet");
-    let mut ctx = KusamaTestContext::from_network(&network)
+        .expect("zombienet spawn failed");
+    let mut context = TestContext::kusama(&network)
         .await
-        .expect("failed to build context");
+        .expect("test network not ready");
 
-    let runner = ToolRunner::new();
-    let mut errors: Vec<String> = Vec::new();
-
-    // ── Per-track tests (create + by-number for each track) ──────────────
-
-    for track in tracks::GOVERNANCE_TRACKS {
-        run_and_bail!(
-            errors,
-            format!("ksm_gov_create_{}", track.name),
-            run_kusama_gov_create_test(&ctx, &runner, track)
-        );
-        run_and_bail!(
-            errors,
-            format!("ksm_gov_bynum_{}", track.name),
-            run_kusama_gov_bynum_test(&ctx, &runner, track)
-        );
-    }
-
-    // ── Scenario test ────────────────────────────────────────────────────
-
-    ctx.refresh_fork_blocks()
+    governance_track_sub_tests(&context).await;
+    context
+        .refresh_fork_blocks()
         .await
-        .expect("failed to refresh fork blocks");
-
-    run_and_bail!(
-        errors,
-        "ksm_gov_happy_path",
-        run_kusama_governance_happy_path(&ctx, &runner)
-    );
-    run_and_bail!(
-        errors,
+        .expect("fork block refresh failed");
+    sub_test("ksm_gov_happy_path", governance_happy_path(&context)).await;
+    sub_test(
         "ksm_gov_inline_create",
-        run_kusama_governance_inline_create(&ctx, &runner)
-    );
-    run_and_bail!(
-        errors,
+        governance_inline_creation(&context),
+    )
+    .await;
+    sub_test(
         "ksm_gov_inline_bynum",
-        run_kusama_governance_inline_bynum(&ctx, &runner)
-    );
+        governance_inline_by_number(&context),
+    )
+    .await;
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Kusama Fellowship — all 10 tracks + scenario tests
-// ═══════════════════════════════════════════════════════════════════════════
 
 #[tokio::test(flavor = "multi_thread")]
 async fn kusama_fellowship_all_tracks() {
-    env_logger::try_init().ok();
-    verify_binaries().expect("binary verification failed");
-
-    let network_config =
-        config::build_kusama_with_asset_hub().expect("failed to build network config");
-    let network = initialize_network(network_config)
+    let network = spawn_network(&KUSAMA_NETWORK)
         .await
-        .expect("failed to spawn zombienet");
-    let mut ctx = KusamaTestContext::from_network(&network)
+        .expect("zombienet spawn failed");
+    let mut context = TestContext::kusama(&network)
         .await
-        .expect("failed to build context");
+        .expect("test network not ready");
 
-    let runner = ToolRunner::new();
-    let mut errors: Vec<String> = Vec::new();
-
-    // ── Per-track tests (create + by-number for each track) ──────────────
-
-    for track in tracks::KUSAMA_FELLOWSHIP_TRACKS {
-        run_and_bail!(
-            errors,
-            format!("ksm_fell_create_{}", track.name),
-            run_kusama_fellowship_create_test(&ctx, &runner, track)
-        );
-        run_and_bail!(
-            errors,
-            format!("ksm_fell_bynum_{}", track.name),
-            run_kusama_fellowship_bynum_test(&ctx, &runner, track)
-        );
-    }
-
-    // ── Scenario tests ───────────────────────────────────────────────────
-
-    ctx.refresh_fork_blocks()
+    fellowship_track_sub_tests(&context, KUSAMA_FELLOWSHIP_TRACKS).await;
+    context
+        .refresh_fork_blocks()
         .await
-        .expect("failed to refresh fork blocks");
-
-    run_and_bail!(
-        errors,
+        .expect("fork block refresh failed");
+    sub_test(
         "ksm_multichain_happy_path",
-        run_kusama_multichain_happy_path(&ctx, &runner)
-    );
-    run_and_bail!(
-        errors,
-        "ksm_fellowship_on_relay",
-        run_kusama_fellowship_on_relay(&ctx, &runner)
-    );
-    run_and_bail!(
-        errors,
+        fellowship_then_governance(&context),
+    )
+    .await;
+    sub_test("ksm_fellowship_on_relay", fellowship_only(&context)).await;
+    sub_test(
         "ksm_fell_inline_create",
-        run_kusama_fellowship_inline_create(&ctx, &runner)
-    );
-    run_and_bail!(
-        errors,
+        fellowship_inline_creation(&context),
+    )
+    .await;
+    sub_test(
         "ksm_fell_inline_bynum",
-        run_kusama_fellowship_inline_bynum(&ctx, &runner)
+        fellowship_inline_by_number(&context),
+    )
+    .await;
+}
+
+async fn governance_track_creation(context: &TestContext, track: &Track) -> Result<()> {
+    let proposal = calls::remark(
+        &context.governance.client,
+        &format!("gov-track-{}-test", track.name),
+    )?;
+    let calls = governance_calls(
+        &context.governance,
+        Origin::governance_track(track),
+        &proposal,
+        ProposalReference::Lookup,
+    )?;
+    tool_output(governance_args(
+        context,
+        StepArgs::default().governance_creation(&calls),
+    ))
+    .await?
+    .check_executed()
+}
+
+async fn governance_track_by_number(context: &TestContext, track: &Track) -> Result<()> {
+    let client = &context.governance.client;
+    let proposal = calls::remark(client, &format!("bynum-gov-{}", track.name))?;
+    let calls = governance_calls(
+        &context.governance,
+        Origin::governance_track(track),
+        &proposal,
+        ProposalReference::Lookup,
+    )?;
+    let submitted = calls::submit_referendum(client, ReferendaPallet::Governance, &calls).await?;
+    tool_output(ToolArgs {
+        governance_chain_url: Some(context.governance.fork_point_at(submitted.block_number)),
+        steps: vec![StepArgs::default().governance_referendum(submitted.referendum_id)],
+        ..Default::default()
+    })
+    .await?
+    .check_executed()
+}
+
+async fn fellowship_track_creation(context: &TestContext, track: &Track) -> Result<()> {
+    let proposal = calls::remark(
+        &context.fellowship().client,
+        &format!("fellowship-track-{}-test", track.name),
+    )?;
+    let calls = fellowship_calls(context, track.name, &proposal, ProposalReference::Lookup)?;
+    tool_output(fellowship_args(
+        context,
+        StepArgs::default().fellowship_creation(&calls),
+    ))
+    .await?
+    .check_executed()
+}
+
+async fn fellowship_track_by_number(context: &TestContext, track: &Track) -> Result<()> {
+    let fellowship = context.fellowship();
+    let proposal = calls::remark(&fellowship.client, &format!("bynum-fell-{}", track.name))?;
+    let calls = fellowship_calls(context, track.name, &proposal, ProposalReference::Lookup)?;
+    let submitted =
+        calls::submit_referendum(&fellowship.client, ReferendaPallet::Fellowship, &calls).await?;
+    tool_output(ToolArgs {
+        fellowship_chain_url: Some(fellowship.fork_point_at(submitted.block_number)),
+        steps: vec![StepArgs::default().fellowship_referendum(submitted.referendum_id)],
+        ..Default::default()
+    })
+    .await?
+    .check_executed()
+}
+
+async fn governance_happy_path(context: &TestContext) -> Result<()> {
+    let calls = authorize_upgrade_calls(context)?;
+    tool_output(governance_args(
+        context,
+        StepArgs::default().governance_creation(&calls),
+    ))
+    .await?
+    .check_executed()
+}
+
+async fn governance_dispatch_failure(context: &TestContext) -> Result<()> {
+    let calls = ReferendumCalls {
+        submit: calls::submit_call(
+            &context.governance.client,
+            ReferendaPallet::Governance,
+            ROOT,
+            lookup_proposal([0; 32], 999),
+        )?,
+        ..authorize_upgrade_calls(context)?
+    };
+    let output = tool_output(governance_args(
+        context,
+        StepArgs::default().governance_creation(&calls),
+    ))
+    .await?;
+    output.check_failure()?;
+    output.check_stdout_contains("execution failed")
+}
+
+async fn governance_pre_call(context: &TestContext, origin: &str) -> Result<()> {
+    let calls = authorize_upgrade_calls(context)?;
+    let pre_call = calls::remark(&context.governance.client, "pre-call-test")?;
+    let output = tool_output(governance_args(
+        context,
+        StepArgs::default()
+            .governance_creation(&calls)
+            .pre_call(format!("0x{}", hex::encode(pre_call)), origin),
+    ))
+    .await?;
+    output.check_executed()?;
+    output.check_stdout_contains("Executing Pre-Call")
+}
+
+async fn governance_pre_call_invalid_origin(context: &TestContext) -> Result<()> {
+    let calls = authorize_upgrade_calls(context)?;
+    let pre_call = calls::remark(&context.governance.client, "pre-call-test")?;
+    let output = tool_output(governance_args(
+        context,
+        StepArgs::default()
+            .governance_creation(&calls)
+            .pre_call(format!("0x{}", hex::encode(pre_call)), "NonExistentOrigin"),
+    ))
+    .await?;
+    output.check_failure()?;
+    output.check_output_contains("unknown origin")
+}
+
+async fn governance_remark_proposal(context: &TestContext) -> Result<()> {
+    let proposal = calls::remark(&context.governance.client, "integration-test-remark")?;
+    let calls = governance_calls(
+        &context.governance,
+        ROOT,
+        &proposal,
+        ProposalReference::Lookup,
+    )?;
+    tool_output(governance_args(
+        context,
+        StepArgs::default().governance_creation(&calls),
+    ))
+    .await?
+    .check_executed()
+}
+
+async fn governance_invalid_call_data(context: &TestContext) -> Result<()> {
+    let calls = ReferendumCalls {
+        preimage: None,
+        submit: "0xDEADBEEFCAFE".to_string(),
+    };
+    let output = tool_output(governance_args(
+        context,
+        StepArgs::default().governance_creation(&calls),
+    ))
+    .await?;
+    output.check_failure()?;
+    output.check_stdout_contains("Invalid referendum submit call data")
+}
+
+async fn governance_without_preimage(context: &TestContext) -> Result<()> {
+    let calls = ReferendumCalls {
+        preimage: None,
+        ..authorize_upgrade_calls(context)?
+    };
+    let output = tool_output(governance_args(
+        context,
+        StepArgs::default().governance_creation(&calls),
+    ))
+    .await?;
+    output.check_failure()?;
+    output.check_stdout_contains("execution failed")
+}
+
+async fn governance_inline_creation(context: &TestContext) -> Result<()> {
+    let proposal = calls::remark(&context.governance.client, "inline-gov-test")?;
+    let calls = governance_calls(
+        &context.governance,
+        ROOT,
+        &proposal,
+        ProposalReference::Inline,
+    )?;
+    tool_output(governance_args(
+        context,
+        StepArgs::default().governance_creation(&calls),
+    ))
+    .await?
+    .check_executed()
+}
+
+async fn governance_inline_by_number(context: &TestContext) -> Result<()> {
+    let client = &context.governance.client;
+    let proposal = calls::remark(client, "bynum-inline-gov")?;
+    let calls = governance_calls(
+        &context.governance,
+        ROOT,
+        &proposal,
+        ProposalReference::Inline,
+    )?;
+    let submitted = calls::submit_referendum(client, ReferendaPallet::Governance, &calls).await?;
+    tool_output(ToolArgs {
+        governance_chain_url: Some(context.governance.fork_point_at(submitted.block_number)),
+        steps: vec![StepArgs::default().governance_referendum(submitted.referendum_id)],
+        ..Default::default()
+    })
+    .await?
+    .check_executed()
+}
+
+async fn governance_steps_with_post_test(context: &TestContext) -> Result<()> {
+    let client = &context.governance.client;
+    let first = governance_calls(
+        &context.governance,
+        ROOT,
+        &calls::remark(client, "first-step-remark")?,
+        ProposalReference::Lookup,
+    )?;
+    let second = governance_calls(
+        &context.governance,
+        ROOT,
+        &calls::remark(client, "second-step-remark")?,
+        ProposalReference::Inline,
+    )?;
+    let output = tool_output(ToolArgs {
+        governance_chain_url: Some(context.governance.fork_point()),
+        steps: vec![
+            StepArgs::default()
+                .governance_creation(&first)
+                .post_test("dump-chain-events", Some(r#"{"all":true,"blocks":1}"#)),
+            StepArgs::default().governance_creation(&second),
+        ],
+        ..Default::default()
+    })
+    .await?;
+    output.check_success()?;
+    output.check_stdout_contains("Step 2/2")?;
+    output.check_stdout_contains("Running post-test")?;
+    anyhow::ensure!(
+        output.stdout.matches("executed successfully").count() == 2,
+        "the run of two steps does not report two executed referenda\n{}",
+        output.stdout
     );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Sub-test implementations — Polkadot Governance (per-track create)
-// ═══════════════════════════════════════════════════════════════════════════
-
-async fn run_gov_create_test(
-    ctx: &GovernanceTestContext,
-    runner: &ToolRunner,
-    track: &tracks::GovernanceTrack,
-) -> Result<()> {
-    log::info!(">>> gov_create_{} (track_id={})", track.name, track.id);
-
-    let (preimage_hex, submit_hex) =
-        call_data::generate_governance_track_call_data(&ctx.ah_client, track, "Origins").await?;
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(ctx.governance_url_with_block()),
-            call_to_create_governance_referendum: Some(submit_hex),
-            call_to_note_preimage_for_governance_referendum: Some(preimage_hex),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-
     Ok(())
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Sub-test implementations — Polkadot Governance (per-track by-number)
-// ═══════════════════════════════════════════════════════════════════════════
+async fn governance_upgrade_with_post_test(context: &TestContext) -> Result<()> {
+    let runtime = std::path::PathBuf::from(runtime_path(&POLKADOT_ASSET_HUB.chain)?);
+    let code_hash = sp_crypto_hashing::blake2_256(&std::fs::read(&runtime)?);
+    let proposal = calls::authorize_upgrade_without_checks(&context.governance.client, code_hash)?;
+    let calls = governance_calls(
+        &context.governance,
+        ROOT,
+        &proposal,
+        ProposalReference::Lookup,
+    )?;
+    let post_test_args = serde_json::json!({
+        "wasmDir": runtime.parent().map(|directory| directory.display().to_string()),
+        "blocksAfterUpgrade": 2,
+    })
+    .to_string();
+    let output = tool_output(governance_args(
+        context,
+        StepArgs::default()
+            .governance_creation(&calls)
+            .post_test("apply-authorized-upgrade", Some(&post_test_args)),
+    ))
+    .await?;
+    output.check_executed()?;
+    output.check_stdout_contains("hash verified")?;
+    output.check_stdout_contains(":code hash == authorized hash")?;
+    output.check_stdout_contains("1/1 chains upgraded")
+}
 
-async fn run_gov_bynum_test(
-    ctx: &GovernanceTestContext,
-    runner: &ToolRunner,
-    track: &tracks::GovernanceTrack,
-) -> Result<()> {
-    log::info!(">>> gov_bynum_{} (track_id={})", track.name, track.id);
+async fn fellowship_then_governance(context: &TestContext) -> Result<()> {
+    let governance = authorize_upgrade_calls(context)?;
+    let fellowship = fellows_remark_calls(context, "integration-test")?;
+    let output = tool_output(ToolArgs {
+        governance_chain_url: Some(context.governance.fork_point()),
+        fellowship_chain_url: Some(context.fellowship().fork_point()),
+        additional_chains: context.relay.as_ref().map(ChainEndpoint::fork_point),
+        steps: vec![StepArgs::default()
+            .fellowship_creation(&fellowship)
+            .governance_creation(&governance)],
+        ..Default::default()
+    })
+    .await?;
+    output.check_executed()?;
+    if context.relay.is_some() {
+        output.check_stdout_contains("Additional Chain Events")?;
+        output.check_stdout_contains("Block #")?;
+    }
+    Ok(())
+}
 
+async fn fellowship_only(context: &TestContext) -> Result<()> {
+    let calls = fellows_remark_calls(context, "fellowship-only-test")?;
+    tool_output(fellowship_args(
+        context,
+        StepArgs::default().fellowship_creation(&calls),
+    ))
+    .await?
+    .check_executed()
+}
+
+async fn nonexistent_referendum(context: &TestContext) -> Result<()> {
+    let output = tool_output(governance_args(
+        context,
+        StepArgs::default().governance_referendum(999),
+    ))
+    .await?;
+    output.check_failure()?;
+    output.check_stdout_contains("Referendum #999 not found")
+}
+
+async fn fellowship_without_preimage(context: &TestContext) -> Result<()> {
+    let calls = ReferendumCalls {
+        preimage: None,
+        ..fellows_remark_calls(context, "fellowship-only-test")?
+    };
+    let output = tool_output(fellowship_args(
+        context,
+        StepArgs::default().fellowship_creation(&calls),
+    ))
+    .await?;
+    output.check_failure()?;
+    output.check_stdout_contains("execution failed")
+}
+
+async fn governance_with_relay_events(context: &TestContext) -> Result<()> {
+    let calls = authorize_upgrade_calls(context)?;
+    let output = tool_output(ToolArgs {
+        additional_chains: Some(context.relay().fork_point()),
+        ..governance_args(context, StepArgs::default().governance_creation(&calls))
+    })
+    .await?;
+    output.check_executed()?;
+    output.check_stdout_contains("Additional Chain Events")?;
+    output.check_stdout_contains("Block #")
+}
+
+async fn fellowship_with_relay_events(context: &TestContext) -> Result<()> {
+    let calls = fellows_remark_calls(context, "fellowship-only-test")?;
+    let output = tool_output(ToolArgs {
+        additional_chains: Some(context.relay().fork_point()),
+        ..fellowship_args(context, StepArgs::default().fellowship_creation(&calls))
+    })
+    .await?;
+    output.check_executed()?;
+    output.check_stdout_contains("Additional Chain Events")?;
+    output.check_stdout_contains("Block #")
+}
+
+async fn fellowship_inline_creation(context: &TestContext) -> Result<()> {
+    let proposal = calls::remark(&context.fellowship().client, "inline-fell-test")?;
+    let calls = fellowship_calls(context, "Fellows", &proposal, ProposalReference::Inline)?;
+    tool_output(fellowship_args(
+        context,
+        StepArgs::default().fellowship_creation(&calls),
+    ))
+    .await?
+    .check_executed()
+}
+
+async fn fellowship_inline_by_number(context: &TestContext) -> Result<()> {
+    let fellowship = context.fellowship();
+    let proposal = calls::remark(&fellowship.client, "bynum-inline-fell")?;
+    let calls = fellowship_calls(context, "Fellows", &proposal, ProposalReference::Inline)?;
     let submitted =
-        extrinsic_submitter::submit_governance_referendum(&ctx.ah_client, track, "Origins").await?;
-
-    let fork_url = format!("{},{}", ctx.asset_hub_ws_uri, submitted.block_number);
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(fork_url),
-            referendum: Some(submitted.referendum_id.to_string()),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-
-    Ok(())
+        calls::submit_referendum(&fellowship.client, ReferendaPallet::Fellowship, &calls).await?;
+    tool_output(ToolArgs {
+        fellowship_chain_url: Some(fellowship.fork_point_at(submitted.block_number)),
+        steps: vec![StepArgs::default().fellowship_referendum(submitted.referendum_id)],
+        ..Default::default()
+    })
+    .await?
+    .check_executed()
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Sub-test implementations — Polkadot Governance (scenarios)
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Happy path: create and simulate a System.authorize_upgrade referendum.
-async fn run_governance_happy_path(ctx: &GovernanceTestContext, runner: &ToolRunner) -> Result<()> {
-    log::info!("[gov_happy_path] Starting...");
-    let (preimage_hex, gov_submit_hex) =
-        call_data::generate_governance_call_data(&ctx.ah_client).await?;
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(ctx.governance_url_with_block()),
-            call_to_create_governance_referendum: Some(gov_submit_hex),
-            call_to_note_preimage_for_governance_referendum: Some(preimage_hex),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-    Ok(())
-}
-
-/// Negative: wrong preimage hash causes dispatch failure.
-async fn run_governance_dispatch_failure(
-    ctx: &GovernanceTestContext,
-    runner: &ToolRunner,
-) -> Result<()> {
-    log::info!("[gov_dispatch_failure] Starting...");
-    let (preimage_hex, gov_submit_hex) =
-        call_data::generate_governance_call_data_with_wrong_preimage(&ctx.ah_client).await?;
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(ctx.governance_url_with_block()),
-            call_to_create_governance_referendum: Some(gov_submit_hex),
-            call_to_note_preimage_for_governance_referendum: Some(preimage_hex),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_failure()?;
-    output.check_stdout_contains("execution failed")?;
-    Ok(())
-}
-
-/// Pre-call: execute a System.remark via --pre-call before the main referendum.
-async fn run_governance_with_pre_call(
-    ctx: &GovernanceTestContext,
-    runner: &ToolRunner,
-) -> Result<()> {
-    log::info!("[gov_pre_call_remark] Starting...");
-    let (preimage_hex, gov_submit_hex) =
-        call_data::generate_governance_call_data(&ctx.ah_client).await?;
-    let pre_call_hex = call_data::generate_pre_call_remark_hex(&ctx.ah_client).await?;
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(ctx.governance_url_with_block()),
-            call_to_create_governance_referendum: Some(gov_submit_hex),
-            call_to_note_preimage_for_governance_referendum: Some(preimage_hex),
-            pre_call: Some(pre_call_hex),
-            pre_origin: Some("Root".to_string()),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("Executing Pre-Call")?;
-    output.check_stdout_contains("executed successfully")?;
-    Ok(())
-}
-
-/// Remark proposal: use System.remark instead of System.authorize_upgrade.
-async fn run_governance_remark_proposal(
-    ctx: &GovernanceTestContext,
-    runner: &ToolRunner,
-) -> Result<()> {
-    log::info!("[gov_remark_proposal] Starting...");
-    let (preimage_hex, gov_submit_hex) =
-        call_data::generate_remark_referendum_call_data(&ctx.ah_client).await?;
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(ctx.governance_url_with_block()),
-            call_to_create_governance_referendum: Some(gov_submit_hex),
-            call_to_note_preimage_for_governance_referendum: Some(preimage_hex),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-    Ok(())
-}
-
-/// Invalid hex: pass garbage call data, expect early failure.
-async fn run_governance_invalid_hex(
-    ctx: &GovernanceTestContext,
-    runner: &ToolRunner,
-) -> Result<()> {
-    log::info!("[gov_invalid_hex] Starting...");
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(ctx.governance_url_with_block()),
-            call_to_create_governance_referendum: Some("0xDEADBEEFCAFE".to_string()),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_failure()?;
-    Ok(())
-}
-
-/// Pre-call with non-Root origin: execute a System.remark via --pre-call with Treasurer origin.
-async fn run_governance_pre_call_non_root_origin(
-    ctx: &GovernanceTestContext,
-    runner: &ToolRunner,
-) -> Result<()> {
-    log::info!("[gov_pre_call_non_root_origin] Starting...");
-    let (preimage_hex, gov_submit_hex) =
-        call_data::generate_governance_call_data(&ctx.ah_client).await?;
-    let pre_call_hex = call_data::generate_pre_call_remark_hex(&ctx.ah_client).await?;
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(ctx.governance_url_with_block()),
-            call_to_create_governance_referendum: Some(gov_submit_hex),
-            call_to_note_preimage_for_governance_referendum: Some(preimage_hex),
-            pre_call: Some(pre_call_hex),
-            pre_origin: Some("Treasurer".to_string()),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("Executing Pre-Call")?;
-    output.check_stdout_contains("executed successfully")?;
-    Ok(())
-}
-
-/// Pre-call with invalid origin: should fail.
-async fn run_governance_pre_call_invalid_origin(
-    ctx: &GovernanceTestContext,
-    runner: &ToolRunner,
-) -> Result<()> {
-    log::info!("[gov_pre_call_invalid_origin] Starting...");
-    let (preimage_hex, gov_submit_hex) =
-        call_data::generate_governance_call_data(&ctx.ah_client).await?;
-    let pre_call_hex = call_data::generate_pre_call_remark_hex(&ctx.ah_client).await?;
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(ctx.governance_url_with_block()),
-            call_to_create_governance_referendum: Some(gov_submit_hex),
-            call_to_note_preimage_for_governance_referendum: Some(preimage_hex),
-            pre_call: Some(pre_call_hex),
-            pre_origin: Some("NonExistentOrigin".to_string()),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_failure()?;
-    output.check_any_output_contains("unknown origin")?;
-    Ok(())
-}
-
-/// Create governance referendum without noting preimage — execution should fail.
-async fn run_governance_create_no_preimage(
-    ctx: &GovernanceTestContext,
-    runner: &ToolRunner,
-) -> Result<()> {
-    log::info!("[gov_create_no_preimage] Starting...");
-    let (_preimage_hex, gov_submit_hex) =
-        call_data::generate_governance_call_data(&ctx.ah_client).await?;
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(ctx.governance_url_with_block()),
-            call_to_create_governance_referendum: Some(gov_submit_hex),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_failure()?;
-    output.check_stdout_contains("execution failed")?;
-    Ok(())
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Sub-test implementations — Polkadot Governance (inline proposals)
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Inline proposal create: submit a governance referendum with Inline (no preimage).
-async fn run_governance_inline_create(
-    ctx: &GovernanceTestContext,
-    runner: &ToolRunner,
-) -> Result<()> {
-    log::info!("[gov_inline_create] Starting...");
-    let gov_submit_hex =
-        call_data::generate_governance_inline_call_data(&ctx.ah_client).await?;
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(ctx.governance_url_with_block()),
-            call_to_create_governance_referendum: Some(gov_submit_hex),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-    Ok(())
-}
-
-/// Inline proposal by-number: submit inline referendum on zombienet, then test with --referendum.
-async fn run_governance_inline_bynum(
-    ctx: &GovernanceTestContext,
-    runner: &ToolRunner,
-) -> Result<()> {
-    log::info!("[gov_inline_bynum] Starting...");
-    let submitted =
-        extrinsic_submitter::submit_governance_referendum_inline(&ctx.ah_client).await?;
-
-    let fork_url = format!("{},{}", ctx.asset_hub_ws_uri, submitted.block_number);
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(fork_url),
-            referendum: Some(submitted.referendum_id.to_string()),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-    Ok(())
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Sub-test implementations — Polkadot Fellowship (per-track create)
-// ═══════════════════════════════════════════════════════════════════════════
-
-async fn run_polkadot_fellowship_create_test(
-    ctx: &MultiChainTestContext,
-    runner: &ToolRunner,
-    track: &tracks::FellowshipTrack,
-) -> Result<()> {
-    log::info!(">>> fell_create_{} (track_id={})", track.name, track.id);
-
-    let (preimage_hex, submit_hex) = call_data::generate_fellowship_track_call_data(
-        &ctx.coll_client,
-        track,
-        "FellowshipOrigins",
-    )
-    .await?;
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(ctx.governance_url_with_block()),
-            fellowship_chain_url: Some(ctx.fellowship_url_with_block()),
-            call_to_create_fellowship_referendum: Some(submit_hex),
-            call_to_note_preimage_for_fellowship_referendum: Some(preimage_hex),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-
-    Ok(())
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Sub-test implementations — Polkadot Fellowship (per-track by-number)
-// ═══════════════════════════════════════════════════════════════════════════
-
-async fn run_polkadot_fellowship_bynum_test(
-    ctx: &MultiChainTestContext,
-    runner: &ToolRunner,
-    track: &tracks::FellowshipTrack,
-) -> Result<()> {
-    log::info!(">>> fell_bynum_{} (track_id={})", track.name, track.id);
-
-    let submitted = extrinsic_submitter::submit_fellowship_referendum(
-        &ctx.coll_client,
-        track,
-        "FellowshipOrigins",
-    )
-    .await?;
-
-    let fellowship_fork_url = format!("{},{}", ctx.collectives_ws_uri, submitted.block_number);
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(ctx.governance_url_with_block()),
-            fellowship_chain_url: Some(fellowship_fork_url),
-            fellowship: Some(submitted.referendum_id.to_string()),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-
-    Ok(())
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Sub-test implementations — Polkadot Multi-chain scenarios
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Multi-chain happy path: governance + fellowship referenda across AH and Collectives.
-/// Also verifies relay chain events are displayed via --additional-chains.
-async fn run_multichain_happy_path(ctx: &MultiChainTestContext, runner: &ToolRunner) -> Result<()> {
-    log::info!("[multichain_happy_path] Starting...");
-    let (gov_preimage_hex, gov_submit_hex, fellowship_preimage_hex, fellowship_submit_hex) =
-        call_data::generate_relay_upgrade_call_data(
-            &ctx.ah_client,
-            &ctx.coll_client,
-            "FellowshipOrigins",
-        )
-        .await?;
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(ctx.governance_url_with_block()),
-            fellowship_chain_url: Some(ctx.fellowship_url_with_block()),
-            additional_chains: Some(ctx.relay_url_with_block()),
-            call_to_create_governance_referendum: Some(gov_submit_hex),
-            call_to_note_preimage_for_governance_referendum: Some(gov_preimage_hex),
-            call_to_create_fellowship_referendum: Some(fellowship_submit_hex),
-            call_to_note_preimage_for_fellowship_referendum: Some(fellowship_preimage_hex),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-    // Verify relay chain was monitored as an additional chain
-    output.check_stdout_contains("Additional Chain Events")?;
-    output.check_stdout_contains("Block #")?;
-    Ok(())
-}
-
-/// Fellowship-only: create and simulate a fellowship referendum without governance.
-async fn run_fellowship_only(ctx: &MultiChainTestContext, runner: &ToolRunner) -> Result<()> {
-    log::info!("[fellowship_only] Starting...");
-    let (preimage_hex, submit_hex) =
-        call_data::generate_fellowship_only_call_data(&ctx.coll_client, "FellowshipOrigins")
-            .await?;
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            fellowship_chain_url: Some(ctx.fellowship_url_with_block()),
-            call_to_create_fellowship_referendum: Some(submit_hex),
-            call_to_note_preimage_for_fellowship_referendum: Some(preimage_hex),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-    Ok(())
-}
-
-/// Governance-only + additional chains: governance referendum on AH with relay as additional chain.
-async fn run_governance_with_additional_chains(
-    ctx: &MultiChainTestContext,
-    runner: &ToolRunner,
-) -> Result<()> {
-    log::info!("[gov_with_additional_chains] Starting...");
-    let (preimage_hex, gov_submit_hex) =
-        call_data::generate_governance_call_data(&ctx.ah_client).await?;
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(ctx.governance_url_with_block()),
-            additional_chains: Some(ctx.relay_url_with_block()),
-            call_to_create_governance_referendum: Some(gov_submit_hex),
-            call_to_note_preimage_for_governance_referendum: Some(preimage_hex),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-    output.check_stdout_contains("Additional Chain Events")?;
-    output.check_stdout_contains("Block #")?;
-    Ok(())
-}
-
-/// Fellowship-only + additional chains: fellowship referendum on Collectives with relay as additional chain.
-async fn run_fellowship_with_additional_chains(
-    ctx: &MultiChainTestContext,
-    runner: &ToolRunner,
-) -> Result<()> {
-    log::info!("[fell_with_additional_chains] Starting...");
-    let (preimage_hex, submit_hex) =
-        call_data::generate_fellowship_only_call_data(&ctx.coll_client, "FellowshipOrigins")
-            .await?;
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            fellowship_chain_url: Some(ctx.fellowship_url_with_block()),
-            additional_chains: Some(ctx.relay_url_with_block()),
-            call_to_create_fellowship_referendum: Some(submit_hex),
-            call_to_note_preimage_for_fellowship_referendum: Some(preimage_hex),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-    output.check_stdout_contains("Additional Chain Events")?;
-    output.check_stdout_contains("Block #")?;
-    Ok(())
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Sub-test implementations — Polkadot Fellowship (inline proposals)
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Inline fellowship create: submit a fellowship referendum with Inline (no preimage).
-async fn run_fellowship_inline_create(
-    ctx: &MultiChainTestContext,
-    runner: &ToolRunner,
-) -> Result<()> {
-    log::info!("[fell_inline_create] Starting...");
-    let submit_hex =
-        call_data::generate_fellowship_inline_call_data(&ctx.coll_client, "FellowshipOrigins")
-            .await?;
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            fellowship_chain_url: Some(ctx.fellowship_url_with_block()),
-            call_to_create_fellowship_referendum: Some(submit_hex),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-    Ok(())
-}
-
-/// Inline fellowship by-number: submit inline referendum on zombienet, then test with --fellowship.
-async fn run_fellowship_inline_bynum(
-    ctx: &MultiChainTestContext,
-    runner: &ToolRunner,
-) -> Result<()> {
-    log::info!("[fell_inline_bynum] Starting...");
-    let submitted = extrinsic_submitter::submit_fellowship_referendum_inline(
-        &ctx.coll_client,
-        "FellowshipOrigins",
-    )
-    .await?;
-
-    let fellowship_fork_url = format!("{},{}", ctx.collectives_ws_uri, submitted.block_number);
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(ctx.governance_url_with_block()),
-            fellowship_chain_url: Some(fellowship_fork_url),
-            fellowship: Some(submitted.referendum_id.to_string()),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-    Ok(())
-}
-
-/// Regression: a fellowship referendum whose proposal calls
-/// `FellowshipCore::approve(Bob, 2)` on a *pre-existing* fellow.
-///
-/// `FellowshipCore::approve` reads Bob's rank from `FellowshipCollective`. The tool's
-/// storage injection must register Alice (the submitter) *additively*, leaving Bob's
-/// collective membership untouched. The earlier injection wiped all collective members
-/// before re-adding only Alice, which desynced `FellowshipCollective` from
-/// `FellowshipCore` and made the proposal fail at enactment with `FellowshipCore::Unranked`.
-///
-/// Bob is seeded into genesis (both pallets) by `raw_storage::fellowship_collective_override`.
-async fn run_fellowship_core_approve_existing_member(
-    ctx: &MultiChainTestContext,
-    runner: &ToolRunner,
-) -> Result<()> {
-    log::info!("[fell_core_approve_existing_member] Starting...");
-
-    // RetainAt2Dan is the track/origin authorized to approve a rank-2 member.
-    let submit_hex = call_data::generate_fellowship_core_approve_call_data(
-        &ctx.coll_client,
-        raw_storage::BOB_ACCOUNT_ID,
-        raw_storage::EXISTING_FELLOW_RANK,
+async fn fellowship_core_approve_existing_member(context: &TestContext) -> Result<()> {
+    let proposal = calls::fellowship_core_approve(
+        &context.fellowship().client,
+        bob_account(),
+        EXISTING_FELLOW_RANK,
+    )?;
+    let calls = fellowship_calls(
+        context,
         "RetainAt2Dan",
-        "FellowshipOrigins",
-    )
+        &proposal,
+        ProposalReference::Inline,
+    )?;
+    let output = tool_output(fellowship_args(
+        context,
+        StepArgs::default().fellowship_creation(&calls),
+    ))
     .await?;
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            fellowship_chain_url: Some(ctx.fellowship_url_with_block()),
-            call_to_create_fellowship_referendum: Some(submit_hex),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    // With the additive injection Bob stays ranked, so approve succeeds and the
-    // referendum executes. With the old `$removePrefix` wipe this fails with
-    // `FellowshipCore.Unranked`.
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-    output.check_stdout_does_not_contain("Unranked")?;
-    Ok(())
-}
-
-/// Non-existent referendum: pass --referendum 999 which doesn't exist.
-async fn run_nonexistent_referendum(
-    ctx: &MultiChainTestContext,
-    runner: &ToolRunner,
-) -> Result<()> {
-    log::info!("[nonexistent_referendum] Starting...");
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(ctx.governance_url_with_block()),
-            referendum: Some("999".to_string()),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_failure()?;
-    Ok(())
-}
-
-/// Create fellowship referendum without noting preimage — execution should fail.
-async fn run_fellowship_create_no_preimage(
-    ctx: &MultiChainTestContext,
-    runner: &ToolRunner,
-) -> Result<()> {
-    log::info!("[fellowship_create_no_preimage] Starting...");
-    let (_preimage_hex, submit_hex) =
-        call_data::generate_fellowship_only_call_data(&ctx.coll_client, "FellowshipOrigins")
-            .await?;
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            fellowship_chain_url: Some(ctx.fellowship_url_with_block()),
-            call_to_create_fellowship_referendum: Some(submit_hex),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_failure()?;
-    output.check_stdout_contains("execution failed")?;
-    Ok(())
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Sub-test implementations — Kusama Governance (per-track create)
-// ═══════════════════════════════════════════════════════════════════════════
-
-async fn run_kusama_gov_create_test(
-    ctx: &KusamaTestContext,
-    runner: &ToolRunner,
-    track: &tracks::GovernanceTrack,
-) -> Result<()> {
-    log::info!(">>> ksm_gov_create_{} (track_id={})", track.name, track.id);
-
-    let (preimage_hex, submit_hex) =
-        call_data::generate_governance_track_call_data(&ctx.ah_client, track, "Origins").await?;
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(ctx.governance_url_with_block()),
-            call_to_create_governance_referendum: Some(submit_hex),
-            call_to_note_preimage_for_governance_referendum: Some(preimage_hex),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-
-    Ok(())
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Sub-test implementations — Kusama Governance (per-track by-number)
-// ═══════════════════════════════════════════════════════════════════════════
-
-async fn run_kusama_gov_bynum_test(
-    ctx: &KusamaTestContext,
-    runner: &ToolRunner,
-    track: &tracks::GovernanceTrack,
-) -> Result<()> {
-    log::info!(">>> ksm_gov_bynum_{} (track_id={})", track.name, track.id);
-
-    let submitted =
-        extrinsic_submitter::submit_governance_referendum(&ctx.ah_client, track, "Origins").await?;
-
-    let fork_url = format!("{},{}", ctx.asset_hub_ws_uri, submitted.block_number);
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(fork_url),
-            referendum: Some(submitted.referendum_id.to_string()),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-
-    Ok(())
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Sub-test implementations — Kusama Governance (scenarios)
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Kusama governance happy path: System.authorize_upgrade referendum on Kusama AH.
-async fn run_kusama_governance_happy_path(
-    ctx: &KusamaTestContext,
-    runner: &ToolRunner,
-) -> Result<()> {
-    log::info!("[ksm_gov_happy_path] Starting...");
-    let (preimage_hex, gov_submit_hex) =
-        call_data::generate_governance_call_data(&ctx.ah_client).await?;
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(ctx.governance_url_with_block()),
-            call_to_create_governance_referendum: Some(gov_submit_hex),
-            call_to_note_preimage_for_governance_referendum: Some(preimage_hex),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-    Ok(())
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Sub-test implementations — Kusama Governance (inline proposals)
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Kusama governance inline create: submit with Inline proposal (no preimage).
-async fn run_kusama_governance_inline_create(
-    ctx: &KusamaTestContext,
-    runner: &ToolRunner,
-) -> Result<()> {
-    log::info!("[ksm_gov_inline_create] Starting...");
-    let gov_submit_hex =
-        call_data::generate_governance_inline_call_data(&ctx.ah_client).await?;
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(ctx.governance_url_with_block()),
-            call_to_create_governance_referendum: Some(gov_submit_hex),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-    Ok(())
-}
-
-/// Kusama governance inline by-number: submit inline referendum, then test with --referendum.
-async fn run_kusama_governance_inline_bynum(
-    ctx: &KusamaTestContext,
-    runner: &ToolRunner,
-) -> Result<()> {
-    log::info!("[ksm_gov_inline_bynum] Starting...");
-    let submitted =
-        extrinsic_submitter::submit_governance_referendum_inline(&ctx.ah_client).await?;
-
-    let fork_url = format!("{},{}", ctx.asset_hub_ws_uri, submitted.block_number);
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(fork_url),
-            referendum: Some(submitted.referendum_id.to_string()),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-    Ok(())
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Sub-test implementations — Kusama Fellowship (per-track create)
-// ═══════════════════════════════════════════════════════════════════════════
-
-async fn run_kusama_fellowship_create_test(
-    ctx: &KusamaTestContext,
-    runner: &ToolRunner,
-    track: &tracks::FellowshipTrack,
-) -> Result<()> {
-    log::info!(">>> ksm_fell_create_{} (track_id={})", track.name, track.id);
-
-    // On Kusama, fellowship is on the relay chain; origin variant is "Origins"
-    let (preimage_hex, submit_hex) =
-        call_data::generate_fellowship_track_call_data(&ctx.relay_client, track, "Origins").await?;
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(ctx.governance_url_with_block()),
-            fellowship_chain_url: Some(ctx.fellowship_url_with_block()),
-            call_to_create_fellowship_referendum: Some(submit_hex),
-            call_to_note_preimage_for_fellowship_referendum: Some(preimage_hex),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-
-    Ok(())
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Sub-test implementations — Kusama Fellowship (per-track by-number)
-// ═══════════════════════════════════════════════════════════════════════════
-
-async fn run_kusama_fellowship_bynum_test(
-    ctx: &KusamaTestContext,
-    runner: &ToolRunner,
-    track: &tracks::FellowshipTrack,
-) -> Result<()> {
-    log::info!(">>> ksm_fell_bynum_{} (track_id={})", track.name, track.id);
-
-    // On Kusama, fellowship is on the relay chain; origin variant is "Origins"
-    let submitted =
-        extrinsic_submitter::submit_fellowship_referendum(&ctx.relay_client, track, "Origins")
-            .await?;
-
-    let fellowship_fork_url = format!("{},{}", ctx.relay_ws_uri, submitted.block_number);
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(ctx.governance_url_with_block()),
-            fellowship_chain_url: Some(fellowship_fork_url),
-            fellowship: Some(submitted.referendum_id.to_string()),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-
-    Ok(())
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Sub-test implementations — Kusama Fellowship (scenarios)
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Kusama multichain happy path: governance on AH + fellowship on relay.
-async fn run_kusama_multichain_happy_path(
-    ctx: &KusamaTestContext,
-    runner: &ToolRunner,
-) -> Result<()> {
-    log::info!("[ksm_multichain_happy_path] Starting...");
-    let (gov_preimage_hex, gov_submit_hex, fellowship_preimage_hex, fellowship_submit_hex) =
-        call_data::generate_relay_upgrade_call_data(&ctx.ah_client, &ctx.relay_client, "Origins")
-            .await?;
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(ctx.governance_url_with_block()),
-            fellowship_chain_url: Some(ctx.fellowship_url_with_block()),
-            call_to_create_governance_referendum: Some(gov_submit_hex),
-            call_to_note_preimage_for_governance_referendum: Some(gov_preimage_hex),
-            call_to_create_fellowship_referendum: Some(fellowship_submit_hex),
-            call_to_note_preimage_for_fellowship_referendum: Some(fellowship_preimage_hex),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-    Ok(())
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Sub-test implementations — Kusama Fellowship (inline proposals)
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Kusama fellowship inline create: submit with Inline proposal (no preimage).
-async fn run_kusama_fellowship_inline_create(
-    ctx: &KusamaTestContext,
-    runner: &ToolRunner,
-) -> Result<()> {
-    log::info!("[ksm_fell_inline_create] Starting...");
-    let submit_hex =
-        call_data::generate_fellowship_inline_call_data(&ctx.relay_client, "Origins").await?;
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            fellowship_chain_url: Some(ctx.fellowship_url_with_block()),
-            call_to_create_fellowship_referendum: Some(submit_hex),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-    Ok(())
-}
-
-/// Kusama fellowship inline by-number: submit inline referendum, then test with --fellowship.
-async fn run_kusama_fellowship_inline_bynum(
-    ctx: &KusamaTestContext,
-    runner: &ToolRunner,
-) -> Result<()> {
-    log::info!("[ksm_fell_inline_bynum] Starting...");
-    let submitted =
-        extrinsic_submitter::submit_fellowship_referendum_inline(&ctx.relay_client, "Origins")
-            .await?;
-
-    let fellowship_fork_url = format!("{},{}", ctx.relay_ws_uri, submitted.block_number);
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            governance_chain_url: Some(ctx.governance_url_with_block()),
-            fellowship_chain_url: Some(fellowship_fork_url),
-            fellowship: Some(submitted.referendum_id.to_string()),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-    Ok(())
-}
-
-/// Kusama fellowship-only: create and simulate a fellowship referendum on the relay.
-async fn run_kusama_fellowship_on_relay(
-    ctx: &KusamaTestContext,
-    runner: &ToolRunner,
-) -> Result<()> {
-    log::info!("[ksm_fellowship_on_relay] Starting...");
-    let (preimage_hex, submit_hex) =
-        call_data::generate_fellowship_only_call_data(&ctx.relay_client, "Origins").await?;
-
-    let port = port_allocator::next_port();
-    let output = runner
-        .run_test_referendum(ToolArgs {
-            fellowship_chain_url: Some(ctx.fellowship_url_with_block()),
-            call_to_create_fellowship_referendum: Some(submit_hex),
-            call_to_note_preimage_for_fellowship_referendum: Some(preimage_hex),
-            port: Some(port),
-            verbose: true,
-            ..Default::default()
-        })
-        .await?;
-
-    output.check_success()?;
-    output.check_stdout_contains("executed successfully")?;
-    Ok(())
+    output.check_executed()?;
+    output.check_output_does_not_contain("Unranked")
 }

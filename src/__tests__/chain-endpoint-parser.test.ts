@@ -2,11 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import {
-  inferNetworkFromUrl,
-  parseEndpoint,
-  parseMultipleEndpoints,
-} from '../utils/chain-endpoint-parser';
+import { parseEndpoint, parseMultipleEndpoints } from '../utils/chain-endpoint-parser';
 
 describe('parseEndpoint', () => {
   it('parses a plain URL', () => {
@@ -80,28 +76,6 @@ describe('parseMultipleEndpoints', () => {
     // The token has no `://`, so the parser treats it as a YAML path. Since the file
     // doesn't exist, parseChopsticksConfigFile surfaces a clear error.
     expect(() => parseMultipleEndpoints('notaurl')).toThrow(/looks like a path/);
-  });
-});
-
-describe('inferNetworkFromUrl', () => {
-  it.each([
-    ['wss://polkadot-collectives-rpc.polkadot.io', 'polkadot'],
-    ['wss://polkadot-asset-hub-rpc.polkadot.io', 'polkadot'],
-    ['wss://polkadot-bridge-hub-rpc.polkadot.io', 'polkadot'],
-    ['wss://rpc.polkadot.io', 'polkadot'],
-    ['wss://kusama-asset-hub-rpc.polkadot.io', 'kusama'],
-    ['wss://kusama-bridge-hub-rpc.polkadot.io', 'kusama'],
-    ['wss://kusama-rpc.polkadot.io', 'kusama'],
-    ['wss://paseo-rpc.dwellir.com', 'paseo'],
-    ['wss://westend-rpc.polkadot.io', 'westend'],
-    ['wss://rococo-rpc.polkadot.io', 'rococo'],
-    ['wss://node.example.com', 'unknown'],
-  ])('classifies %s → %s', (url, expected) => {
-    expect(inferNetworkFromUrl(url)).toBe(expected);
-  });
-
-  it('is case-insensitive', () => {
-    expect(inferNetworkFromUrl('WSS://KUSAMA-ASSET-HUB.NODE.IO')).toBe('kusama');
   });
 });
 

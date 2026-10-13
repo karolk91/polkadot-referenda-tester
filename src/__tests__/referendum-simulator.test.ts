@@ -1,522 +1,261 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ReferendumSimulator } from '../services/referendum-simulator';
-import type { ReferendumInfo } from '../types';
-import type { Logger } from '../utils/logger';
+import { FELLOWSHIP, GOVERNANCE } from '../referendum/referenda-kind';
+import { passingReferendumInfo, ReferendumSimulator } from '../referendum/referendum-simulator';
+import type { EventRecord, ReferendumOngoing } from '../types/substrate-api';
+import { enactmentTaskName } from '../utils/scheduler-task-name';
+import {
+  createFakeChain,
+  createTestLogger,
+  eventRecord,
+  type FakeChainState,
+  scheduledTask,
+  storageWrite,
+} from './helpers';
 
-function createSilentLogger(): Logger {
-  return {
-    info: vi.fn(),
-    debug: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    success: vi.fn(),
-    isVerbose: () => false,
-    startSpinner: vi.fn(),
-    succeedSpinner: vi.fn(),
-    failSpinner: vi.fn(),
-    updateSpinner: vi.fn(),
-    stopSpinner: vi.fn(),
-    section: vi.fn(),
-    table: vi.fn(),
-  } as unknown as Logger;
+const REFERENDUM_ID = 7;
+const ENACTMENT_TASK_NAME = enactmentTaskName(REFERENDUM_ID);
+const NUDGE_CALL = new Uint8Array([0x3e, 0x07]);
+
+const ONGOING: ReferendumOngoing = {
+  track: 0,
+  origin: { type: 'Origins', value: { type: 'Treasurer', value: undefined } },
+  proposal: { type: 'Lookup', value: { hash: '0x1234', len: 50 } },
+  enactment: { type: 'After', value: 100 },
+  submitted: 900,
+  submission_deposit: { who: '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY', amount: 10n },
+  decision_deposit: undefined,
+  deciding: undefined,
+  tally: { ayes: 0n, nays: 0n, support: 0n },
+  in_queue: true,
+  alarm: [2000, [2000, 0]],
+};
+
+function dispatched(task: [number, number], id: string | undefined, success = true) {
+  return eventRecord('Scheduler', 'Dispatched', {
+    task,
+    id,
+    result: success
+      ? { success: true, value: undefined }
+      : { success: false, value: { type: 'BadOrigin' } },
+  });
 }
 
-function createMockChopsticks() {
-  return {
-    newBlock: vi.fn().mockResolvedValue(undefined),
-    setStorageBatch: vi.fn().mockResolvedValue(undefined),
-    cleanup: vi.fn().mockResolvedValue(undefined),
-    pause: vi.fn().mockResolvedValue(undefined),
-    waitForChainReady: vi.fn().mockResolvedValue(undefined),
-    getContext: vi.fn().mockReturnValue({ ws: { endpoint: 'ws://localhost:8000' } }),
-  } as any;
-}
-
-function createMockApi(overrides: Record<string, unknown> = {}) {
-  return {
-    query: {
-      System: {
-        Number: { getValue: vi.fn().mockResolvedValue(100) },
-        Events: { getValue: vi.fn().mockResolvedValue([]) },
-      },
-      Balances: {
-        TotalIssuance: { getValue: vi.fn().mockResolvedValue(1000000n) },
-      },
-      Referenda: {
-        ReferendumInfoFor: { getValue: vi.fn() },
-        ReferendumCount: { getValue: vi.fn() },
-      },
-      FellowshipReferenda: {
-        ReferendumInfoFor: { getValue: vi.fn() },
-        ReferendumCount: { getValue: vi.fn() },
-      },
-      Scheduler: {
-        Agenda: { getEntries: vi.fn().mockResolvedValue([]) },
-        Lookup: { getValue: vi.fn() },
-      },
+function simulatorFor(state: FakeChainState, eventsPerBlock: EventRecord[][]) {
+  const chain = createFakeChain(state);
+  const events = vi.mocked(chain.api.query.System.Events.getValue);
+  for (const blockEvents of eventsPerBlock) {
+    events.mockResolvedValueOnce(blockEvents);
+  }
+  vi.mocked(chain.api.txFromCallData).mockImplementation(async (callData: Uint8Array) => ({
+    decodedCall: {
+      type: callData === NUDGE_CALL ? 'Referenda' : 'System',
+      value: { type: 'nudge_referendum', value: { index: REFERENDUM_ID } },
     },
-    txFromCallData: vi.fn(),
-    ...overrides,
-  } as any;
-}
-
-function makeReferendum(overrides: Partial<ReferendumInfo> = {}): ReferendumInfo {
+    create: vi.fn(),
+    getEncodedData: vi.fn(),
+  }));
   return {
-    id: 42,
-    status: 'ongoing',
-    track: 0,
-    origin: 'Root',
-    proposal: { type: 'Inline', hash: '0xabcd', len: 10 },
-    ...overrides,
-  } as ReferendumInfo;
+    ...chain,
+    simulator: new ReferendumSimulator(createTestLogger(), chain.chopsticks, chain.api, GOVERNANCE),
+  };
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// simulate() - top-level entry point
-// ═══════════════════════════════════════════════════════════════════════
+describe('passingReferendumInfo', () => {
+  const info = passingReferendumInfo(ONGOING, 1_000_000n, 1501, GOVERNANCE) as {
+    Ongoing: Record<string, unknown>;
+  };
 
-describe('ReferendumSimulator', () => {
-  describe('simulate()', () => {
-    it('returns success immediately when already-approved referendum has no scheduled enactment left', async () => {
-      const logger = createSilentLogger();
-      const chopsticks = createMockChopsticks();
-      const api = createMockApi();
+  it('governance tally with ayes and support just below total issuance', () => {
+    expect(info.Ongoing.tally, 'support above the track threshold passes any curve').toEqual({
+      ayes: '999999',
+      nays: '0',
+      support: '999999',
+    });
+  });
 
-      const simulator = new ReferendumSimulator(logger, chopsticks, api, false);
-      // hash 'unknown' indicates the fetcher could not locate a future scheduled enactment
-      // (i.e. the call has already been dispatched on-chain).
-      const referendum = makeReferendum({
+  it('fellowship tally with rank-weighted ayes', () => {
+    const fellowshipInfo = passingReferendumInfo(ONGOING, 1_000_000n, 1501, FELLOWSHIP) as {
+      Ongoing: Record<string, unknown>;
+    };
+    expect(fellowshipInfo.Ongoing.tally).toEqual({ bare_ayes: 100, ayes: 1000, nays: 0 });
+  });
+
+  it('immediate enactment, confirmation already started, track queue left', () => {
+    expect(info.Ongoing).toMatchObject({
+      enactment: { After: 0 },
+      deciding: { since: 1499, confirming: 1499 },
+      in_queue: false,
+      alarm: [1501, [1501, 0]],
+    });
+  });
+
+  it('origin, proposal and deposits in the dev_setStorage shape', () => {
+    expect(info.Ongoing).toMatchObject({
+      origin: { Origins: { Treasurer: null } },
+      proposal: { Lookup: { hash: '0x1234', len: 50 } },
+      submission_deposit: { amount: '10' },
+      decision_deposit: null,
+    });
+  });
+});
+
+describe('ReferendumSimulator.simulate', () => {
+  it('enacted referendum without any storage write', async () => {
+    const { simulator, writes } = simulatorFor({}, []);
+    expect(await simulator.simulate({ status: 'enacted', id: REFERENDUM_ID })).toEqual({
+      outcome: 'already-enacted',
+      events: [],
+    });
+    expect(writes).toEqual([]);
+  });
+
+  it('approved referendum: enactment task moved to the next block and checked by name', async () => {
+    const { simulator, writes } = simulatorFor(
+      { blockNumber: 1000, agenda: { 99999: [scheduledTask({ maybe_id: ENACTMENT_TASK_NAME })] } },
+      [[dispatched([1001, 0], ENACTMENT_TASK_NAME)]]
+    );
+
+    const result = await simulator.simulate({
+      status: 'approved',
+      id: REFERENDUM_ID,
+      enactment: { block: 99999, index: 0 },
+    });
+
+    expect(result.outcome).toBe('executed');
+    expect(storageWrite(writes, 'Scheduler', 'Agenda', [1001])).toMatchObject([
+      { maybe_id: ENACTMENT_TASK_NAME },
+    ]);
+    expect(
+      writes.some((write) => write.item === 'ReferendumInfoFor'),
+      'an approved referendum needs no forced tally'
+    ).toBe(false);
+  });
+
+  it('pre-call after the tasks already scheduled at its block', async () => {
+    const { simulator, writes } = simulatorFor(
+      {
+        blockNumber: 1000,
+        agenda: {
+          1001: [scheduledTask({ priority: 1 })],
+          99999: [scheduledTask({ maybe_id: ENACTMENT_TASK_NAME })],
+        },
+      },
+      [[dispatched([1001, 1], undefined)], [dispatched([1002, 0], ENACTMENT_TASK_NAME)]]
+    );
+
+    await simulator.simulate(
+      { status: 'approved', id: REFERENDUM_ID, enactment: { block: 99999, index: 0 } },
+      { call: '0x0102', origin: 'Root' }
+    );
+
+    const preCallAgenda = writes.find(
+      (write) => write.item === 'Agenda' && JSON.stringify(write.key) === '[1001]'
+    )?.value;
+    expect(preCallAgenda, 'a pre-call must not delete tasks scheduled at its block').toMatchObject([
+      { priority: 1 },
+      { call: { Inline: '0x0102' }, origin: { System: 'Root' } },
+    ]);
+  });
+
+  it('ongoing referendum: passing state, alarm moved, enactment executed', async () => {
+    const { simulator, writes } = simulatorFor(
+      {
+        blockNumber: 1000,
+        referendumInfo: { [REFERENDUM_ID]: { type: 'Ongoing', value: ONGOING } },
+        agenda: {
+          2000: [scheduledTask({ call: { type: 'Inline', value: NUDGE_CALL } })],
+          3000: [scheduledTask({ maybe_id: ENACTMENT_TASK_NAME })],
+        },
+        lookup: { [ENACTMENT_TASK_NAME]: [3000, 0] },
+      },
+      [
+        [eventRecord('Referenda', 'Confirmed', { index: REFERENDUM_ID })],
+        [dispatched([1003, 0], ENACTMENT_TASK_NAME)],
+      ]
+    );
+
+    const result = await simulator.simulate({ status: 'ongoing', id: REFERENDUM_ID });
+
+    expect(result.outcome).toBe('executed');
+    expect(storageWrite(writes, 'Referenda', 'ReferendumInfoFor', [REFERENDUM_ID])).toMatchObject({
+      Ongoing: { tally: { ayes: '999999' } },
+    });
+    expect(storageWrite(writes, 'Scheduler', 'Agenda', [2000]), 'alarm moved out').toEqual([null]);
+    expect(storageWrite(writes, 'Scheduler', 'Lookup', [ENACTMENT_TASK_NAME])).toEqual([1003, 0]);
+  });
+
+  it('confirmation of another referendum in the nudge block', async () => {
+    const otherConfirmation = eventRecord('Referenda', 'Confirmed', { index: 8 });
+    const { simulator } = simulatorFor(
+      {
+        blockNumber: 1000,
+        referendumInfo: { [REFERENDUM_ID]: { type: 'Ongoing', value: ONGOING } },
+        agenda: { 2000: [scheduledTask({ call: { type: 'Inline', value: NUDGE_CALL } })] },
+      },
+      [[otherConfirmation], [otherConfirmation], [otherConfirmation]]
+    );
+
+    await expect(simulator.simulate({ status: 'ongoing', id: REFERENDUM_ID })).rejects.toThrow(
+      `Referendum #${REFERENDUM_ID} was not confirmed`
+    );
+  });
+
+  it('enactment at the next agenda block of a scheduler with relay block numbers', async () => {
+    const { simulator, writes } = simulatorFor(
+      {
+        blockNumber: 1000,
+        incompleteSince: 5001,
+        agenda: { 99999: [scheduledTask({ maybe_id: ENACTMENT_TASK_NAME })] },
+      },
+      [[dispatched([5001, 0], ENACTMENT_TASK_NAME)]]
+    );
+
+    const result = await simulator.simulate({
+      status: 'approved',
+      id: REFERENDUM_ID,
+      enactment: { block: 99999, index: 0 },
+    });
+
+    expect(result.outcome).toBe('executed');
+    expect(
+      storageWrite(writes, 'Scheduler', 'Agenda', [5001]),
+      'Asset Hub keys its agenda by relay block number, not by its own block number'
+    ).toMatchObject([{ maybe_id: ENACTMENT_TASK_NAME }]);
+  });
+
+  it('extra block when the scheduler postpones the enactment', async () => {
+    const { simulator, chopsticks } = simulatorFor(
+      { blockNumber: 1000, agenda: { 99999: [scheduledTask({ maybe_id: ENACTMENT_TASK_NAME })] } },
+      [[], [dispatched([1001, 0], ENACTMENT_TASK_NAME)]]
+    );
+
+    const result = await simulator.simulate({
+      status: 'approved',
+      id: REFERENDUM_ID,
+      enactment: { block: 99999, index: 0 },
+    });
+
+    expect(
+      result.outcome,
+      'session-change work can starve the scheduler and delay the task by a block'
+    ).toBe('executed');
+    expect(chopsticks.newBlock).toHaveBeenCalledTimes(2);
+  });
+
+  it('failure when the enactment never dispatches', async () => {
+    const { simulator } = simulatorFor(
+      { blockNumber: 1000, agenda: { 99999: [scheduledTask({ maybe_id: ENACTMENT_TASK_NAME })] } },
+      [[], [], []]
+    );
+
+    await expect(
+      simulator.simulate({
         status: 'approved',
-        proposal: { type: 'Lookup', hash: 'unknown', call: undefined },
-      });
-
-      const result = await simulator.simulate(referendum);
-
-      expect(result.executionSucceeded).toBe(true);
-      expect(result.referendumId).toBe(42);
-      expect(result.blockExecuted).toBe(0);
-      expect(result.events).toEqual([]);
-      // Should NOT have interacted with chopsticks at all
-      expect(chopsticks.newBlock).not.toHaveBeenCalled();
-      expect(chopsticks.setStorageBatch).not.toHaveBeenCalled();
-    });
-
-    it('skips applyPassingState and the nudge step when status is approved with a known proposal hash', async () => {
-      const logger = createSilentLogger();
-      const chopsticks = createMockChopsticks();
-      const api = createMockApi();
-      const simulator = new ReferendumSimulator(logger, chopsticks, api, false);
-
-      // Stub out the heavy machinery: we only want to verify which sub-steps fire.
-      const applyPassingState = vi
-        .spyOn(simulator as any, 'applyPassingState')
-        .mockResolvedValue(undefined);
-      const scheduleAndExecute = vi
-        .spyOn(simulator as any, 'scheduleAndExecuteProposal')
-        .mockResolvedValue({
-          events: [
-            { section: 'Scheduler', method: 'Dispatched', data: { result: { success: true } } },
-          ],
-          executionBlock: 200,
-          scheduledBlock: 199,
-          scheduledTaskIndex: 0,
-          scheduledTaskId: undefined,
-        });
-
-      const referendum = makeReferendum({
-        status: 'approved',
-        // hash !== 'unknown' indicates the fetcher located the future scheduled enactment
-        proposal: { type: 'Lookup', hash: '0xdeadbeef', call: undefined, len: 10 },
-      });
-
-      await simulator.simulate(referendum);
-
-      // applyPassingState must be skipped — the referendum is already approved on-chain
-      expect(applyPassingState).not.toHaveBeenCalled();
-      // scheduleAndExecuteProposal must be called with skipNudge=true (its second arg)
-      expect(scheduleAndExecute).toHaveBeenCalledTimes(1);
-      expect(scheduleAndExecute.mock.calls[0][1]).toBe(true);
-    });
-
-    it('catches thrown errors and returns them in result', async () => {
-      const logger = createSilentLogger();
-      const chopsticks = createMockChopsticks();
-      const api = createMockApi();
-
-      // Make ReferendumInfoFor.getValue throw so applyPassingState fails
-      api.query.Referenda.ReferendumInfoFor.getValue.mockRejectedValue(
-        new Error('RPC connection lost')
-      );
-
-      const simulator = new ReferendumSimulator(logger, chopsticks, api, false);
-      const referendum = makeReferendum();
-
-      const result = await simulator.simulate(referendum);
-
-      expect(result.executionSucceeded).toBe(false);
-      expect(result.errors).toBeDefined();
-      expect(result.errors!.length).toBeGreaterThan(0);
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════════
-  // verifyReferendumApproval() - nudge block verification
-  // ═══════════════════════════════════════════════════════════════════════
-
-  describe('verifyReferendumApproval()', () => {
-    function callVerify(
-      isFellowship: boolean,
-      events: Array<{ section: string; method: string; data?: unknown }>,
-      referendumId: number
-    ) {
-      const logger = createSilentLogger();
-      const chopsticks = createMockChopsticks();
-      const api = createMockApi();
-      const simulator = new ReferendumSimulator(logger, chopsticks, api, isFellowship);
-      // Access private method via cast
-      return (simulator as any).verifyReferendumApproval(events, referendumId);
-    }
-
-    it('passes when Confirmed event matches referendum ID', () => {
-      const events = [{ section: 'Referenda', method: 'Confirmed', data: { index: 42 } }];
-      expect(() => callVerify(false, events, 42)).not.toThrow();
-    });
-
-    it('passes when Approved event matches referendum ID', () => {
-      const events = [{ section: 'Referenda', method: 'Approved', data: { index: 42 } }];
-      expect(() => callVerify(false, events, 42)).not.toThrow();
-    });
-
-    it('passes with FellowshipReferenda pallet for fellowship', () => {
-      const events = [{ section: 'FellowshipReferenda', method: 'Confirmed', data: { index: 7 } }];
-      expect(() => callVerify(true, events, 7)).not.toThrow();
-    });
-
-    it('throws when no Confirmed or Approved event exists', () => {
-      const events = [
-        { section: 'System', method: 'ExtrinsicSuccess', data: {} },
-        { section: 'Scheduler', method: 'Dispatched', data: {} },
-      ];
-      expect(() => callVerify(false, events, 42)).toThrow(
-        'was not confirmed or approved after nudge'
-      );
-    });
-
-    it('throws when Confirmed event is for a different referendum', () => {
-      const events = [{ section: 'Referenda', method: 'Confirmed', data: { index: 99 } }];
-      expect(() => callVerify(false, events, 42)).toThrow('fired for referendum #99');
-    });
-
-    it('throws when Approved event is for a different referendum', () => {
-      const events = [{ section: 'Referenda', method: 'Approved', data: { index: 99 } }];
-      expect(() => callVerify(false, events, 42)).toThrow('fired for referendum #99');
-    });
-
-    it('passes when event has no index field (graceful)', () => {
-      // Some runtimes might not include the index — treat as acceptable
-      const events = [{ section: 'Referenda', method: 'Confirmed', data: { tally: {} } }];
-      expect(() => callVerify(false, events, 42)).not.toThrow();
-    });
-
-    it('includes available events in error message when missing', () => {
-      const events = [{ section: 'Balances', method: 'Transfer', data: {} }];
-      try {
-        callVerify(false, events, 42);
-        expect.fail('should have thrown');
-      } catch (e: any) {
-        expect(e.message).toContain('Balances.Transfer');
-      }
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════════
-  // verifyReferendumApprovalWithRetry() - postponed-nudge tolerance
-  // ═══════════════════════════════════════════════════════════════════════
-
-  describe('verifyReferendumApprovalWithRetry()', () => {
-    function makeSimulator(eventsPerBlock: Array<Array<{ section: string; method: string }>>) {
-      const logger = createSilentLogger();
-      const chopsticks = createMockChopsticks();
-      const api = createMockApi();
-      const simulator = new ReferendumSimulator(logger, chopsticks, api, false);
-      const fetchMock = vi.fn();
-      for (const events of eventsPerBlock) {
-        fetchMock.mockResolvedValueOnce(events);
-      }
-      (simulator as any).fetchBlockEvents = fetchMock;
-      return { simulator, chopsticks, fetchMock };
-    }
-
-    const confirmed = [{ section: 'Referenda', method: 'Confirmed', data: { index: 42 } }];
-    const sessionOnly = [{ section: 'Session', method: 'NewSession', data: {} }];
-
-    it('resolves without extra blocks when the nudge block confirms', async () => {
-      const { simulator, chopsticks } = makeSimulator([confirmed]);
-      await (simulator as any).verifyReferendumApprovalWithRetry(42);
-      expect(chopsticks.newBlock).not.toHaveBeenCalled();
-    });
-
-    it('builds extra blocks when the scheduler postponed the nudge past a session change', async () => {
-      // Block 1: session-change events only (nudge postponed), block 2: confirmation.
-      const { simulator, chopsticks } = makeSimulator([sessionOnly, confirmed]);
-      await (simulator as any).verifyReferendumApprovalWithRetry(42);
-      expect(chopsticks.newBlock).toHaveBeenCalledTimes(1);
-    });
-
-    it('throws after exhausting the extra blocks when no confirmation appears', async () => {
-      const { simulator, chopsticks } = makeSimulator([sessionOnly, sessionOnly, sessionOnly]);
-      await expect((simulator as any).verifyReferendumApprovalWithRetry(42)).rejects.toThrow(
-        'was not confirmed or approved after nudge'
-      );
-      expect(chopsticks.newBlock).toHaveBeenCalledTimes(2);
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════════
-  // scheduleAndExecuteProposal() - postponed-enactment tolerance
-  // ═══════════════════════════════════════════════════════════════════════
-
-  describe('scheduleAndExecuteProposal()', () => {
-    function makeSimulator(eventsPerBlock: Array<Array<{ section: string; method: string }>>) {
-      const logger = createSilentLogger();
-      const chopsticks = createMockChopsticks();
-      const api = createMockApi();
-      const simulator = new ReferendumSimulator(logger, chopsticks, api, false);
-      (simulator as any).scheduler = {
-        moveOrInjectNudge: vi.fn().mockResolvedValue(undefined),
-        moveScheduledCallToNextBlock: vi
-          .fn()
-          .mockResolvedValue({ block: 121, taskIndex: 0, taskId: undefined }),
-      };
-      const fetchMock = vi.fn();
-      for (const events of eventsPerBlock) {
-        fetchMock.mockResolvedValueOnce(events);
-      }
-      (simulator as any).fetchBlockEvents = fetchMock;
-      return { simulator, chopsticks };
-    }
-
-    // Factories, not shared arrays: the production code accumulates events by
-    // pushing into the fetched array, so a shared fixture would leak state
-    // between tests.
-    const dispatched = () => [{ section: 'Scheduler', method: 'Dispatched', data: {} }];
-    const sessionOnly = () => [{ section: 'Session', method: 'NewSession', data: {} }];
-
-    it('returns the execution block events when the task dispatches immediately', async () => {
-      const { simulator, chopsticks } = makeSimulator([dispatched()]);
-      const result = await (simulator as any).scheduleAndExecuteProposal(
-        makeReferendum(),
-        true // skipNudge — enactment phase only
-      );
-      expect(chopsticks.newBlock).toHaveBeenCalledTimes(1);
-      expect(result.events).toHaveLength(1);
-    });
-
-    it('builds extra blocks when the scheduler postponed the enactment past a session change', async () => {
-      const { simulator, chopsticks } = makeSimulator([sessionOnly(), dispatched()]);
-      const result = await (simulator as any).scheduleAndExecuteProposal(makeReferendum(), true);
-      expect(chopsticks.newBlock).toHaveBeenCalledTimes(2);
-      const sections = result.events.map((e: any) => e.section);
-      expect(sections).toContain('Scheduler');
-    });
-
-    it('stops after the bounded extra blocks even without a dispatch', async () => {
-      const { simulator, chopsticks } = makeSimulator([
-        sessionOnly(),
-        sessionOnly(),
-        sessionOnly(),
-      ]);
-      const result = await (simulator as any).scheduleAndExecuteProposal(makeReferendum(), true);
-      // 1 execution block + 2 extra blocks; the result checker downstream
-      // reports the missing dispatch as the failure.
-      expect(chopsticks.newBlock).toHaveBeenCalledTimes(3);
-      expect(result.events.every((e: any) => e.section !== 'Scheduler')).toBe(true);
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════════
-  // parseOriginString() - origin format parsing
-  // ═══════════════════════════════════════════════════════════════════════
-
-  describe('parseOriginString()', () => {
-    function callParse(originString: string) {
-      const logger = createSilentLogger();
-      const chopsticks = createMockChopsticks();
-      const api = createMockApi();
-      const simulator = new ReferendumSimulator(logger, chopsticks, api, false);
-      return (simulator as any).parseOriginString(originString);
-    }
-
-    it('parses "Root" as System.Root', () => {
-      expect(callParse('Root')).toEqual({ System: 'Root' });
-    });
-
-    it('parses dotted format "Origins.WhitelistedCaller"', () => {
-      expect(callParse('Origins.WhitelistedCaller')).toEqual({
-        Origins: 'WhitelistedCaller',
-      });
-    });
-
-    it('parses custom dotted format "Council.Members"', () => {
-      expect(callParse('Council.Members')).toEqual({
-        Council: 'Members',
-      });
-    });
-
-    it('recognizes known governance origins without dot notation', () => {
-      expect(callParse('Treasurer')).toEqual({ Origins: 'Treasurer' });
-      expect(callParse('BigSpender')).toEqual({ Origins: 'BigSpender' });
-      expect(callParse('WhitelistedCaller')).toEqual({ Origins: 'WhitelistedCaller' });
-      expect(callParse('SmallTipper')).toEqual({ Origins: 'SmallTipper' });
-    });
-
-    it('falls back to System origin for unknown strings', () => {
-      const result = callParse('SomeWeirdOrigin');
-      expect(result).toEqual({ System: 'SomeWeirdOrigin' });
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════════
-  // buildPassingReferendumStorage() - storage construction
-  // ═══════════════════════════════════════════════════════════════════════
-
-  describe('buildPassingReferendumStorage()', () => {
-    function callBuild(
-      isFellowship: boolean,
-      totalIssuance: bigint,
-      currentBlock: number,
-      inQueue = false
-    ) {
-      const logger = createSilentLogger();
-      const chopsticks = createMockChopsticks();
-      const api = createMockApi();
-      const simulator = new ReferendumSimulator(logger, chopsticks, api, isFellowship);
-
-      const ongoingData = {
-        track: 1,
-        origin: { type: 'system', value: { type: 'Root' } },
-        proposal: { type: 'Inline', value: new Uint8Array([0xab, 0xcd]) },
-        submitted: 50,
-        submission_deposit: { who: '0x1234', amount: 100n },
-        decision_deposit: { who: '0x1234', amount: 200n },
-        in_queue: inQueue,
-      };
-
-      return (simulator as any).buildPassingReferendumStorage(
-        ongoingData,
-        totalIssuance,
-        currentBlock
-      );
-    }
-
-    it('builds governance tally with totalIssuance-based votes', () => {
-      const result = callBuild(false, 1000000n, 100);
-      const tally = result.ongoing.tally;
-
-      expect(tally.ayes).toBe('999999');
-      expect(tally.nays).toBe('0');
-      expect(tally.support).toBe('999999');
-      // Should NOT have fellowship fields
-      expect(tally.bare_ayes).toBeUndefined();
-    });
-
-    it('builds fellowship tally with fixed values', () => {
-      const result = callBuild(true, 1000000n, 100);
-      const tally = result.ongoing.tally;
-
-      expect(tally.bare_ayes).toBe(100);
-      expect(tally.ayes).toBe(1000);
-      expect(tally.nays).toBe(0);
-      // Should NOT have governance fields
-      expect(tally.support).toBeUndefined();
-    });
-
-    it('sets enactment to immediate (after: 0)', () => {
-      const result = callBuild(false, 1000000n, 100);
-      expect(result.ongoing.enactment).toEqual({ after: 0 });
-    });
-
-    it('sets deciding.since and deciding.confirming to currentBlock - 1', () => {
-      const result = callBuild(false, 1000000n, 100);
-      expect(result.ongoing.deciding.since).toBe(99);
-      expect(result.ongoing.deciding.confirming).toBe(99);
-    });
-
-    it('sets alarm to currentBlock + 1', () => {
-      const result = callBuild(false, 1000000n, 100);
-      expect(result.ongoing.alarm).toEqual([101, [101, 0]]);
-    });
-
-    it('preserves track and submitted fields from ongoing data', () => {
-      const result = callBuild(false, 1000000n, 100);
-      expect(result.ongoing.track).toBe(1);
-      expect(result.ongoing.submitted).toBe(50);
-    });
-
-    it('takes a queued referendum out of the track queue (in_queue: false)', () => {
-      const result = callBuild(false, 1000000n, 100, true);
-      expect(result.ongoing.in_queue).toBe(false);
-      expect(result.ongoing.deciding).toEqual({ since: 99, confirming: 99 });
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════════
-  // applyPassingState() - state transitions
-  // ═══════════════════════════════════════════════════════════════════════
-
-  describe('applyPassingState()', () => {
-    function makeSimulator(refInfoReturn: unknown) {
-      const logger = createSilentLogger();
-      const chopsticks = createMockChopsticks();
-      const api = createMockApi();
-
-      api.query.Referenda.ReferendumInfoFor.getValue.mockResolvedValue(refInfoReturn);
-      api.query.System.Number.getValue.mockResolvedValue(100);
-
-      const simulator = new ReferendumSimulator(logger, chopsticks, api, false);
-      return { simulator, logger, chopsticks, api };
-    }
-
-    it('throws when referendum is not found', async () => {
-      const { simulator } = makeSimulator(null);
-      const referendum = makeReferendum({ id: 99 });
-
-      await expect((simulator as any).applyPassingState(referendum)).rejects.toThrow(
-        'Referendum 99 not found'
-      );
-    });
-
-    it('throws when referendum is in Rejected state', async () => {
-      const { simulator } = makeSimulator({ type: 'Rejected' });
-      const referendum = makeReferendum({ id: 42 });
-
-      await expect((simulator as any).applyPassingState(referendum)).rejects.toThrow(
-        'not in Ongoing state (current state: Rejected)'
-      );
-    });
-
-    it('throws when referendum is in Cancelled state', async () => {
-      const { simulator } = makeSimulator({ type: 'Cancelled' });
-      const referendum = makeReferendum({ id: 42 });
-
-      await expect((simulator as any).applyPassingState(referendum)).rejects.toThrow(
-        'not in Ongoing state (current state: Cancelled)'
-      );
-    });
-
-    it('returns early without error when referendum is already Approved', async () => {
-      const { simulator, chopsticks, logger } = makeSimulator({ type: 'Approved' });
-      const referendum = makeReferendum({ id: 42 });
-
-      // Should not throw
-      await (simulator as any).applyPassingState(referendum);
-
-      // Should not have written any storage
-      expect(chopsticks.setStorageBatch).not.toHaveBeenCalled();
-      // Should have logged the skip
-      expect(logger.succeedSpinner).toHaveBeenCalledWith(
-        expect.stringContaining('skipping state update')
-      );
-    });
+        id: REFERENDUM_ID,
+        enactment: { block: 99999, index: 0 },
+      })
+    ).rejects.toThrow(
+      `Referendum #${REFERENDUM_ID} execution failed: No Scheduler.Dispatched event found for block 1001 - proposal execution did not happen`
+    );
   });
 });

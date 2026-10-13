@@ -1,10 +1,13 @@
-/**
- * JSON utilities for handling BigInt serialization
- */
+import { toHex } from '@polkadot-api/utils';
 
-/**
- * Serialize any value to JSON string, handling BigInt values
- */
 export function stringify(value: unknown, space?: number): string {
-  return JSON.stringify(value, (_, v) => (typeof v === 'bigint' ? v.toString() : v), space);
+  return JSON.stringify(
+    value,
+    (_, entry) => {
+      if (typeof entry === 'bigint') return entry.toString();
+      if (entry instanceof Uint8Array) return toHex(entry);
+      return entry;
+    },
+    space
+  );
 }

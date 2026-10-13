@@ -17,41 +17,43 @@
 // Never throws on chain content; this script only reports. It throws only when a chain has no
 // usable in-process `chain` object.
 
-import { log, printBlock, ROUTINE, RULE, section } from './lib/chopsticks-block.mjs';
+import {
+  inProcessChain,
+  log,
+  postTestArgs,
+  printBlock,
+  ROUTINE,
+  RULE,
+  section,
+  selectedChains,
+} from './lib/chopsticks-block.mjs';
 
 const FAILISH = /Failed|Error|Incomplete|Overweight|BadOrigin|ItemFailed|WithErrors|Trapped/;
 
 export default async function run(ctx) {
-  const args = ctx.args && typeof ctx.args === 'object' ? ctx.args : {};
+  const args = postTestArgs(ctx);
   const blocks = Number(args.blocks ?? 1);
   const max = args.verbose || ctx.verbose ? 4000 : 300;
-  const only = Array.isArray(args.only) ? new Set(args.only) : undefined;
-  const targets = ctx.chains.filter((c) => {
-    if (only) return only.has(c.label) || only.has(c.specName);
-    return args.all ? true : c.label !== ctx.main.label;
-  });
+  const targets = selectedChains(ctx, args, { includeMain: Boolean(args.all) });
 
-  section(`Post-test: dump chain events (${targets.map((c) => c.label).join(', ')})`);
+  section(`Post-test: dump chain events (${targets.map((target) => target.label).join(', ')})`);
   const flagged = [];
   const dump = async (label, block, tag) => {
-    const r = await printBlock(label, block, { max, tag, hide: ROUTINE, flag: FAILISH });
-    flagged.push(...r.flagged);
+    const printed = await printBlock(label, block, { max, tag, hide: ROUTINE, flag: FAILISH });
+    flagged.push(...printed.flagged);
   };
-  for (const c of targets) {
-    const chain = c.chain;
-    if (!chain || typeof chain.newBlock !== 'function') {
-      throw new Error(`${c.label}: no in-process chopsticks Blockchain available`);
-    }
-    log(`\n── ${c.label} (${c.specName}, ${c.kind}) ──`);
-    await dump(c.label, chain.head, 'current head (built by the tool)');
-    for (let i = 0; i < blocks; i++) {
-      await dump(c.label, await chain.newBlock(), `+${i + 1}`);
+  for (const target of targets) {
+    const chain = inProcessChain(target);
+    log(`\n── ${target.label} (${target.specName}, ${target.kind}) ──`);
+    await dump(target.label, chain.head, 'current head (built by the tool)');
+    for (let blockIndex = 0; blockIndex < blocks; blockIndex++) {
+      await dump(target.label, await chain.newBlock(), `+${blockIndex + 1}`);
     }
   }
   log(`\n${RULE}`);
   if (flagged.length) {
     log(`⚠️  ${flagged.length} failure-looking event(s):`);
-    for (const f of flagged) log(`   • ${f}`);
+    for (const line of flagged) log(`   • ${line}`);
   } else {
     log('✅ no failure-looking events on the dumped chains');
   }
