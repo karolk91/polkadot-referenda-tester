@@ -1,5 +1,5 @@
-import { blockNumber } from '../network/chain-client';
-import { isEvent, type ParsedEvent, printEvents } from '../utils/events';
+import { printForkEvents } from '../network/event-collector';
+import { isEvent, type ParsedEvent } from '../utils/events';
 import type { Logger } from '../utils/logger';
 import {
   type BridgeKusamaSide,
@@ -24,12 +24,7 @@ export async function verifyBridgeDelivery(
 ): Promise<string[]> {
   logger.section('Bridge Delivery Verification');
   for (const fork of [polkadot.bridgeHub, kusama.bridgeHub, kusama.assetHub]) {
-    printEvents(
-      `\u{1F4E1} ${fork.info.label} (Block #${await blockNumber(fork.api)})`,
-      log.events(fork),
-      logger
-    );
-    logger.info('');
+    await printForkEvents(fork, log.events(fork), logger);
   }
 
   const { outboundMessages, inboundMessages } = POLKADOT_TO_KUSAMA_PALLETS;

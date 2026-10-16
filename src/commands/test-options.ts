@@ -5,7 +5,7 @@ import { listBundledPostTests } from '../utils/bundled-post-tests';
 
 export const THEN_FLAG = '--then';
 
-export const STEP_FIELDS = [
+const STEP_FIELDS = [
   {
     key: 'referendum',
     flags: '-r, --referendum <id>',
@@ -216,7 +216,7 @@ function stepReferenda(
   );
 }
 
-export function stepFromOptions(options: StepOptions, label?: string): ReferendumStep {
+function stepFromOptions(options: StepOptions, label?: string): ReferendumStep {
   const prefix = label ? `${label}: ` : '';
   const governance = referendumSource(
     options.referendum,

@@ -3,31 +3,9 @@ import type { Fork } from '../network/fork';
 import { runPostTest } from '../network/post-test-runner';
 import { type ForkedNetwork, runStepsOnNetwork, type StepOutcome } from '../network/step-runner';
 import type { ReferendumStep } from '../types';
-import { createTestLogger } from './helpers';
+import { createTestLogger, fakeFork, governanceStep } from './helpers';
 
 vi.mock('../network/post-test-runner', () => ({ runPostTest: vi.fn() }));
-
-function fakeFork(label: string): Fork {
-  return {
-    manager: { context: { url: `ws://${label}`, chain: { label } } },
-    client: {},
-    api: {},
-    info: {
-      label,
-      specName: label,
-      endpoint: `wss://${label}`,
-      network: 'polkadot',
-      kind: 'parachain',
-    },
-  } as unknown as Fork;
-}
-
-function governanceStep(id: number, postTest?: string): ReferendumStep {
-  return {
-    referenda: { kind: 'governance', governance: { kind: 'existing', id } },
-    ...(postTest && { postTest: { module: postTest } }),
-  };
-}
 
 interface NetworkJournal {
   entries: string[];

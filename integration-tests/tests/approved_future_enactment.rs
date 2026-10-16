@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use serde_json::json;
 
+use harness::calls;
 use harness::chains::POLKADOT_GOVERNANCE_NETWORK;
 use harness::context::TestContext;
 use harness::genesis::approved_governance_referendum_storage;
@@ -10,19 +11,6 @@ use harness::tool_runner::{StepArgs, ToolArgs, ToolRunner};
 const REFERENDUM_ID: u32 = 42;
 const APPROVAL_BLOCK: u32 = 0;
 const ENACTMENT_BLOCK: u32 = 1_000_000;
-const SYSTEM_PALLET_INDEX: u8 = 0;
-const REMARK_CALL_INDEX: u8 = 0;
-
-fn system_remark_call() -> Vec<u8> {
-    let payload = b"approved-future-test";
-    let mut call = vec![
-        SYSTEM_PALLET_INDEX,
-        REMARK_CALL_INDEX,
-        (payload.len() as u8) << 2,
-    ];
-    call.extend_from_slice(payload);
-    call
-}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn polkadot_governance_approved_future_enactment() -> Result<()> {
@@ -33,7 +21,7 @@ async fn polkadot_governance_approved_future_enactment() -> Result<()> {
         "endpoint": context.governance.ws_uri,
         "block": context.governance.fork_block,
         "import-storage": approved_governance_referendum_storage(
-            &system_remark_call(),
+            &calls::remark(&context.governance.client, "approved-future-test")?,
             REFERENDUM_ID,
             APPROVAL_BLOCK,
             ENACTMENT_BLOCK,

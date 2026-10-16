@@ -54,7 +54,7 @@ export async function executePreCall(
 ): Promise<void> {
   logger.section('Executing Pre-Call');
   logger.debug(`Pre-call hex: ${preCall.call.substring(0, 66)}...`);
-  const origin = preCall.origin ? parseOriginString(preCall.origin, logger) : { System: 'Root' };
+  const origin = parseOriginString(preCall.origin ?? 'Root', logger);
   logger.info(`Pre-call origin: ${stringify(origin)}`);
 
   const preCallBlock = await scheduler.nextAgendaBlock();

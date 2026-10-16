@@ -59,6 +59,8 @@ export function buildChainInfoFromSpecName(specName: string, endpoint: string): 
   };
 }
 
+const chainInfoByEndpoint = new Map<string, Promise<ChainInfo>>();
+
 /**
  * Read the full {@link ChainInfo} (network + kind + label) for an endpoint from its runtime
  * `spec_name`, via a single legacy `state_getRuntimeVersion` RPC ({@link fetchRuntimeSpecName})
@@ -69,9 +71,15 @@ export function buildChainInfoFromSpecName(specName: string, endpoint: string): 
  *
  * @throws if the endpoint cannot be reached or the runtime-version read fails.
  */
-export async function fetchChainInfoFromEndpoint(endpoint: string): Promise<ChainInfo> {
-  const specName = await fetchRuntimeSpecName(endpoint);
-  return buildChainInfoFromSpecName(specName, endpoint);
+export function fetchChainInfoFromEndpoint(endpoint: string): Promise<ChainInfo> {
+  const cached = chainInfoByEndpoint.get(endpoint);
+  if (cached) return cached;
+  const info = fetchRuntimeSpecName(endpoint).then((specName) =>
+    buildChainInfoFromSpecName(specName, endpoint)
+  );
+  chainInfoByEndpoint.set(endpoint, info);
+  info.catch(() => chainInfoByEndpoint.delete(endpoint));
+  return info;
 }
 
 /**
@@ -85,7 +93,7 @@ export async function fetchChainInfoFromEndpoint(endpoint: string): Promise<Chai
  *
  * @throws if the endpoint cannot be reached, the RPC errors, or no response arrives in time.
  */
-export function fetchRuntimeSpecName(endpoint: string, timeoutMs = 20000): Promise<string> {
+function fetchRuntimeSpecName(endpoint: string, timeoutMs = 20000): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     let connection: { disconnect: () => void } | undefined;
     let done = false;

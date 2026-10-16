@@ -1,7 +1,7 @@
 import type { ParsedEndpoint } from '../utils/chain-endpoint-parser';
 import { buildChopsticksChainConfig, type StorageInjection } from '../utils/chopsticks-config';
 import type { Logger } from '../utils/logger';
-import { type ChainInfo, fetchChainInfoFromEndpoint } from './chain-identity';
+import { type ChainInfo, type ChainKind, fetchChainInfoFromEndpoint } from './chain-identity';
 import type { ForkSpec } from './fork';
 
 const RUNTIME_LOG_LEVEL = 0;
@@ -32,7 +32,7 @@ export interface SingleConsensusTopology {
   specs: ForkSpec[];
   governanceKey?: string;
   fellowshipKey?: string;
-  additional: Array<{ key: string; chain: DetectedChain }>;
+  additionalKeys: string[];
 }
 
 export async function detectChains(
@@ -59,15 +59,38 @@ function isSameChain(first: DetectedChain, second: DetectedChain): boolean {
   return first.endpoint.url === second.endpoint.url || first.info.label === second.info.label;
 }
 
-function forkSpec(key: string, chain: DetectedChain, injection?: StorageInjection): ForkSpec {
-  return {
-    key,
-    kind: chain.info.kind,
-    config: buildChopsticksChainConfig(chain.endpoint, {
-      injection,
-      runtimeLogLevel: RUNTIME_LOG_LEVEL,
-    }),
-  };
+export function forkSpec(
+  key: string,
+  endpoint: ParsedEndpoint,
+  kind: ChainKind,
+  options: { injection?: StorageInjection; runtimeLogLevel: number }
+): ForkSpec {
+  return { key, kind, config: buildChopsticksChainConfig(endpoint, options) };
+}
+
+export function additionalForkSpecs(
+  additional: DetectedChain[],
+  hasRelay: boolean,
+  runtimeLogLevel: number,
+  logger: Logger
+): ForkSpec[] {
+  const specs: ForkSpec[] = [];
+  let relayPresent = hasRelay;
+  for (const [index, chain] of additional.entries()) {
+    if (chain.info.kind === 'relay') {
+      if (relayPresent) {
+        logger.warn(
+          `Skipping relay chain ${chain.info.label}: the network already has a relay chain`
+        );
+        continue;
+      }
+      relayPresent = true;
+    }
+    const key = `additional_${index}`;
+    specs.push(forkSpec(key, chain.endpoint, chain.info.kind, { runtimeLogLevel }));
+    logger.debug(`Adding ${chain.info.label} (${chain.info.kind}) to the network as ${key}`);
+  }
+  return specs;
 }
 
 export function singleConsensusTopology(
@@ -78,45 +101,49 @@ export function singleConsensusTopology(
   const { governance, fellowship } = chains;
   const networkChains: DetectedChain[] = [];
   const specs: ForkSpec[] = [];
+  const primarySpec = (key: string, chain: DetectedChain, injection?: StorageInjection) => {
+    specs.push(
+      forkSpec(key, chain.endpoint, chain.info.kind, {
+        injection,
+        runtimeLogLevel: RUNTIME_LOG_LEVEL,
+      })
+    );
+    networkChains.push(chain);
+    return key;
+  };
   let governanceKey: string | undefined;
   let fellowshipKey: string | undefined;
-
   if (governance && fellowship && isSameChain(governance, fellowship)) {
-    specs.push(forkSpec('governance', governance, injections.fellowship ?? injections.governance));
-    networkChains.push(governance);
-    governanceKey = 'governance';
-    fellowshipKey = 'governance';
+    governanceKey = primarySpec(
+      'governance',
+      governance,
+      injections.fellowship ?? injections.governance
+    );
+    fellowshipKey = governanceKey;
   } else {
-    if (governance) {
-      specs.push(forkSpec('governance', governance, injections.governance));
-      networkChains.push(governance);
-      governanceKey = 'governance';
-    }
-    if (fellowship) {
-      specs.push(forkSpec('fellowship', fellowship, injections.fellowship));
-      networkChains.push(fellowship);
-      fellowshipKey = 'fellowship';
-    }
+    if (governance) governanceKey = primarySpec('governance', governance, injections.governance);
+    if (fellowship) fellowshipKey = primarySpec('fellowship', fellowship, injections.fellowship);
   }
 
-  const additional: Array<{ key: string; chain: DetectedChain }> = [];
-  for (const [index, chain] of chains.additional.entries()) {
+  const additional: DetectedChain[] = [];
+  for (const chain of chains.additional) {
     if (networkChains.some((other) => isSameChain(other, chain))) {
       logger.debug(`Skipping ${chain.info.label}: already in the network`);
       continue;
     }
-    if (chain.info.kind === 'relay' && specs.some((spec) => spec.kind === 'relay')) {
-      logger.warn(
-        `Skipping relay chain ${chain.info.label}: the network already has a relay chain`
-      );
-      continue;
-    }
-    const key = `additional_${index}`;
-    specs.push(forkSpec(key, chain));
     networkChains.push(chain);
-    additional.push({ key, chain });
-    logger.debug(`Adding ${chain.info.label} (${chain.info.kind}) to the network as ${key}`);
+    additional.push(chain);
   }
-
-  return { specs, governanceKey, fellowshipKey, additional };
+  const additionalSpecs = additionalForkSpecs(
+    additional,
+    specs.some((spec) => spec.kind === 'relay'),
+    RUNTIME_LOG_LEVEL,
+    logger
+  );
+  return {
+    specs: [...specs, ...additionalSpecs],
+    governanceKey,
+    fellowshipKey,
+    additionalKeys: additionalSpecs.map((spec) => spec.key),
+  };
 }

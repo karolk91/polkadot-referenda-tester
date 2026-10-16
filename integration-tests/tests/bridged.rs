@@ -54,8 +54,6 @@ async fn bridged_fellowship_by_id() {
     let kusama_network = spawn_network(&KUSAMA_BRIDGE_NETWORK)
         .await
         .expect("Kusama zombienet spawn failed");
-    let [polkadot_relay_node, ..] = POLKADOT_RELAY.validators;
-    let [kusama_relay_node, ..] = KUSAMA_RELAY.validators;
     let (
         polkadot_relay,
         mut collectives,
@@ -65,11 +63,11 @@ async fn bridged_fellowship_by_id() {
         asset_hub_kusama,
         bridge_hub_kusama,
     ) = tokio::try_join!(
-        ChainEndpoint::connect(&polkadot_network, polkadot_relay_node),
+        ChainEndpoint::connect(&polkadot_network, POLKADOT_RELAY.first_validator()),
         ChainEndpoint::connect(&polkadot_network, POLKADOT_COLLECTIVES.collator),
         ChainEndpoint::connect(&polkadot_network, POLKADOT_ASSET_HUB.collator),
         ChainEndpoint::connect(&polkadot_network, POLKADOT_BRIDGE_HUB.collator),
-        ChainEndpoint::connect(&kusama_network, kusama_relay_node),
+        ChainEndpoint::connect(&kusama_network, KUSAMA_RELAY.first_validator()),
         ChainEndpoint::connect(&kusama_network, KUSAMA_ASSET_HUB.collator),
         ChainEndpoint::connect(&kusama_network, KUSAMA_BRIDGE_HUB.collator),
     )

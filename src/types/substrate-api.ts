@@ -83,7 +83,20 @@ export interface DecodedTransaction {
 
 export interface RuntimeVersion {
   spec_name: string;
-  spec_version: number;
+}
+
+export interface OutboundMessagesPallet {
+  OutboundLanes: {
+    getEntries(): Promise<
+      Array<{
+        keyArgs: [string];
+        value: { latest_generated_nonce: bigint; latest_received_nonce: bigint };
+      }>
+    >;
+  };
+  OutboundMessages: {
+    getValue(key: { lane_id: string; nonce: bigint }): Promise<Uint8Array | undefined>;
+  };
 }
 
 // --- Referenda pallet interface (shared by Referenda + FellowshipReferenda) ---
@@ -117,6 +130,7 @@ export interface SubstrateApi {
     Balances: {
       TotalIssuance: StorageValue<bigint>;
     };
+    BridgeKusamaMessages?: OutboundMessagesPallet;
   };
   constants: {
     System: {

@@ -24,19 +24,12 @@ async function runStepPostTest(
   logger: Logger
 ): Promise<void> {
   if (!step.postTest) return;
-  const chains = forks.map(postTestChain);
-  const mainIndex = forks.indexOf(outcome.main);
-  if (mainIndex < 0) {
-    throw new Error(
-      `Post-test main chain ${outcome.main.info.label} is not one of the run's forks`
-    );
-  }
   await runPostTest(
     logger,
     step.postTest.module,
     {
-      main: chains[mainIndex],
-      chains,
+      main: postTestChain(outcome.main),
+      chains: forks.map(postTestChain),
       verbose: logger.isVerbose(),
       step: {
         ...position,

@@ -1,4 +1,5 @@
 import type { Fork } from '../network/fork';
+import { delay } from '../utils/delay';
 import { isEvent, type ParsedEvent } from '../utils/events';
 import type { ForkEventLog } from './fork-event-log';
 
@@ -48,7 +49,7 @@ export async function processDownstreamMessages(
     }
     pending = pending.filter((fork) => !deliveries.has(fork));
     if (pending.length > 0) {
-      await new Promise((resolve) => setTimeout(resolve, options.roundDelayMs));
+      await delay(options.roundDelayMs);
     }
   }
   for (const fork of pending) {

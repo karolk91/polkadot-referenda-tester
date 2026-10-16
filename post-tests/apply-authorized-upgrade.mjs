@@ -341,25 +341,28 @@ async function upgradeChain(postTestChain, wasmsByHash, opts) {
   section(`${label} (${specName}, ${kind})`);
 
   const authorization = await readAuthorization(chain, wasmsByHash, opts);
+  const result = (status, notes, details = {}) => ({
+    ...chainResult(postTestChain, status, notes),
+    authorizedHash: authorization.authorizedHash,
+    asset: authorization.asset?.name,
+    ...details,
+  });
   if (authorization.status !== 'authorized') {
-    return { ...chainResult(postTestChain, authorization.status, authorization.notes), authorizedHash: authorization.authorizedHash };
+    return result(authorization.status, authorization.notes);
   }
   const application = await applyUpgrade(chain, label, authorization.code, opts);
   if (!application.included) {
-    return { ...chainResult(postTestChain, 'failed', [...authorization.notes, application.note]), authorizedHash: authorization.authorizedHash, asset: authorization.asset.name };
+    return result('failed', [...authorization.notes, application.note]);
   }
   const verification = await verifyUpgrade(chain, kind, authorization, application);
-  return {
-    ...chainResult(postTestChain, verification.isPassed ? 'upgraded' : 'failed', [...authorization.notes, ...application.notes]),
-    authorizedHash: authorization.authorizedHash,
-    asset: authorization.asset.name,
+  return result(verification.isPassed ? 'upgraded' : 'failed', [...authorization.notes, ...application.notes], {
     before: authorization.before,
     after: verification.after,
     blocks: { first: application.firstBlock, last: application.lastBlock },
     codeUpdatedAt: application.codeUpdatedAt,
     notable: application.notable,
     other: application.other,
-  };
+  });
 }
 
 // ---------------------------------------------------------------------------------------------

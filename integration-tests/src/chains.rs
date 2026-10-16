@@ -15,6 +15,12 @@ pub struct RelayDef {
     pub validators: [&'static str; 3],
 }
 
+impl RelayDef {
+    pub fn first_validator(&self) -> &'static str {
+        self.validators[0]
+    }
+}
+
 pub struct ParachainDef {
     pub chain: ChainDef,
     pub id: ParaId,

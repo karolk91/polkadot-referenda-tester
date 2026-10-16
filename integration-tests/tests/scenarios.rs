@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use harness::tool_runner::{StepArgs, ToolArgs, ToolRunner};
+use harness::tool_runner::{report_outcome, StepArgs, ToolArgs, ToolRunner};
 
 struct ValidationCase {
     label: &'static str,
@@ -103,12 +103,9 @@ async fn validation_test_suite() {
     let mut failures = Vec::new();
     while let Some(joined) = tasks.join_next().await {
         let (label, outcome) = joined.expect("validation task panicked");
-        match outcome {
-            Ok(()) => log::info!("PASS: {label}"),
-            Err(error) => {
-                log::error!("FAIL: {label}: {error:#}");
-                failures.push(label);
-            }
+        report_outcome(label, &outcome);
+        if outcome.is_err() {
+            failures.push(label);
         }
     }
     assert!(failures.is_empty(), "failed validation cases: {failures:?}");

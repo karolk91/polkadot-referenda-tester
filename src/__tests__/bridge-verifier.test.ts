@@ -4,15 +4,7 @@ import { verifyBridgeDelivery } from '../bridge/bridge-verifier';
 import { ForkEventLog } from '../bridge/fork-event-log';
 import type { Fork } from '../network/fork';
 import type { EventRecord } from '../types/substrate-api';
-import { createTestLogger, eventRecord } from './helpers';
-
-function fakeFork(label: string): Fork {
-  return {
-    manager: { newBlock: vi.fn(async () => {}) },
-    api: { query: { System: { Number: { getValue: vi.fn(async () => 5) }, Events: {} } } },
-    info: { label },
-  } as unknown as Fork;
-}
+import { createTestLogger, eventRecord, fakeFork } from './helpers';
 
 const polkadot: BridgePolkadotSide = {
   collectives: fakeFork('collectives-polkadot'),

@@ -16,7 +16,7 @@ export type StorageInjection = 'fellowship' | 'alice-account';
  * truncated, so two endpoints can share a prefix; the digest of the full endpoint makes their
  * file names differ.
  */
-export function dbPath(endpoint: string): string {
+function dbPath(endpoint: string): string {
   const slug = endpoint
     .replace(/[^a-zA-Z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '')

@@ -1,35 +1,29 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_BRIDGE_URLS, type TestOptions } from '../commands/test-options';
+import type { TestOptions } from '../commands/test-options';
 import { testReferendum } from '../commands/test-referendum';
 import { SingleConsensusNetwork } from '../network/single-consensus-network';
 import { runStepsOnNetwork } from '../network/step-runner';
+import { testOptions } from './helpers';
 
 vi.mock('../network/single-consensus-network', () => ({
   SingleConsensusNetwork: { create: vi.fn(async () => ({})) },
 }));
 vi.mock('../network/step-runner', () => ({ runStepsOnNetwork: vi.fn() }));
-vi.mock('../utils/logger', () => ({
-  Logger: vi.fn(function (this: Record<string, unknown>) {
-    const methods = ['info', 'debug', 'warn', 'error', 'success', 'section'];
-    for (const method of [...methods, 'startSpinner', 'succeedSpinner', 'failSpinner']) {
-      this[method] = vi.fn();
-    }
-    this.isVerbose = () => false;
-  }),
-}));
+vi.mock('../utils/logger', async () => {
+  const { createTestLogger } = await import('./helpers');
+  return {
+    Logger: vi.fn(function (this: object) {
+      Object.assign(this, createTestLogger());
+    }),
+  };
+});
 
 function options(overrides: Partial<TestOptions> = {}): TestOptions {
-  return {
+  return testOptions({
     referendum: '1',
     governanceChainUrl: 'wss://example.com',
-    assetHubPolkadotUrl: DEFAULT_BRIDGE_URLS.assetHubPolkadot,
-    bridgeHubPolkadotUrl: DEFAULT_BRIDGE_URLS.bridgeHubPolkadot,
-    bridgeHubKusamaUrl: DEFAULT_BRIDGE_URLS.bridgeHubKusama,
-    bridgePumpRounds: 8,
-    cleanup: true,
-    verbose: false,
     ...overrides,
-  };
+  });
 }
 
 describe('testReferendum exit code', () => {

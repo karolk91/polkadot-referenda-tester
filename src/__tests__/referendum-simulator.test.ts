@@ -8,13 +8,14 @@ import {
   createTestLogger,
   eventRecord,
   type FakeChainState,
+  mockNudgeDecoder,
+  NUDGE_CALL,
   scheduledTask,
   storageWrite,
 } from './helpers';
 
 const REFERENDUM_ID = 7;
 const ENACTMENT_TASK_NAME = enactmentTaskName(REFERENDUM_ID);
-const NUDGE_CALL = new Uint8Array([0x3e, 0x07]);
 
 const ONGOING: ReferendumOngoing = {
   track: 0,
@@ -46,14 +47,7 @@ function simulatorFor(state: FakeChainState, eventsPerBlock: EventRecord[][]) {
   for (const blockEvents of eventsPerBlock) {
     events.mockResolvedValueOnce(blockEvents);
   }
-  vi.mocked(chain.api.txFromCallData).mockImplementation(async (callData: Uint8Array) => ({
-    decodedCall: {
-      type: callData === NUDGE_CALL ? 'Referenda' : 'System',
-      value: { type: 'nudge_referendum', value: { index: REFERENDUM_ID } },
-    },
-    create: vi.fn(),
-    getEncodedData: vi.fn(),
-  }));
+  mockNudgeDecoder(chain.api, 'Referenda', REFERENDUM_ID);
   return {
     ...chain,
     simulator: new ReferendumSimulator(createTestLogger(), chain.chopsticks, chain.api, GOVERNANCE),

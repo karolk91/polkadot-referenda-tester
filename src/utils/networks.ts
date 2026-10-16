@@ -1,10 +1,4 @@
-export const NETWORKS_IN_MATCH_ORDER = [
-  'kusama',
-  'paseo',
-  'westend',
-  'rococo',
-  'polkadot',
-] as const;
+const NETWORKS_IN_MATCH_ORDER = ['kusama', 'paseo', 'westend', 'rococo', 'polkadot'] as const;
 
 export type ChainNetwork = (typeof NETWORKS_IN_MATCH_ORDER)[number] | 'unknown';
 

@@ -1,8 +1,13 @@
 import type { HexString } from 'polkadot-api';
 import { vi } from 'vitest';
+import { DEFAULT_BRIDGE_URLS, type TestOptions } from '../commands/test-options';
+import type { ChainInfo, ChainKind } from '../network/chain-identity';
 import type { ChopsticksManager } from '../network/chopsticks-manager';
+import type { Fork } from '../network/fork';
+import type { ReferendumStep } from '../types';
 import type { EventRecord, ScheduledEntry, SubstrateApi } from '../types/substrate-api';
 import type { Logger } from '../utils/logger';
+import type { ChainNetwork } from '../utils/networks';
 
 export function createTestLogger(): Logger {
   return {
@@ -17,6 +22,81 @@ export function createTestLogger(): Logger {
     succeedSpinner: vi.fn(),
     failSpinner: vi.fn(),
   } as unknown as Logger;
+}
+
+export function chainInfo(
+  label: string,
+  network: ChainNetwork,
+  kind: ChainKind,
+  endpoint = `wss://${label}`
+): ChainInfo {
+  return { label, specName: label, endpoint, network, kind };
+}
+
+export function testOptions(overrides: Partial<TestOptions> = {}): TestOptions {
+  return {
+    assetHubPolkadotUrl: DEFAULT_BRIDGE_URLS.assetHubPolkadot,
+    bridgeHubPolkadotUrl: DEFAULT_BRIDGE_URLS.bridgeHubPolkadot,
+    bridgeHubKusamaUrl: DEFAULT_BRIDGE_URLS.bridgeHubKusama,
+    bridgePumpRounds: 8,
+    cleanup: true,
+    verbose: false,
+    ...overrides,
+  };
+}
+
+export function governanceStep(id: number, postTest?: string): ReferendumStep {
+  return {
+    referenda: { kind: 'governance', governance: { kind: 'existing', id } },
+    ...(postTest && { postTest: { module: postTest } }),
+  };
+}
+
+export function fellowshipStep(id: number): ReferendumStep {
+  return { referenda: { kind: 'fellowship', fellowship: { kind: 'existing', id } } };
+}
+
+export interface FakeForkParts {
+  newBlock?: () => Promise<void>;
+  query?: Record<string, unknown>;
+  client?: Record<string, unknown>;
+}
+
+export function fakeFork(label: string, parts: FakeForkParts = {}): Fork {
+  return {
+    manager: {
+      newBlock: vi.fn(parts.newBlock ?? (async () => {})),
+      context: { url: `ws://${label}`, chain: {} },
+    },
+    client: parts.client ?? {},
+    api: {
+      query: {
+        System: {
+          Number: { getValue: vi.fn(async () => 5) },
+          Events: { getValue: vi.fn(async () => []) },
+        },
+        ...parts.query,
+      },
+    },
+    info: chainInfo(label, 'polkadot', 'parachain'),
+  } as unknown as Fork;
+}
+
+export const NUDGE_CALL = new Uint8Array([0x3e, 0x07]);
+
+export function mockNudgeDecoder(
+  api: SubstrateApi,
+  palletName: string,
+  referendumId: number
+): void {
+  vi.mocked(api.txFromCallData).mockImplementation(async (callData: Uint8Array) => ({
+    decodedCall: {
+      type: callData === NUDGE_CALL ? palletName : 'System',
+      value: { type: 'nudge_referendum', value: { index: referendumId } },
+    },
+    create: vi.fn(),
+    getEncodedData: vi.fn(),
+  }));
 }
 
 export type Agenda = Array<ScheduledEntry | undefined>;

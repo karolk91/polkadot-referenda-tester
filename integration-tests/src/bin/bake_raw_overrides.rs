@@ -6,21 +6,23 @@ use harness::chains::SPEC_GENERATION_NETWORKS;
 use harness::network_config::cached_spec_path;
 
 const CHECK_FLAG: &str = "--check";
+const RAW_TOP_POINTER: &str = "/genesis/raw/top";
 
-fn override_entries(raw_override: &Value) -> Result<Map<String, Value>> {
-    raw_override
-        .pointer("/genesis/raw/top")
+fn raw_top(spec: &Value) -> Result<&Map<String, Value>> {
+    spec.pointer(RAW_TOP_POINTER)
         .and_then(Value::as_object)
-        .cloned()
-        .context("raw override without genesis.raw.top")
+        .context("no genesis.raw.top object")
 }
 
-fn out_of_sync_entries(spec: &Value, entries: &Map<String, Value>) -> Result<Map<String, Value>> {
-    let top = spec
-        .pointer("/genesis/raw/top")
-        .and_then(Value::as_object)
-        .context("chain spec without genesis.raw.top")?;
-    Ok(entries
+fn raw_top_mut(spec: &mut Value) -> Result<&mut Map<String, Value>> {
+    spec.pointer_mut(RAW_TOP_POINTER)
+        .and_then(Value::as_object_mut)
+        .context("no genesis.raw.top object")
+}
+
+fn out_of_sync_entries(spec: &Value, raw_override: &Value) -> Result<Map<String, Value>> {
+    let top = raw_top(spec)?;
+    Ok(raw_top(raw_override)?
         .iter()
         .filter(|(key, value)| top.get(*key) != Some(*value))
         .map(|(key, value)| (key.clone(), value.clone()))
@@ -38,21 +40,18 @@ fn bake(path: &Path, raw_override: &Value, rewrite: bool) -> Result<usize> {
         path.display()
     );
 
-    let stale = out_of_sync_entries(&spec, &override_entries(raw_override)?)?;
+    let stale = out_of_sync_entries(&spec, raw_override)?;
     for key in stale.keys() {
         log::info!("{}: out of sync key {key}", path.display());
     }
-    if !rewrite || stale.is_empty() {
-        return Ok(stale.len());
+    let stale_count = stale.len();
+    if !rewrite || stale_count == 0 {
+        return Ok(stale_count);
     }
-    let top = spec
-        .pointer_mut("/genesis/raw/top")
-        .and_then(Value::as_object_mut)
-        .context("chain spec without genesis.raw.top")?;
-    top.extend(stale.clone());
+    raw_top_mut(&mut spec)?.extend(stale);
     std::fs::write(path, serde_json::to_string_pretty(&spec)?)
         .with_context(|| format!("failed to write {}", path.display()))?;
-    Ok(stale.len())
+    Ok(stale_count)
 }
 
 fn main() -> Result<()> {

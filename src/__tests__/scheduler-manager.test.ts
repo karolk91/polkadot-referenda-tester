@@ -6,6 +6,8 @@ import {
   createFakeChain,
   createTestLogger,
   type FakeChainState,
+  mockNudgeDecoder,
+  NUDGE_CALL,
   scheduledTask,
   storageWrite,
 } from './helpers';
@@ -139,54 +141,72 @@ describe('SchedulerManager.appendInlineCall', () => {
 });
 
 describe('SchedulerManager.scheduleNudge', () => {
-  const NUDGE_CALL = new Uint8Array([0x3e, 0x07]);
+  const REFERENDUM_ID = 7;
+  const ALARM = { block: 200, index: 1 };
+  const NUDGE_AGENDA = {
+    200: [
+      scheduledTask({ priority: 1 }),
+      scheduledTask({ call: { type: 'Inline', value: NUDGE_CALL } }),
+    ],
+  };
 
-  function withNudgeDecoder(api: ReturnType<typeof createFakeChain>['api'], pallet: string) {
-    vi.mocked(api.txFromCallData).mockImplementation(async (callData: Uint8Array) => ({
-      decodedCall: {
-        type: callData === NUDGE_CALL ? pallet : 'System',
-        value: { type: 'nudge_referendum', value: { index: 7 } },
-      },
-      create: vi.fn(),
-      getEncodedData: vi.fn(),
-    }));
-  }
-
-  it('alarm of the referendum moved to the target block', async () => {
-    const { scheduler, writes, api } = schedulerFor({
-      agenda: { 200: [scheduledTask({ call: { type: 'Inline', value: NUDGE_CALL } })] },
-    });
-    withNudgeDecoder(api, 'Referenda');
-
-    expect(await scheduler.scheduleNudge(GOVERNANCE, 7, 51)).toEqual({ block: 51, index: 0 });
-    expect(storageWrite(writes, 'Scheduler', 'Agenda', [200])).toEqual([null]);
-  });
-
-  it('Root nudge for a referendum without an alarm', async () => {
-    const { scheduler, writes, api } = schedulerFor({ agenda: { 51: [scheduledTask()] } });
-    withNudgeDecoder(api, 'Referenda');
+  function injectedNudge(api: ReturnType<typeof createFakeChain>['api']) {
     const nudgeReferendum = vi.fn(() => ({
       getEncodedData: async () => new Uint8Array([0x3e, 0x09]),
     }));
     (api as unknown as { tx: unknown }).tx = { Referenda: { nudge_referendum: nudgeReferendum } };
+    return nudgeReferendum;
+  }
+
+  it('alarm task of the referendum moved to the target block', async () => {
+    const { scheduler, writes, api } = schedulerFor({ agenda: NUDGE_AGENDA });
+    mockNudgeDecoder(api, 'Referenda', REFERENDUM_ID);
+
+    expect(await scheduler.scheduleNudge(GOVERNANCE, REFERENDUM_ID, ALARM, 51)).toEqual({
+      block: 51,
+      index: 0,
+    });
+    expect(storageWrite(writes, 'Scheduler', 'Agenda', [200])).toMatchObject([
+      { priority: 1 },
+      null,
+    ]);
+  });
+
+  it('Root nudge for a referendum without an alarm', async () => {
+    const { scheduler, writes, api } = schedulerFor({ agenda: { 51: [scheduledTask()] } });
+    mockNudgeDecoder(api, 'Referenda', REFERENDUM_ID);
+    const nudgeReferendum = injectedNudge(api);
 
     expect(
-      await scheduler.scheduleNudge(GOVERNANCE, 7, 51),
+      await scheduler.scheduleNudge(GOVERNANCE, REFERENDUM_ID, undefined, 51),
       'a queued referendum has no alarm, so the tool schedules the nudge itself'
     ).toEqual({ block: 51, index: 1 });
-    expect(nudgeReferendum).toHaveBeenCalledWith({ index: 7 });
+    expect(nudgeReferendum).toHaveBeenCalledWith({ index: REFERENDUM_ID });
     expect(storageWrite(writes, 'Scheduler', 'Agenda', [51])).toMatchObject([
       {},
       { call: { Inline: '0x3e09' }, origin: { system: 'Root' } },
     ]);
   });
 
-  it('alarm search in the FellowshipReferenda pallet for a fellowship referendum', async () => {
-    const { scheduler, api } = schedulerFor({
-      agenda: { 200: [scheduledTask({ call: { type: 'Inline', value: NUDGE_CALL } })] },
+  it('Root nudge when the alarm address has no nudge of the referendum', async () => {
+    const { scheduler, writes, api } = schedulerFor({ agenda: NUDGE_AGENDA });
+    mockNudgeDecoder(api, 'Referenda', REFERENDUM_ID + 1);
+    injectedNudge(api);
+
+    expect(
+      await scheduler.scheduleNudge(GOVERNANCE, REFERENDUM_ID, ALARM, 51),
+      'the alarm of a forked chain can point at a slot of another task'
+    ).toEqual({ block: 51, index: 0 });
+    expect(writes.some((write) => JSON.stringify(write.key) === '[200]')).toBe(false);
+  });
+
+  it('nudge of the FellowshipReferenda pallet for a fellowship referendum', async () => {
+    const { scheduler, api } = schedulerFor({ agenda: NUDGE_AGENDA });
+    mockNudgeDecoder(api, 'FellowshipReferenda', REFERENDUM_ID);
+    expect(await scheduler.scheduleNudge(FELLOWSHIP, REFERENDUM_ID, ALARM, 51)).toEqual({
+      block: 51,
+      index: 0,
     });
-    withNudgeDecoder(api, 'FellowshipReferenda');
-    expect(await scheduler.scheduleNudge(FELLOWSHIP, 7, 51)).toEqual({ block: 51, index: 0 });
   });
 });
 

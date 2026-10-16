@@ -1,12 +1,14 @@
+import { type ChainInfo, fetchChainInfoFromEndpoint } from '../network/chain-identity';
 import {
-  type ChainInfo,
-  type ChainKind,
-  fetchChainInfoFromEndpoint,
-} from '../network/chain-identity';
+  additionalForkSpecs,
+  type DetectedChain,
+  forkSpec,
+} from '../network/chain-topology-builder';
 import type { ForkSpec } from '../network/fork';
 import type { ParsedEndpoint } from '../utils/chain-endpoint-parser';
-import { buildChopsticksChainConfig, type StorageInjection } from '../utils/chopsticks-config';
+import type { StorageInjection } from '../utils/chopsticks-config';
 import type { Logger } from '../utils/logger';
+import type { ReferendumRoles } from '../utils/referendum-steps';
 
 const BRIDGE_RUNTIME_LOG_LEVEL = 4;
 
@@ -21,22 +23,11 @@ export interface BridgeEndpoints {
   assetHubKusama: ParsedEndpoint;
   /** Kusama Bridge Hub — where the actual `pallet_bridge_messages` dispatch runs. */
   bridgeHubKusama: ParsedEndpoint;
-  additionalPolkadot: AdditionalBridgeChain[];
-  additionalKusama: AdditionalBridgeChain[];
+  additionalPolkadot: DetectedChain[];
+  additionalKusama: DetectedChain[];
 }
 
 export type BridgeRole = Exclude<keyof BridgeEndpoints, 'additionalPolkadot' | 'additionalKusama'>;
-
-export interface BridgeInjections {
-  fellowshipStorageOnCollectives: boolean;
-  aliceOnAssetHubKusama: boolean;
-}
-
-export interface AdditionalBridgeChain {
-  endpoint: ParsedEndpoint;
-  kind: ChainKind;
-  label: string;
-}
 
 export interface BridgeSideSpecs {
   specs: ForkSpec[];
@@ -45,33 +36,22 @@ export interface BridgeSideSpecs {
 
 function sideSpecs(
   cores: Array<{ key: BridgeRole; endpoint: ParsedEndpoint; injection?: StorageInjection }>,
-  additional: AdditionalBridgeChain[],
+  additional: DetectedChain[],
   logger: Logger
 ): BridgeSideSpecs {
-  const config = (endpoint: ParsedEndpoint, injection?: StorageInjection) =>
-    buildChopsticksChainConfig(endpoint, { injection, runtimeLogLevel: BRIDGE_RUNTIME_LOG_LEVEL });
-  const specs: ForkSpec[] = cores.map(({ key, endpoint, injection }) => ({
-    key,
-    kind: 'parachain',
-    config: config(endpoint, injection),
-  }));
-  const additionalKeys: string[] = [];
-  for (const [index, chain] of additional.entries()) {
-    if (chain.kind === 'relay' && specs.some((spec) => spec.kind === 'relay')) {
-      logger.warn(`Skipping additional relay ${chain.label}: this side already has a relay chain`);
-      continue;
-    }
-    const key = `additional_${index}`;
-    specs.push({ key, kind: chain.kind, config: config(chain.endpoint) });
-    additionalKeys.push(key);
-    logger.debug(`Bridged topology: monitoring ${chain.label} (${chain.kind}) as key '${key}'`);
-  }
-  return { specs, additionalKeys };
+  const coreSpecs = cores.map(({ key, endpoint, injection }) =>
+    forkSpec(key, endpoint, 'parachain', { injection, runtimeLogLevel: BRIDGE_RUNTIME_LOG_LEVEL })
+  );
+  const additionalSpecs = additionalForkSpecs(additional, false, BRIDGE_RUNTIME_LOG_LEVEL, logger);
+  return {
+    specs: [...coreSpecs, ...additionalSpecs],
+    additionalKeys: additionalSpecs.map((spec) => spec.key),
+  };
 }
 
 export function polkadotSideSpecs(
   endpoints: BridgeEndpoints,
-  injections: BridgeInjections,
+  creations: ReferendumRoles,
   logger: Logger
 ): BridgeSideSpecs {
   return sideSpecs(
@@ -79,7 +59,7 @@ export function polkadotSideSpecs(
       {
         key: 'collectives',
         endpoint: endpoints.collectives,
-        injection: injections.fellowshipStorageOnCollectives ? 'fellowship' : undefined,
+        injection: creations.fellowship ? 'fellowship' : undefined,
       },
       { key: 'assetHubPolkadot', endpoint: endpoints.assetHubPolkadot },
       {
@@ -95,7 +75,7 @@ export function polkadotSideSpecs(
 
 export function kusamaSideSpecs(
   endpoints: BridgeEndpoints,
-  injections: BridgeInjections,
+  creations: ReferendumRoles,
   logger: Logger
 ): BridgeSideSpecs {
   return sideSpecs(
@@ -103,7 +83,7 @@ export function kusamaSideSpecs(
       {
         key: 'assetHubKusama',
         endpoint: endpoints.assetHubKusama,
-        injection: injections.aliceOnAssetHubKusama ? 'alice-account' : undefined,
+        injection: creations.governance ? 'alice-account' : undefined,
       },
       { key: 'bridgeHubKusama', endpoint: endpoints.bridgeHubKusama, injection: 'alice-account' },
     ],
@@ -117,9 +97,9 @@ export async function classifyAdditionalBridgeChains(
   coreEndpoints: ParsedEndpoint[],
   logger: Logger,
   resolve: (url: string) => Promise<ChainInfo> = fetchChainInfoFromEndpoint
-): Promise<{ polkadot: AdditionalBridgeChain[]; kusama: AdditionalBridgeChain[] }> {
-  const polkadot: AdditionalBridgeChain[] = [];
-  const kusama: AdditionalBridgeChain[] = [];
+): Promise<{ polkadot: DetectedChain[]; kusama: DetectedChain[] }> {
+  const polkadot: DetectedChain[] = [];
+  const kusama: DetectedChain[] = [];
   if (additional.length === 0) return { polkadot, kusama };
 
   const lookup = (endpoint: ParsedEndpoint): Promise<ChainInfo | Error> =>
@@ -149,11 +129,11 @@ export async function classifyAdditionalBridgeChains(
     }
     topologyUrls.add(endpoint.url);
     topologyLabels.add(info.label);
-    const entry: AdditionalBridgeChain = { endpoint, kind: info.kind, label: info.label };
+    const chain: DetectedChain = { endpoint, info };
     if (info.network === 'polkadot') {
-      polkadot.push(entry);
+      polkadot.push(chain);
     } else if (info.network === 'kusama') {
-      kusama.push(entry);
+      kusama.push(chain);
     } else {
       logger.warn(
         `Skipping additional chain ${info.label} (${endpoint.url}): network '${info.network}' is not part of the Polkadot↔Kusama bridge topology`

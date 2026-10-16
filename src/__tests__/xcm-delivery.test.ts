@@ -4,23 +4,18 @@ import { outboundXcmIds, processDownstreamMessages } from '../bridge/xcm-deliver
 import type { Fork } from '../network/fork';
 import type { EventRecord } from '../types/substrate-api';
 import type { ParsedEvent } from '../utils/events';
-import { eventRecord } from './helpers';
+import { eventRecord, fakeFork } from './helpers';
 
 function scriptedFork(label: string, eventsPerBlock: EventRecord[][]): Fork {
   let blockCount = 0;
-  return {
-    manager: {
-      newBlock: vi.fn(async () => {
-        blockCount++;
-      }),
+  return fakeFork(label, {
+    newBlock: async () => {
+      blockCount++;
     },
-    api: {
-      query: {
-        System: { Events: { getValue: vi.fn(async () => eventsPerBlock[blockCount - 1] ?? []) } },
-      },
+    query: {
+      System: { Events: { getValue: vi.fn(async () => eventsPerBlock[blockCount - 1] ?? []) } },
     },
-    info: { label },
-  } as unknown as Fork;
+  });
 }
 
 function processed(id: string): EventRecord {

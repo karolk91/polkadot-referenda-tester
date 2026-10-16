@@ -1,15 +1,11 @@
 import type { NetworkContext } from '@acala-network/chopsticks-testing';
 import type { SubstrateApi } from '../types/substrate-api';
+import { delay } from '../utils/delay';
 import type { Logger } from '../utils/logger';
+import { blockNumber } from './chain-client';
 
 const CHAIN_READY_MAX_ATTEMPTS = 10;
 const CHAIN_READY_DELAY_MS = 500;
-const NEW_HEAD_TIMEOUT_MS = 10_000;
-const NEW_HEAD_POLL_MS = 100;
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
 
 export class ChopsticksManager {
   constructor(
@@ -23,12 +19,7 @@ export class ChopsticksManager {
         ? `Creating new block with ${params.transactions.length} transaction(s)...`
         : 'Creating new block...'
     );
-    const headBefore = this.context.chain.head.number;
     await this.context.dev.newBlock(params);
-    const deadline = Date.now() + NEW_HEAD_TIMEOUT_MS;
-    while (this.context.chain.head.number <= headBefore && Date.now() < deadline) {
-      await delay(NEW_HEAD_POLL_MS);
-    }
   }
 
   async setStorageBatch(updates: Record<string, unknown>): Promise<void> {
@@ -42,8 +33,7 @@ export class ChopsticksManager {
     this.logger.debug('Waiting for chain to be ready...');
     for (let attempt = 1; attempt <= CHAIN_READY_MAX_ATTEMPTS; attempt++) {
       try {
-        const blockNumber = await api.query.System.Number.getValue();
-        this.logger.debug(`Chain ready at block #${blockNumber}`);
+        this.logger.debug(`Chain ready at block #${await blockNumber(api)}`);
         return;
       } catch (error) {
         if (attempt === CHAIN_READY_MAX_ATTEMPTS) {

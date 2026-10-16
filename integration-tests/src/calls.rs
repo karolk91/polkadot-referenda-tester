@@ -4,7 +4,6 @@ use subxt::dynamic::{self, Value};
 use subxt_signer::sr25519::dev;
 
 use crate::context::Client;
-use crate::tracks::Track;
 
 #[derive(Clone, Copy, Debug)]
 pub enum ReferendaPallet {
@@ -33,18 +32,14 @@ pub const ROOT: Origin = Origin {
 };
 
 impl Origin {
-    pub fn governance_track(track: &Track) -> Origin {
-        match track.name {
+    pub fn governance_track(track: &'static str) -> Origin {
+        match track {
             "Root" => ROOT,
-            name => Origin {
+            variant => Origin {
                 caller: "Origins",
-                variant: name,
+                variant,
             },
         }
-    }
-
-    pub fn fellowship(caller: &'static str, variant: &'static str) -> Origin {
-        Origin { caller, variant }
     }
 }
 
@@ -65,7 +60,7 @@ pub struct SubmittedReferendum {
     pub block_number: u32,
 }
 
-fn hex_of(bytes: &[u8]) -> String {
+pub fn hex_of(bytes: &[u8]) -> String {
     format!("0x{}", hex::encode(bytes))
 }
 

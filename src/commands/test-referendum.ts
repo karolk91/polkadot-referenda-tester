@@ -14,32 +14,23 @@ import {
   parseMultipleEndpoints,
 } from '../utils/chain-endpoint-parser';
 import { Logger } from '../utils/logger';
-import { type ChainNetwork, networkFromText } from '../utils/networks';
-import { describeStep, fellowshipSource, governanceSource } from '../utils/referendum-steps';
+import { describeStep, referendumPresence } from '../utils/referendum-steps';
 import { buildSteps, type TestOptions } from './test-options';
 
 export type RunPlan =
   | { kind: 'single'; steps: ReferendumStep[]; endpoints: SingleConsensusEndpoints }
   | { kind: 'bridged'; steps: ReferendumStep[]; endpoints: BridgeEndpoints; maxPumpRounds: number };
 
-async function endpointNetwork(endpoint: ParsedEndpoint): Promise<ChainNetwork> {
-  const network = networkFromText(endpoint.url);
-  if (network !== 'unknown') return network;
-  try {
-    return (await fetchChainInfoFromEndpoint(endpoint.url)).network;
-  } catch {
-    return 'unknown';
-  }
-}
-
 async function crossNetworkScenario(
   fellowship: ParsedEndpoint,
   governance: ParsedEndpoint
 ): Promise<'single' | 'bridged' | 'unsupported'> {
-  const [fellowshipNetwork, governanceNetwork] = await Promise.all([
-    endpointNetwork(fellowship),
-    endpointNetwork(governance),
-  ]);
+  const [fellowshipNetwork, governanceNetwork] = (
+    await Promise.all([
+      fetchChainInfoFromEndpoint(fellowship.url),
+      fetchChainInfoFromEndpoint(governance.url),
+    ])
+  ).map((info) => info.network);
   if (fellowshipNetwork === 'polkadot' && governanceNetwork === 'kusama') return 'bridged';
   if (
     fellowshipNetwork !== 'unknown' &&
@@ -53,12 +44,11 @@ async function crossNetworkScenario(
 
 export async function planRun(options: TestOptions, logger: Logger): Promise<RunPlan> {
   const steps = buildSteps(options);
-  const hasGovernance = steps.some((step) => governanceSource(step) !== undefined);
-  const hasFellowship = steps.some((step) => fellowshipSource(step) !== undefined);
-  if (hasGovernance && !options.governanceChainUrl) {
+  const presence = referendumPresence(steps);
+  if (presence.governance && !options.governanceChainUrl) {
     throw new Error('--governance-chain-url is required when testing a governance referendum');
   }
-  if (hasFellowship && !options.fellowshipChainUrl) {
+  if (presence.fellowship && !options.fellowshipChainUrl) {
     throw new Error('--fellowship-chain-url is required when testing a fellowship referendum');
   }
 
@@ -71,9 +61,18 @@ export async function planRun(options: TestOptions, logger: Logger): Promise<Run
   const additional = options.additionalChains
     ? parseMultipleEndpoints(options.additionalChains)
     : [];
-  const scenario =
-    governance && fellowship ? await crossNetworkScenario(fellowship, governance) : 'single';
+  const single: RunPlan = {
+    kind: 'single',
+    steps,
+    endpoints: {
+      governance: presence.governance ? governance : undefined,
+      fellowship: presence.fellowship ? fellowship : undefined,
+      additional,
+    },
+  };
+  if (!governance || !fellowship) return single;
 
+  const scenario = await crossNetworkScenario(fellowship, governance);
   if (scenario === 'unsupported') {
     throw new Error(
       'Unsupported direction: only "Polkadot fellowship → Kusama governance" is currently supported. ' +
@@ -81,18 +80,8 @@ export async function planRun(options: TestOptions, logger: Logger): Promise<Run
         'Either use the supported direction or run both referenda on the same network.'
     );
   }
-  if (scenario === 'single' || !governance || !fellowship) {
-    return {
-      kind: 'single',
-      steps,
-      endpoints: {
-        governance: hasGovernance ? governance : undefined,
-        fellowship: hasFellowship ? fellowship : undefined,
-        additional,
-      },
-    };
-  }
-  if (!hasFellowship) {
+  if (scenario === 'single') return single;
+  if (!presence.fellowship) {
     throw new Error(
       'Bridged scenario (Polkadot fellowship → Kusama governance) requires a fellowship referendum (--fellowship or --call-to-create-fellowship-referendum)'
     );
@@ -121,9 +110,10 @@ export async function testReferendum(options: TestOptions): Promise<void> {
   const logger = new Logger(options.verbose);
   try {
     const plan = await planRun(options, logger);
-    const hasFellowship = plan.steps.some((step) => fellowshipSource(step) !== undefined);
     logger.section(
-      hasFellowship ? 'Polkadot Referenda Tester (Fellowship Mode)' : 'Polkadot Referenda Tester'
+      referendumPresence(plan.steps).fellowship
+        ? 'Polkadot Referenda Tester (Fellowship Mode)'
+        : 'Polkadot Referenda Tester'
     );
     if (plan.steps.length > 1) {
       logger.section(`Referendum Chain (${plan.steps.length} steps)`);

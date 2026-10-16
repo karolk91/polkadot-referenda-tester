@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_BRIDGE_URLS, type TestOptions } from '../commands/test-options';
 import { planRun } from '../commands/test-referendum';
 import { type ChainInfo, fetchChainInfoFromEndpoint } from '../network/chain-identity';
-import { createTestLogger } from './helpers';
+import { chainInfo, createTestLogger, testOptions } from './helpers';
 
 vi.mock('../network/chain-identity', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../network/chain-identity')>()),
@@ -13,14 +13,18 @@ const POLKADOT_COLLECTIVES = 'wss://polkadot-collectives-rpc.polkadot.io';
 const POLKADOT_ASSET_HUB = 'wss://polkadot-asset-hub-rpc.polkadot.io';
 const KUSAMA_ASSET_HUB = 'wss://kusama-asset-hub-rpc.polkadot.io';
 const KUSAMA_COLLECTIVES = 'wss://kusama-collectives-rpc.polkadot.io';
+const LOCAL_COLLECTIVES = 'ws://127.0.0.1:9100';
+const LOCAL_ASSET_HUB = 'ws://127.0.0.1:9200';
+const LOCAL_DEVNET = 'ws://127.0.0.1:9300';
 
-const RUN_DEFAULTS: TestOptions = {
-  assetHubPolkadotUrl: DEFAULT_BRIDGE_URLS.assetHubPolkadot,
-  bridgeHubPolkadotUrl: DEFAULT_BRIDGE_URLS.bridgeHubPolkadot,
-  bridgeHubKusamaUrl: DEFAULT_BRIDGE_URLS.bridgeHubKusama,
-  bridgePumpRounds: 8,
-  cleanup: true,
-  verbose: false,
+const CHAIN_INFO_BY_URL: Record<string, ChainInfo> = {
+  [POLKADOT_COLLECTIVES]: chainInfo('collectives', 'polkadot', 'parachain', POLKADOT_COLLECTIVES),
+  [POLKADOT_ASSET_HUB]: chainInfo('statemint', 'polkadot', 'parachain', POLKADOT_ASSET_HUB),
+  [KUSAMA_ASSET_HUB]: chainInfo('statemine', 'kusama', 'parachain', KUSAMA_ASSET_HUB),
+  [KUSAMA_COLLECTIVES]: chainInfo('collectives-kusama', 'kusama', 'parachain', KUSAMA_COLLECTIVES),
+  [LOCAL_COLLECTIVES]: chainInfo('collectives', 'polkadot', 'parachain', LOCAL_COLLECTIVES),
+  [LOCAL_ASSET_HUB]: chainInfo('statemine', 'kusama', 'parachain', LOCAL_ASSET_HUB),
+  [LOCAL_DEVNET]: chainInfo('devnet', 'unknown', 'parachain', LOCAL_DEVNET),
 };
 
 const BOTH_REFERENDA = {
@@ -29,13 +33,17 @@ const BOTH_REFERENDA = {
 };
 
 function plan(options: Partial<TestOptions>) {
-  return planRun({ ...RUN_DEFAULTS, ...options }, createTestLogger());
+  return planRun(testOptions(options), createTestLogger());
 }
 
 describe('planRun', () => {
   beforeEach(() => {
     vi.mocked(fetchChainInfoFromEndpoint).mockReset();
-    vi.mocked(fetchChainInfoFromEndpoint).mockRejectedValue(new Error('offline'));
+    vi.mocked(fetchChainInfoFromEndpoint).mockImplementation(async (url) => {
+      const info = CHAIN_INFO_BY_URL[url];
+      if (!info) throw new Error(`offline: ${url}`);
+      return info;
+    });
   });
 
   it('bridged plan for Polkadot fellowship and Kusama governance, with default hub URLs', async () => {
@@ -73,22 +81,10 @@ describe('planRun', () => {
     });
   });
 
-  it('network from the runtime for URLs without a network name', async () => {
-    const networks: Record<string, ChainInfo['network']> = {
-      'wss://collectives.example.com': 'polkadot',
-      'wss://asset-hub.example.com': 'kusama',
-    };
-    vi.mocked(fetchChainInfoFromEndpoint).mockImplementation(async (url) => ({
-      label: url,
-      endpoint: url,
-      network: networks[url],
-      kind: 'parachain',
-      specName: url,
-    }));
-
+  it('network from the runtime of each chain', async () => {
     const result = await plan({
-      fellowshipChainUrl: 'wss://collectives.example.com',
-      governanceChainUrl: 'wss://asset-hub.example.com',
+      fellowshipChainUrl: LOCAL_COLLECTIVES,
+      governanceChainUrl: LOCAL_ASSET_HUB,
       ...BOTH_REFERENDA,
     });
 
@@ -96,7 +92,7 @@ describe('planRun', () => {
   });
 
   it('single-consensus plan for both chains on one network or on an unknown network', async () => {
-    for (const fellowshipChainUrl of [POLKADOT_COLLECTIVES, 'wss://local-devnet.example.com']) {
+    for (const fellowshipChainUrl of [POLKADOT_COLLECTIVES, LOCAL_DEVNET]) {
       const result = await plan({
         fellowshipChainUrl,
         governanceChainUrl: POLKADOT_ASSET_HUB,
@@ -118,6 +114,23 @@ describe('planRun', () => {
       fellowship: undefined,
       additional: [],
     });
+  });
+
+  it('no chain lookup for a run with one chain', async () => {
+    await plan({ governanceChainUrl: 'ws://127.0.0.1:1', referendum: '1' });
+
+    expect(fetchChainInfoFromEndpoint).not.toHaveBeenCalled();
+  });
+
+  it('error for an unreachable chain', async () => {
+    await expect(
+      plan({
+        fellowshipChainUrl: 'ws://127.0.0.1:1',
+        governanceChainUrl: POLKADOT_ASSET_HUB,
+        ...BOTH_REFERENDA,
+      }),
+      'the chain identity decides the scenario, so the plan cannot guess it from the URL'
+    ).rejects.toThrow('offline: ws://127.0.0.1:1');
   });
 
   it('error for Kusama fellowship and Polkadot governance', async () => {

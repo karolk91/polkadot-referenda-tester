@@ -10,9 +10,7 @@ use harness::context::{ChainEndpoint, TestContext};
 use harness::genesis::{bob_account, EXISTING_FELLOW_RANK};
 use harness::network_config::{runtime_path, spawn_network};
 use harness::tool_runner::{sub_test, StepArgs, ToolArgs, ToolOutput, ToolRunner};
-use harness::tracks::{
-    Track, GOVERNANCE_TRACKS, KUSAMA_FELLOWSHIP_TRACKS, POLKADOT_FELLOWSHIP_TRACKS,
-};
+use harness::tracks::{GOVERNANCE_TRACKS, KUSAMA_FELLOWSHIP_TRACKS, POLKADOT_FELLOWSHIP_TRACKS};
 
 const POLKADOT_FELLOWSHIP_FIRST_HALF: usize = 15;
 
@@ -64,10 +62,33 @@ fn fellowship_calls(
     calls::referendum_calls(
         &context.fellowship().client,
         ReferendaPallet::Fellowship,
-        Origin::fellowship(context.fellowship_origin_caller, variant),
+        Origin {
+            caller: context.fellowship_origin_caller,
+            variant,
+        },
         proposal,
         reference,
     )
+}
+
+fn governance_remark_calls(
+    context: &TestContext,
+    origin: Origin,
+    text: &str,
+    reference: ProposalReference,
+) -> Result<ReferendumCalls> {
+    let proposal = calls::remark(&context.governance.client, text)?;
+    governance_calls(&context.governance, origin, &proposal, reference)
+}
+
+fn fellowship_remark_calls(
+    context: &TestContext,
+    variant: &'static str,
+    text: &str,
+    reference: ProposalReference,
+) -> Result<ReferendumCalls> {
+    let proposal = calls::remark(&context.fellowship().client, text)?;
+    fellowship_calls(context, variant, &proposal, reference)
 }
 
 fn authorize_upgrade_calls(context: &TestContext) -> Result<ReferendumCalls> {
@@ -80,35 +101,89 @@ fn authorize_upgrade_calls(context: &TestContext) -> Result<ReferendumCalls> {
     )
 }
 
-fn fellows_remark_calls(context: &TestContext, text: &str) -> Result<ReferendumCalls> {
-    let proposal = calls::remark(&context.fellowship().client, text)?;
-    fellowship_calls(context, "Fellows", &proposal, ProposalReference::Lookup)
+async fn governance_creation_outcome(context: &TestContext, calls: &ReferendumCalls) -> Result<()> {
+    tool_output(governance_args(
+        context,
+        StepArgs::default().governance_creation(calls),
+    ))
+    .await?
+    .check_executed()
+}
+
+async fn fellowship_creation_outcome(context: &TestContext, calls: &ReferendumCalls) -> Result<()> {
+    tool_output(fellowship_args(
+        context,
+        StepArgs::default().fellowship_creation(calls),
+    ))
+    .await?
+    .check_executed()
+}
+
+async fn governance_by_number_outcome(
+    context: &TestContext,
+    calls: &ReferendumCalls,
+) -> Result<()> {
+    let submitted = calls::submit_referendum(
+        &context.governance.client,
+        ReferendaPallet::Governance,
+        calls,
+    )
+    .await?;
+    tool_output(ToolArgs {
+        governance_chain_url: Some(context.governance.fork_point_at(submitted.block_number)),
+        steps: vec![StepArgs::default().governance_referendum(submitted.referendum_id)],
+        ..Default::default()
+    })
+    .await?
+    .check_executed()
+}
+
+async fn fellowship_by_number_outcome(
+    context: &TestContext,
+    calls: &ReferendumCalls,
+) -> Result<()> {
+    let fellowship = context.fellowship();
+    let submitted =
+        calls::submit_referendum(&fellowship.client, ReferendaPallet::Fellowship, calls).await?;
+    tool_output(ToolArgs {
+        fellowship_chain_url: Some(fellowship.fork_point_at(submitted.block_number)),
+        steps: vec![StepArgs::default().fellowship_referendum(submitted.referendum_id)],
+        ..Default::default()
+    })
+    .await?
+    .check_executed()
+}
+
+fn relay_events_outcome(output: &ToolOutput) -> Result<()> {
+    output.check_executed()?;
+    output.check_stdout_contains("Additional Chain Events")?;
+    output.check_stdout_contains("Block #")
 }
 
 async fn governance_track_sub_tests(context: &TestContext) {
-    for track in GOVERNANCE_TRACKS {
+    for &track in GOVERNANCE_TRACKS {
         sub_test(
-            &label(context, &format!("gov_create_{}", track.name)),
+            &label(context, &format!("gov_create_{track}")),
             governance_track_creation(context, track),
         )
         .await;
         sub_test(
-            &label(context, &format!("gov_bynum_{}", track.name)),
+            &label(context, &format!("gov_bynum_{track}")),
             governance_track_by_number(context, track),
         )
         .await;
     }
 }
 
-async fn fellowship_track_sub_tests(context: &TestContext, tracks: &[Track]) {
-    for track in tracks {
+async fn fellowship_track_sub_tests(context: &TestContext, tracks: &[&'static str]) {
+    for &track in tracks {
         sub_test(
-            &label(context, &format!("fell_create_{}", track.name)),
+            &label(context, &format!("fell_create_{track}")),
             fellowship_track_creation(context, track),
         )
         .await;
         sub_test(
-            &label(context, &format!("fell_bynum_{}", track.name)),
+            &label(context, &format!("fell_bynum_{track}")),
             fellowship_track_by_number(context, track),
         )
         .await;
@@ -291,81 +366,48 @@ async fn kusama_fellowship_all_tracks() {
     .await;
 }
 
-async fn governance_track_creation(context: &TestContext, track: &Track) -> Result<()> {
-    let proposal = calls::remark(
-        &context.governance.client,
-        &format!("gov-track-{}-test", track.name),
-    )?;
-    let calls = governance_calls(
-        &context.governance,
+async fn governance_track_creation(context: &TestContext, track: &'static str) -> Result<()> {
+    let calls = governance_remark_calls(
+        context,
         Origin::governance_track(track),
-        &proposal,
+        &format!("gov-track-{track}-test"),
         ProposalReference::Lookup,
     )?;
-    tool_output(governance_args(
-        context,
-        StepArgs::default().governance_creation(&calls),
-    ))
-    .await?
-    .check_executed()
+    governance_creation_outcome(context, &calls).await
 }
 
-async fn governance_track_by_number(context: &TestContext, track: &Track) -> Result<()> {
-    let client = &context.governance.client;
-    let proposal = calls::remark(client, &format!("bynum-gov-{}", track.name))?;
-    let calls = governance_calls(
-        &context.governance,
+async fn governance_track_by_number(context: &TestContext, track: &'static str) -> Result<()> {
+    let calls = governance_remark_calls(
+        context,
         Origin::governance_track(track),
-        &proposal,
+        &format!("bynum-gov-{track}"),
         ProposalReference::Lookup,
     )?;
-    let submitted = calls::submit_referendum(client, ReferendaPallet::Governance, &calls).await?;
-    tool_output(ToolArgs {
-        governance_chain_url: Some(context.governance.fork_point_at(submitted.block_number)),
-        steps: vec![StepArgs::default().governance_referendum(submitted.referendum_id)],
-        ..Default::default()
-    })
-    .await?
-    .check_executed()
+    governance_by_number_outcome(context, &calls).await
 }
 
-async fn fellowship_track_creation(context: &TestContext, track: &Track) -> Result<()> {
-    let proposal = calls::remark(
-        &context.fellowship().client,
-        &format!("fellowship-track-{}-test", track.name),
-    )?;
-    let calls = fellowship_calls(context, track.name, &proposal, ProposalReference::Lookup)?;
-    tool_output(fellowship_args(
+async fn fellowship_track_creation(context: &TestContext, track: &'static str) -> Result<()> {
+    let calls = fellowship_remark_calls(
         context,
-        StepArgs::default().fellowship_creation(&calls),
-    ))
-    .await?
-    .check_executed()
+        track,
+        &format!("fellowship-track-{track}-test"),
+        ProposalReference::Lookup,
+    )?;
+    fellowship_creation_outcome(context, &calls).await
 }
 
-async fn fellowship_track_by_number(context: &TestContext, track: &Track) -> Result<()> {
-    let fellowship = context.fellowship();
-    let proposal = calls::remark(&fellowship.client, &format!("bynum-fell-{}", track.name))?;
-    let calls = fellowship_calls(context, track.name, &proposal, ProposalReference::Lookup)?;
-    let submitted =
-        calls::submit_referendum(&fellowship.client, ReferendaPallet::Fellowship, &calls).await?;
-    tool_output(ToolArgs {
-        fellowship_chain_url: Some(fellowship.fork_point_at(submitted.block_number)),
-        steps: vec![StepArgs::default().fellowship_referendum(submitted.referendum_id)],
-        ..Default::default()
-    })
-    .await?
-    .check_executed()
+async fn fellowship_track_by_number(context: &TestContext, track: &'static str) -> Result<()> {
+    let calls = fellowship_remark_calls(
+        context,
+        track,
+        &format!("bynum-fell-{track}"),
+        ProposalReference::Lookup,
+    )?;
+    fellowship_by_number_outcome(context, &calls).await
 }
 
 async fn governance_happy_path(context: &TestContext) -> Result<()> {
-    let calls = authorize_upgrade_calls(context)?;
-    tool_output(governance_args(
-        context,
-        StepArgs::default().governance_creation(&calls),
-    ))
-    .await?
-    .check_executed()
+    governance_creation_outcome(context, &authorize_upgrade_calls(context)?).await
 }
 
 async fn governance_dispatch_failure(context: &TestContext) -> Result<()> {
@@ -394,7 +436,7 @@ async fn governance_pre_call(context: &TestContext, origin: &str) -> Result<()> 
         context,
         StepArgs::default()
             .governance_creation(&calls)
-            .pre_call(format!("0x{}", hex::encode(pre_call)), origin),
+            .pre_call(&pre_call, origin),
     ))
     .await?;
     output.check_executed()?;
@@ -408,7 +450,7 @@ async fn governance_pre_call_invalid_origin(context: &TestContext) -> Result<()>
         context,
         StepArgs::default()
             .governance_creation(&calls)
-            .pre_call(format!("0x{}", hex::encode(pre_call)), "NonExistentOrigin"),
+            .pre_call(&pre_call, "NonExistentOrigin"),
     ))
     .await?;
     output.check_failure()?;
@@ -416,19 +458,13 @@ async fn governance_pre_call_invalid_origin(context: &TestContext) -> Result<()>
 }
 
 async fn governance_remark_proposal(context: &TestContext) -> Result<()> {
-    let proposal = calls::remark(&context.governance.client, "integration-test-remark")?;
-    let calls = governance_calls(
-        &context.governance,
+    let calls = governance_remark_calls(
+        context,
         ROOT,
-        &proposal,
+        "integration-test-remark",
         ProposalReference::Lookup,
     )?;
-    tool_output(governance_args(
-        context,
-        StepArgs::default().governance_creation(&calls),
-    ))
-    .await?
-    .check_executed()
+    governance_creation_outcome(context, &calls).await
 }
 
 async fn governance_invalid_call_data(context: &TestContext) -> Result<()> {
@@ -460,52 +496,28 @@ async fn governance_without_preimage(context: &TestContext) -> Result<()> {
 }
 
 async fn governance_inline_creation(context: &TestContext) -> Result<()> {
-    let proposal = calls::remark(&context.governance.client, "inline-gov-test")?;
-    let calls = governance_calls(
-        &context.governance,
-        ROOT,
-        &proposal,
-        ProposalReference::Inline,
-    )?;
-    tool_output(governance_args(
-        context,
-        StepArgs::default().governance_creation(&calls),
-    ))
-    .await?
-    .check_executed()
+    let calls =
+        governance_remark_calls(context, ROOT, "inline-gov-test", ProposalReference::Inline)?;
+    governance_creation_outcome(context, &calls).await
 }
 
 async fn governance_inline_by_number(context: &TestContext) -> Result<()> {
-    let client = &context.governance.client;
-    let proposal = calls::remark(client, "bynum-inline-gov")?;
-    let calls = governance_calls(
-        &context.governance,
-        ROOT,
-        &proposal,
-        ProposalReference::Inline,
-    )?;
-    let submitted = calls::submit_referendum(client, ReferendaPallet::Governance, &calls).await?;
-    tool_output(ToolArgs {
-        governance_chain_url: Some(context.governance.fork_point_at(submitted.block_number)),
-        steps: vec![StepArgs::default().governance_referendum(submitted.referendum_id)],
-        ..Default::default()
-    })
-    .await?
-    .check_executed()
+    let calls =
+        governance_remark_calls(context, ROOT, "bynum-inline-gov", ProposalReference::Inline)?;
+    governance_by_number_outcome(context, &calls).await
 }
 
 async fn governance_steps_with_post_test(context: &TestContext) -> Result<()> {
-    let client = &context.governance.client;
-    let first = governance_calls(
-        &context.governance,
+    let first = governance_remark_calls(
+        context,
         ROOT,
-        &calls::remark(client, "first-step-remark")?,
+        "first-step-remark",
         ProposalReference::Lookup,
     )?;
-    let second = governance_calls(
-        &context.governance,
+    let second = governance_remark_calls(
+        context,
         ROOT,
-        &calls::remark(client, "second-step-remark")?,
+        "second-step-remark",
         ProposalReference::Inline,
     )?;
     let output = tool_output(ToolArgs {
@@ -560,7 +572,12 @@ async fn governance_upgrade_with_post_test(context: &TestContext) -> Result<()> 
 
 async fn fellowship_then_governance(context: &TestContext) -> Result<()> {
     let governance = authorize_upgrade_calls(context)?;
-    let fellowship = fellows_remark_calls(context, "integration-test")?;
+    let fellowship = fellowship_remark_calls(
+        context,
+        "Fellows",
+        "integration-test",
+        ProposalReference::Lookup,
+    )?;
     let output = tool_output(ToolArgs {
         governance_chain_url: Some(context.governance.fork_point()),
         fellowship_chain_url: Some(context.fellowship().fork_point()),
@@ -571,22 +588,20 @@ async fn fellowship_then_governance(context: &TestContext) -> Result<()> {
         ..Default::default()
     })
     .await?;
-    output.check_executed()?;
-    if context.relay.is_some() {
-        output.check_stdout_contains("Additional Chain Events")?;
-        output.check_stdout_contains("Block #")?;
+    match context.relay {
+        Some(_) => relay_events_outcome(&output),
+        None => output.check_executed(),
     }
-    Ok(())
 }
 
 async fn fellowship_only(context: &TestContext) -> Result<()> {
-    let calls = fellows_remark_calls(context, "fellowship-only-test")?;
-    tool_output(fellowship_args(
+    let calls = fellowship_remark_calls(
         context,
-        StepArgs::default().fellowship_creation(&calls),
-    ))
-    .await?
-    .check_executed()
+        "Fellows",
+        "fellowship-only-test",
+        ProposalReference::Lookup,
+    )?;
+    fellowship_creation_outcome(context, &calls).await
 }
 
 async fn nonexistent_referendum(context: &TestContext) -> Result<()> {
@@ -602,7 +617,12 @@ async fn nonexistent_referendum(context: &TestContext) -> Result<()> {
 async fn fellowship_without_preimage(context: &TestContext) -> Result<()> {
     let calls = ReferendumCalls {
         preimage: None,
-        ..fellows_remark_calls(context, "fellowship-only-test")?
+        ..fellowship_remark_calls(
+            context,
+            "Fellows",
+            "fellowship-only-test",
+            ProposalReference::Lookup,
+        )?
     };
     let output = tool_output(fellowship_args(
         context,
@@ -620,47 +640,42 @@ async fn governance_with_relay_events(context: &TestContext) -> Result<()> {
         ..governance_args(context, StepArgs::default().governance_creation(&calls))
     })
     .await?;
-    output.check_executed()?;
-    output.check_stdout_contains("Additional Chain Events")?;
-    output.check_stdout_contains("Block #")
+    relay_events_outcome(&output)
 }
 
 async fn fellowship_with_relay_events(context: &TestContext) -> Result<()> {
-    let calls = fellows_remark_calls(context, "fellowship-only-test")?;
+    let calls = fellowship_remark_calls(
+        context,
+        "Fellows",
+        "fellowship-only-test",
+        ProposalReference::Lookup,
+    )?;
     let output = tool_output(ToolArgs {
         additional_chains: Some(context.relay().fork_point()),
         ..fellowship_args(context, StepArgs::default().fellowship_creation(&calls))
     })
     .await?;
-    output.check_executed()?;
-    output.check_stdout_contains("Additional Chain Events")?;
-    output.check_stdout_contains("Block #")
+    relay_events_outcome(&output)
 }
 
 async fn fellowship_inline_creation(context: &TestContext) -> Result<()> {
-    let proposal = calls::remark(&context.fellowship().client, "inline-fell-test")?;
-    let calls = fellowship_calls(context, "Fellows", &proposal, ProposalReference::Inline)?;
-    tool_output(fellowship_args(
+    let calls = fellowship_remark_calls(
         context,
-        StepArgs::default().fellowship_creation(&calls),
-    ))
-    .await?
-    .check_executed()
+        "Fellows",
+        "inline-fell-test",
+        ProposalReference::Inline,
+    )?;
+    fellowship_creation_outcome(context, &calls).await
 }
 
 async fn fellowship_inline_by_number(context: &TestContext) -> Result<()> {
-    let fellowship = context.fellowship();
-    let proposal = calls::remark(&fellowship.client, "bynum-inline-fell")?;
-    let calls = fellowship_calls(context, "Fellows", &proposal, ProposalReference::Inline)?;
-    let submitted =
-        calls::submit_referendum(&fellowship.client, ReferendaPallet::Fellowship, &calls).await?;
-    tool_output(ToolArgs {
-        fellowship_chain_url: Some(fellowship.fork_point_at(submitted.block_number)),
-        steps: vec![StepArgs::default().fellowship_referendum(submitted.referendum_id)],
-        ..Default::default()
-    })
-    .await?
-    .check_executed()
+    let calls = fellowship_remark_calls(
+        context,
+        "Fellows",
+        "bynum-inline-fell",
+        ProposalReference::Inline,
+    )?;
+    fellowship_by_number_outcome(context, &calls).await
 }
 
 async fn fellowship_core_approve_existing_member(context: &TestContext) -> Result<()> {

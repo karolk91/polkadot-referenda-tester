@@ -7,7 +7,7 @@ use crate::chains::{
     KUSAMA_ASSET_HUB, KUSAMA_RELAY, POLKADOT_ASSET_HUB, POLKADOT_COLLECTIVES, POLKADOT_RELAY,
 };
 
-pub const BEST_BLOCK_METRIC: &str = "block_height{status=\"best\"}";
+const BEST_BLOCK_METRIC: &str = "block_height{status=\"best\"}";
 const BLOCK_PRODUCTION_TIMEOUT_SECS: u64 = 600;
 const RPC_HEIGHT_TIMEOUT: Duration = Duration::from_secs(300);
 const RPC_HEIGHT_POLL_INTERVAL: Duration = Duration::from_secs(3);
@@ -15,7 +15,11 @@ const MIN_FORK_BLOCK: u32 = 6;
 
 pub type Client = OnlineClient<PolkadotConfig>;
 
-pub async fn node_with_blocks<'network>(
+async fn latest_block_number(client: &Client) -> Result<u32> {
+    Ok(client.blocks().at_latest().await?.number())
+}
+
+async fn node_with_blocks<'network>(
     network: &'network Network<LocalFileSystem>,
     name: &str,
 ) -> Result<&'network NetworkNode> {
@@ -39,7 +43,7 @@ pub async fn node_with_blocks<'network>(
 async fn rpc_height_at_least(client: &Client, name: &str, min_height: u32) -> Result<u32> {
     let deadline = tokio::time::Instant::now() + RPC_HEIGHT_TIMEOUT;
     loop {
-        let height = client.blocks().at_latest().await?.number();
+        let height = latest_block_number(client).await?;
         if height >= min_height {
             return Ok(height);
         }
@@ -111,8 +115,7 @@ impl ChainEndpoint {
     }
 
     pub async fn refresh_fork_block(&mut self) -> Result<()> {
-        let latest = self.client.blocks().at_latest().await?.number();
-        self.fork_block = self.fork_block_before(latest);
+        self.fork_block = self.fork_block_before(latest_block_number(&self.client).await?);
         Ok(())
     }
 }
@@ -137,23 +140,31 @@ impl TestContext {
     }
 
     pub async fn polkadot_fellowship(network: &Network<LocalFileSystem>) -> Result<Self> {
-        let [relay_node, ..] = POLKADOT_RELAY.validators;
+        let (governance, fellowship, relay) = tokio::try_join!(
+            ChainEndpoint::connect(network, POLKADOT_ASSET_HUB.collator),
+            ChainEndpoint::connect(network, POLKADOT_COLLECTIVES.collator),
+            ChainEndpoint::connect(network, POLKADOT_RELAY.first_validator()),
+        )?;
         Ok(Self {
-            governance: ChainEndpoint::connect(network, POLKADOT_ASSET_HUB.collator).await?,
-            fellowship: Some(ChainEndpoint::connect(network, POLKADOT_COLLECTIVES.collator).await?),
-            relay: Some(ChainEndpoint::connect(network, relay_node).await?),
+            governance,
+            fellowship: Some(fellowship),
+            relay: Some(relay),
             fellowship_origin_caller: "FellowshipOrigins",
             label_prefix: "",
         })
     }
 
     pub async fn kusama(network: &Network<LocalFileSystem>) -> Result<Self> {
-        let [relay_node, ..] = KUSAMA_RELAY.validators;
-        Ok(Self {
-            governance: ChainEndpoint::connect(network, KUSAMA_ASSET_HUB.collator).await?,
-            fellowship: Some(
-                ChainEndpoint::connect_without_session_boundary_forks(network, relay_node).await?,
+        let (governance, fellowship) = tokio::try_join!(
+            ChainEndpoint::connect(network, KUSAMA_ASSET_HUB.collator),
+            ChainEndpoint::connect_without_session_boundary_forks(
+                network,
+                KUSAMA_RELAY.first_validator()
             ),
+        )?;
+        Ok(Self {
+            governance,
+            fellowship: Some(fellowship),
             relay: None,
             fellowship_origin_caller: "Origins",
             label_prefix: "ksm_",

@@ -1,33 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildSteps,
-  DEFAULT_BRIDGE_URLS,
   parseThenSegment,
   parseThenSegments,
   splitArgvOnThen,
   type TestOptions,
 } from '../commands/test-options';
 import type { ReferendumSource, ReferendumStep } from '../types';
+import { fellowshipStep, governanceStep, testOptions } from './helpers';
 
-const base: TestOptions = {
-  assetHubPolkadotUrl: DEFAULT_BRIDGE_URLS.assetHubPolkadot,
-  bridgeHubPolkadotUrl: DEFAULT_BRIDGE_URLS.bridgeHubPolkadot,
-  bridgeHubKusamaUrl: DEFAULT_BRIDGE_URLS.bridgeHubKusama,
-  bridgePumpRounds: 8,
-  cleanup: true,
-  verbose: false,
-};
+const base = testOptions();
 
 function existing(id: number): ReferendumSource {
   return { kind: 'existing', id };
-}
-
-function governanceStep(id: number): ReferendumStep {
-  return { referenda: { kind: 'governance', governance: existing(id) } };
-}
-
-function fellowshipStep(id: number): ReferendumStep {
-  return { referenda: { kind: 'fellowship', fellowship: existing(id) } };
 }
 
 function dualStep(fellowshipId: number, governanceId: number): ReferendumStep {

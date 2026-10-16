@@ -1,13 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { ChainKind } from '../network/chain-identity';
 import { type DetectedChain, singleConsensusTopology } from '../network/chain-topology-builder';
-import { createTestLogger } from './helpers';
+import { chainInfo, createTestLogger } from './helpers';
 
 function detectedChain(url: string, label: string, kind: ChainKind = 'parachain'): DetectedChain {
-  return {
-    endpoint: { url },
-    info: { label, specName: label, endpoint: url, network: 'kusama', kind },
-  };
+  return { endpoint: { url }, info: chainInfo(label, 'kusama', kind, url) };
 }
 
 const KUSAMA_RELAY = detectedChain('wss://kusama-rpc.example', 'kusama', 'relay');
@@ -64,10 +61,13 @@ describe('singleConsensusTopology', () => {
       logger
     );
 
+    const additionalSpecs = topology.additionalKeys.map((key) =>
+      topology.specs.find((spec) => spec.key === key)
+    );
     expect(
-      topology.additional.map(({ chain }) => chain.info.label),
+      additionalSpecs.map((spec) => spec?.config.endpoint),
       'a second fork of a chain would receive XCM that the first fork never sees'
-    ).toEqual(['kusama', 'people-kusama']);
+    ).toEqual(['wss://kusama-rpc.example', 'wss://people-kusama.example']);
     expect(
       topology.specs.filter((spec) => spec.kind === 'relay'),
       'every parachain fork connects to the one relay fork'

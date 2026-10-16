@@ -9,7 +9,7 @@ use zombienet_sdk::{
 use crate::binaries::{parachain_binary, polkadot_binary, verify_binaries};
 use crate::chains::{ChainDef, NetworkDef};
 
-pub const CHAIN_SPECS_DIR_ENV: &str = "CHAIN_SPECS_DIR";
+const CHAIN_SPECS_DIR_ENV: &str = "CHAIN_SPECS_DIR";
 const RUNTIMES_DIR_ENV: &str = "FAST_RUNTIMES_DIR";
 const SPAWN_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(600);
 const SPAWN_ATTEMPTS: u32 = 3;

@@ -7,6 +7,7 @@ import {
   buildBridgePayloadCodec,
   type DecodedBridgeMessage,
 } from '../utils/bridge-payload';
+import { delay } from '../utils/delay';
 import { stringify } from '../utils/json';
 import type { Logger } from '../utils/logger';
 import type { ForkEventLog } from './fork-event-log';
@@ -44,20 +45,6 @@ type OutboundMessage = { lane: string; nonce: bigint; payload: Uint8Array } & (
   | { decoded: DecodedBridgeMessage }
   | { decodeError: string }
 );
-
-interface OutboundMessagesPallet {
-  OutboundLanes: {
-    getEntries(): Promise<
-      Array<{
-        keyArgs: [string];
-        value: { latest_generated_nonce: bigint; latest_received_nonce: bigint };
-      }>
-    >;
-  };
-  OutboundMessages: {
-    getValue(key: { lane_id: string; nonce: bigint }): Promise<Uint8Array | undefined>;
-  };
-}
 
 export async function connectBridgeRelayer(
   polkadot: BridgePolkadotSide,
@@ -119,7 +106,7 @@ export class BridgePump {
       ]) {
         await log.advance(fork);
       }
-      await new Promise((resolve) => setTimeout(resolve, RELAYER_REACTION_DELAY_MS));
+      await delay(RELAYER_REACTION_DELAY_MS);
       for (const fork of [this.kusama.bridgeHub, this.kusama.assetHub, ...this.kusama.additional]) {
         await log.advance(fork);
       }
@@ -139,17 +126,14 @@ export class BridgePump {
   }
 
   private async newOutboundMessages(): Promise<OutboundMessage[]> {
-    const pallet = (this.polkadot.bridgeHub.api.query as unknown as Record<string, unknown>)[
-      POLKADOT_TO_KUSAMA_PALLETS.outboundMessages
-    ] as OutboundMessagesPallet | undefined;
+    const pallet = this.polkadot.bridgeHub.api.query[POLKADOT_TO_KUSAMA_PALLETS.outboundMessages];
     if (!pallet) return [];
 
     const messages: OutboundMessage[] = [];
     for (const { keyArgs, value } of await pallet.OutboundLanes.getEntries()) {
       const [lane] = keyArgs;
-      const firstUnseen =
-        (this.lastSeenNonceByLane.get(lane) ?? BigInt(value.latest_received_nonce)) + 1n;
-      for (let nonce = firstUnseen; nonce <= BigInt(value.latest_generated_nonce); nonce++) {
+      const firstUnseen = (this.lastSeenNonceByLane.get(lane) ?? value.latest_received_nonce) + 1n;
+      for (let nonce = firstUnseen; nonce <= value.latest_generated_nonce; nonce++) {
         const payload = await pallet.OutboundMessages.getValue({ lane_id: lane, nonce });
         this.lastSeenNonceByLane.set(lane, nonce);
         if (payload) {

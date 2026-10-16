@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BridgePump } from '../bridge/bridge-pump';
 import { ForkEventLog } from '../bridge/fork-event-log';
 import type { Fork } from '../network/fork';
-import { createTestLogger } from './helpers';
+import { createTestLogger, fakeFork } from './helpers';
 
 vi.mock('../utils/bridge-payload', () => ({
   buildBridgePayloadCodec: () => ({ decode: () => ({ universalDest: {}, message: {} }) }),
@@ -10,32 +10,26 @@ vi.mock('../utils/bridge-payload', () => ({
 
 const LANE = '0x00000001';
 
-function fakeFork(label: string, query: Record<string, unknown> = {}): Fork {
-  return {
-    manager: { newBlock: vi.fn(async () => {}) },
-    client: { _request: vi.fn(async () => '0x') },
-    api: { query: { System: { Events: { getValue: vi.fn(async () => []) } }, ...query } },
-    info: { label },
-  } as unknown as Fork;
-}
-
 function bridgeHubWithGeneratedNonces(nonces: number[]): Fork {
   let round = 0;
   return fakeFork('bridge-hub-polkadot', {
-    BridgeKusamaMessages: {
-      OutboundLanes: {
-        getEntries: vi.fn(async () => {
-          const generated = nonces[Math.min(round, nonces.length - 1)];
-          round++;
-          return [
-            {
-              keyArgs: [LANE],
-              value: { latest_generated_nonce: BigInt(generated), latest_received_nonce: 0n },
-            },
-          ];
-        }),
+    client: { _request: vi.fn(async () => '0x') },
+    query: {
+      BridgeKusamaMessages: {
+        OutboundLanes: {
+          getEntries: vi.fn(async () => {
+            const generated = nonces[Math.min(round, nonces.length - 1)];
+            round++;
+            return [
+              {
+                keyArgs: [LANE],
+                value: { latest_generated_nonce: BigInt(generated), latest_received_nonce: 0n },
+              },
+            ];
+          }),
+        },
+        OutboundMessages: { getValue: vi.fn(async () => new Uint8Array([1, 2, 3])) },
       },
-      OutboundMessages: { getValue: vi.fn(async () => new Uint8Array([1, 2, 3])) },
     },
   });
 }

@@ -10,7 +10,7 @@ import { toPolkadotJsJson } from '../utils/storage-format-converter';
 import { executionFailures } from './execution-result-checker';
 import { executePreCall } from './pre-call';
 import type { ReferendaKind } from './referenda-kind';
-import { SchedulerManager, scheduledTaskAddress } from './scheduler-manager';
+import { SchedulerManager, scheduledTaskAddress, taskAddress } from './scheduler-manager';
 
 const MAX_EXTRA_BLOCKS = 2;
 
@@ -71,11 +71,11 @@ export class ReferendumSimulator {
   }
 
   private async approve(referendumId: number): Promise<TaskAddress> {
-    await this.applyPassingState(referendumId);
+    const alarm = await this.applyPassingState(referendumId);
 
     const nudgeBlock = await this.scheduler.nextAgendaBlock();
     this.logger.startSpinner('Scheduling nudgeReferendum for next block...');
-    await this.scheduler.scheduleNudge(this.kind, referendumId, nudgeBlock);
+    await this.scheduler.scheduleNudge(this.kind, referendumId, alarm, nudgeBlock);
     this.logger.succeedSpinner('nudgeReferendum scheduled');
 
     this.logger.startSpinner('Creating block to trigger referendum nudge...');
@@ -84,8 +84,7 @@ export class ReferendumSimulator {
 
     const { palletName } = this.kind;
     const isApproval = (event: ParsedEvent) =>
-      event.section === palletName &&
-      (event.method === 'Confirmed' || event.method === 'Approved') &&
+      (isEvent(event, palletName, 'Confirmed') || isEvent(event, palletName, 'Approved')) &&
       Number((event.data as { index?: unknown } | null)?.index) === referendumId;
     const events = await this.eventsWithExtraBlocks(
       (blockEvents) => blockEvents.some(isApproval),
@@ -159,7 +158,7 @@ export class ReferendumSimulator {
     return events;
   }
 
-  private async applyPassingState(referendumId: number): Promise<void> {
+  private async applyPassingState(referendumId: number): Promise<TaskAddress | undefined> {
     this.logger.startSpinner('Forcing referendum to passing state...');
     const { palletName } = this.kind;
     const referendaPallet = this.kind.pallet(this.api);
@@ -170,12 +169,11 @@ export class ReferendumSimulator {
       );
     }
 
-    const passingInfo = passingReferendumInfo(
-      info.value,
-      await this.api.query.Balances.TotalIssuance.getValue(),
-      await this.scheduler.nextAgendaBlock(),
-      this.kind
-    );
+    const [totalIssuance, alarmBlock] = await Promise.all([
+      this.api.query.Balances.TotalIssuance.getValue(),
+      this.scheduler.nextAgendaBlock(),
+    ]);
+    const passingInfo = passingReferendumInfo(info.value, totalIssuance, alarmBlock, this.kind);
     this.logger.debug(
       `Sending storage update to ${palletName} pallet in Chopsticks: ${stringify(passingInfo, 2)}`
     );
@@ -193,5 +191,6 @@ export class ReferendumSimulator {
     } else {
       this.logger.warn(`Referendum is in ${updatedInfo?.type ?? 'unknown'} state after the update`);
     }
+    return info.value.alarm && taskAddress(info.value.alarm[1]);
   }
 }

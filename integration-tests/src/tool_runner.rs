@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
-use crate::calls::ReferendumCalls;
+use crate::calls::{hex_of, ReferendumCalls};
 
 pub const TOOL_TIMEOUT: Duration = Duration::from_secs(600);
 const TOOL_PROJECT_DIR_ENV: &str = "TOOL_PROJECT_DIR";
@@ -48,8 +48,8 @@ impl StepArgs {
         self
     }
 
-    pub fn pre_call(mut self, call: String, origin: &str) -> Self {
-        self.pre_call = Some(call);
+    pub fn pre_call(mut self, call: &[u8], origin: &str) -> Self {
+        self.pre_call = Some(hex_of(call));
         self.pre_origin = Some(origin.to_string());
         self
     }
@@ -139,6 +139,10 @@ pub struct ToolOutput {
     pub stderr: String,
 }
 
+fn contains_ignore_case(text: &str, pattern: &str) -> bool {
+    text.to_lowercase().contains(&pattern.to_lowercase())
+}
+
 impl ToolOutput {
     fn transcript(&self) -> String {
         format!(
@@ -148,9 +152,7 @@ impl ToolOutput {
     }
 
     fn output_contains(&self, pattern: &str) -> bool {
-        let pattern = pattern.to_lowercase();
-        self.stdout.to_lowercase().contains(&pattern)
-            || self.stderr.to_lowercase().contains(&pattern)
+        contains_ignore_case(&self.stdout, pattern) || contains_ignore_case(&self.stderr, pattern)
     }
 
     pub fn check_success(&self) -> Result<()> {
@@ -180,7 +182,7 @@ impl ToolOutput {
 
     pub fn check_stdout_contains(&self, pattern: &str) -> Result<()> {
         anyhow::ensure!(
-            self.stdout.to_lowercase().contains(&pattern.to_lowercase()),
+            contains_ignore_case(&self.stdout, pattern),
             "no '{pattern}' in stdout\n--- stdout ---\n{}",
             self.stdout
         );
@@ -250,13 +252,18 @@ impl ToolRunner {
     }
 }
 
+pub fn report_outcome(label: &str, outcome: &Result<()>) {
+    match outcome {
+        Ok(()) => log::info!("PASS: {label}"),
+        Err(error) => log::error!("FAIL: {label}: {error:#}"),
+    }
+}
+
 pub async fn sub_test(label: &str, outcome: impl Future<Output = Result<()>>) {
     log::info!(">>> {label}");
-    match outcome.await {
-        Ok(()) => log::info!("PASS: {label}"),
-        Err(error) => {
-            log::error!("FAIL: {label}: {error:#}");
-            panic!("FAIL: {label}: {error:#}");
-        }
+    let outcome = outcome.await;
+    report_outcome(label, &outcome);
+    if let Err(error) = outcome {
+        panic!("FAIL: {label}: {error:#}");
     }
 }

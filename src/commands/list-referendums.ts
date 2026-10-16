@@ -1,9 +1,9 @@
 import { fetchChainInfoFromEndpoint } from '../network/chain-identity';
-import { connectFork, type Fork, shutdownForks, spawnForks } from '../network/fork';
+import { forkSpec } from '../network/chain-topology-builder';
+import { chainForks, type Fork, shutdownForks } from '../network/fork';
 import { FELLOWSHIP, GOVERNANCE } from '../referendum/referenda-kind';
 import type { RawReferendumInfo } from '../types/substrate-api';
 import { parseEndpoint } from '../utils/chain-endpoint-parser';
-import { buildChopsticksChainConfig } from '../utils/chopsticks-config';
 import { Logger } from '../utils/logger';
 
 interface ListOptions {
@@ -37,14 +37,11 @@ export async function listReferendums(options: ListOptions): Promise<void> {
     const info = await fetchChainInfoFromEndpoint(endpoint.url);
 
     logger.startSpinner('Starting Chopsticks local environment...');
-    const contexts = await spawnForks([
-      {
-        key: 'chain',
-        kind: info.kind,
-        config: buildChopsticksChainConfig(endpoint, { runtimeLogLevel: 0 }),
-      },
-    ]);
-    fork = await connectFork(contexts.get('chain')!, () => info, logger);
+    const forks = await chainForks(
+      [forkSpec('chain', endpoint, info.kind, { runtimeLogLevel: 0 })],
+      logger
+    );
+    fork = forks.get('chain')!;
     logger.succeedSpinner(
       `Forked ${info.label} at block ${fork.manager.context.chain.head.number}`
     );

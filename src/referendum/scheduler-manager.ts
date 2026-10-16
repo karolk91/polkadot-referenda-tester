@@ -22,6 +22,10 @@ async function agendaTaskAddress(
   return undefined;
 }
 
+export function taskAddress([block, index]: [number, number]): TaskAddress {
+  return { block, index };
+}
+
 export async function scheduledTaskAddress(
   api: SubstrateApi,
   name: HexString,
@@ -36,7 +40,7 @@ export async function scheduledTaskAddress(
     );
     return agendaTaskAddress(api, (task) => task.maybe_id === name);
   }
-  return address && { block: address[0], index: address[1] };
+  return address && taskAddress(address);
 }
 
 export class SchedulerManager {
@@ -53,12 +57,14 @@ export class SchedulerManager {
 
   async moveTask(source: TaskAddress, targetBlock: number): Promise<TaskAddress> {
     if (source.block === targetBlock) return source;
-    const sourceAgenda = await this.agenda(source.block);
+    const [sourceAgenda, targetAgenda] = await Promise.all([
+      this.agenda(source.block),
+      this.agenda(targetBlock),
+    ]);
     const task = sourceAgenda[source.index];
     if (!task) {
       throw new Error(`No scheduled task at [${source.block}, ${source.index}]`);
     }
-    const targetAgenda = await this.agenda(targetBlock);
     const target = { block: targetBlock, index: targetAgenda.length };
     this.logger.info(
       `Moving scheduled task [${source.block}, ${source.index}] to [${target.block}, ${target.index}]`
@@ -93,12 +99,12 @@ export class SchedulerManager {
   async scheduleNudge(
     kind: ReferendaKind,
     referendumId: number,
+    alarm: TaskAddress | undefined,
     block: number
   ): Promise<TaskAddress> {
-    const alarm = await agendaTaskAddress(this.api, (task) =>
-      this.isNudgeCall(task.call, kind, referendumId)
-    );
-    if (alarm) return this.moveTask(alarm, block);
+    if (alarm && (await this.isNudgeAt(alarm, kind, referendumId))) {
+      return this.moveTask(alarm, block);
+    }
 
     this.logger.info(
       `No scheduled nudge found for referendum ${referendumId} (likely queued for a deciding slot) - injecting one`
@@ -107,6 +113,15 @@ export class SchedulerManager {
       .nudge_referendum({ index: referendumId })
       .getEncodedData();
     return this.appendInlineCall(toHex(callData) as HexString, ROOT_ORIGIN, block);
+  }
+
+  private async isNudgeAt(
+    alarm: TaskAddress,
+    kind: ReferendaKind,
+    referendumId: number
+  ): Promise<boolean> {
+    const task = (await this.agenda(alarm.block))[alarm.index];
+    return task !== undefined && this.isNudgeCall(task.call, kind, referendumId);
   }
 
   private async isNudgeCall(

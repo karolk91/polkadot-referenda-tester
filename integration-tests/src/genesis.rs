@@ -1,17 +1,19 @@
 use serde_json::{json, Value};
-use sp_crypto_hashing::{blake2_128, blake2_256, twox_128, twox_64};
+use sp_crypto_hashing::{blake2_256, twox_128, twox_64};
 use subxt::ext::codec::Encode;
 use subxt::utils::AccountId32;
 use subxt_signer::sr25519::dev;
 
+use crate::calls::hex_of;
 use crate::ids::{Network, ParaId, ASSET_HUB_PARA_ID, BRIDGE_HUB_PARA_ID};
 
-pub const ALICE_FELLOWSHIP_RANK: u16 = 9;
+const ALICE_FELLOWSHIP_RANK: u16 = 9;
 pub const EXISTING_FELLOW_RANK: u16 = 2;
 
 const XCM_VERSION: u32 = 5;
 const DEV_ENDOWMENT: u128 = 1 << 60;
 const SOVEREIGN_FUNDING: u128 = 250_000_000_000_000;
+const LOWEST_SCHEDULE_PRIORITY: u8 = 63;
 
 const ASSET_HUB_SOVEREIGN_AT_BRIDGE_HUB_POLKADOT: &str =
     "13cKp89SgdtqUngo2WiEijPrQWdHFhzYZLf2TJePKRvExk7o";
@@ -24,13 +26,6 @@ const ASSET_HUB_SOVEREIGN_AT_BRIDGE_HUB_KUSAMA: &str =
 const BRIDGE_HUB_KUSAMA_LANE_THIS_CHAIN: &str = "EoQBtnwp4jMtCEpV7C88rKrz6x1qMBh2z74ibGSqtZRnuMM";
 const BRIDGE_HUB_KUSAMA_LANE_BRIDGED_CHAIN: &str =
     "EoQBtnwp4jMtCEpV7CPsssT6bdDHuHZmf3aGXxHJiSA4Dz3";
-
-const APPROVED_REFERENDUM: u8 = 1;
-const UNREQUESTED_PREIMAGE: u8 = 0;
-const LOWEST_SCHEDULE_PRIORITY: u8 = 63;
-const BOUNDED_LOOKUP_CALL: u8 = 2;
-const SYSTEM_ORIGIN: u8 = 0;
-const ROOT_ORIGIN: u8 = 0;
 
 pub type StorageEntry = (String, String);
 
@@ -46,16 +41,8 @@ fn ss58(account: [u8; 32]) -> String {
     AccountId32(account).to_string()
 }
 
-fn to_hex(bytes: &[u8]) -> String {
-    format!("0x{}", hex::encode(bytes))
-}
-
 fn twox64_concat(data: &[u8]) -> Vec<u8> {
     [&twox_64(data)[..], data].concat()
-}
-
-fn blake2_128_concat(data: &[u8]) -> Vec<u8> {
-    [&blake2_128(data)[..], data].concat()
 }
 
 fn storage_entry(
@@ -68,7 +55,7 @@ fn storage_entry(
     for hashed_key in hashed_keys {
         key.extend_from_slice(hashed_key);
     }
-    (to_hex(&key), to_hex(&value.encode()))
+    (hex_of(&key), hex_of(&value.encode()))
 }
 
 pub fn raw_spec_override(entries: Vec<StorageEntry>) -> Value {
@@ -79,7 +66,7 @@ pub fn raw_spec_override(entries: Vec<StorageEntry>) -> Value {
     json!({ "genesis": { "raw": { "top": top } } })
 }
 
-pub fn enactment_task_name(referendum_index: u32) -> [u8; 32] {
+fn enactment_task_name(referendum_index: u32) -> [u8; 32] {
     blake2_256(&(*b"assembly", "enactment", referendum_index).encode())
 }
 
@@ -187,7 +174,7 @@ fn fellow_entries(account: [u8; 32], rank: u16, member_index: u32) -> Vec<Storag
     entries
 }
 
-pub fn fellowship_collective_entries() -> Vec<StorageEntry> {
+fn fellowship_collective_entries() -> Vec<StorageEntry> {
     let mut entries = fellow_entries(alice_account(), ALICE_FELLOWSHIP_RANK, 0);
     entries.extend(fellow_entries(bob_account(), EXISTING_FELLOW_RANK, 1));
     entries.push(storage_entry(
@@ -208,49 +195,30 @@ pub fn approved_governance_referendum_storage(
     referendum_id: u32,
     approval_block: u32,
     enactment_block: u32,
-) -> Vec<StorageEntry> {
-    let call_hash = blake2_256(call);
+) -> Value {
+    let call_hash = hex_of(&blake2_256(call));
     let call_len = call.len() as u32;
-    let task_name = enactment_task_name(referendum_id);
-    let no_deposit: Option<()> = None;
-    let scheduled_enactment = (
-        Some(task_name),
-        LOWEST_SCHEDULE_PRIORITY,
-        (BOUNDED_LOOKUP_CALL, call_hash, call_len),
-        None::<()>,
-        (SYSTEM_ORIGIN, ROOT_ORIGIN),
-    );
-    vec![
-        storage_entry(
-            "Preimage",
-            "PreimageFor",
-            &[&(call_hash, call_len).encode()],
-            call.to_vec(),
-        ),
-        storage_entry(
-            "Preimage",
-            "RequestStatusFor",
-            &[&call_hash],
-            (UNREQUESTED_PREIMAGE, alice_account(), 0u128, call_len),
-        ),
-        storage_entry(
-            "Referenda",
-            "ReferendumInfoFor",
-            &[&blake2_128_concat(&referendum_id.encode())],
-            (APPROVED_REFERENDUM, approval_block, no_deposit, no_deposit),
-        ),
-        storage_entry("Referenda", "ReferendumCount", &[], referendum_id + 1),
-        storage_entry(
-            "Scheduler",
-            "Agenda",
-            &[&twox64_concat(&enactment_block.encode())],
-            vec![Some(scheduled_enactment)],
-        ),
-        storage_entry(
-            "Scheduler",
-            "Lookup",
-            &[&twox64_concat(&task_name)],
-            (enactment_block, 0u32),
-        ),
-    ]
+    let task_name = hex_of(&enactment_task_name(referendum_id));
+    json!({
+        "Preimage": {
+            "PreimageFor": [[[[call_hash, call_len]], hex_of(&call.to_vec().encode())]],
+            "RequestStatusFor": [[[call_hash], {
+                "Unrequested": { "ticket": [ss58(alice_account()), 0], "len": call_len },
+            }]],
+        },
+        "Referenda": {
+            "ReferendumInfoFor": [[[referendum_id], { "Approved": [approval_block, null, null] }]],
+            "ReferendumCount": referendum_id + 1,
+        },
+        "Scheduler": {
+            "Agenda": [[[enactment_block], [{
+                "maybe_id": task_name,
+                "priority": LOWEST_SCHEDULE_PRIORITY,
+                "call": { "Lookup": { "hash": call_hash, "len": call_len } },
+                "maybe_periodic": null,
+                "origin": { "system": "Root" },
+            }]]],
+            "Lookup": [[[task_name], [enactment_block, 0]]],
+        },
+    })
 }

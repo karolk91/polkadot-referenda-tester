@@ -13,10 +13,19 @@ export function preCallOf(step: ReferendumStep): PreCall | undefined {
   return 'preCall' in step.referenda ? step.referenda.preCall : undefined;
 }
 
-export function referendumCreations(steps: ReferendumStep[]): {
+export interface ReferendumRoles {
   governance: boolean;
   fellowship: boolean;
-} {
+}
+
+export function referendumPresence(steps: ReferendumStep[]): ReferendumRoles {
+  return {
+    governance: steps.some((step) => governanceSource(step) !== undefined),
+    fellowship: steps.some((step) => fellowshipSource(step) !== undefined),
+  };
+}
+
+export function referendumCreations(steps: ReferendumStep[]): ReferendumRoles {
   return {
     governance: steps.some((step) => governanceSource(step)?.kind === 'create'),
     fellowship: steps.some((step) => fellowshipSource(step)?.kind === 'create'),
