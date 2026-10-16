@@ -1,80 +1,54 @@
 import { describe, expect, it, vi } from 'vitest';
-import { SimulationRunner } from '../services/simulation-runner';
-import type { SimulationResult } from '../types';
-import type { Logger } from '../utils/logger';
+import { FELLOWSHIP, GOVERNANCE } from '../referendum/referenda-kind';
+import { simulateReferendum } from '../referendum/simulation-runner';
+import { createFakeChain, createTestLogger } from './helpers';
 
-function createSilentLogger(): Logger {
-  return {
-    info: vi.fn(),
-    debug: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    success: vi.fn(),
-    isVerbose: () => false,
-    startSpinner: vi.fn(),
-    succeedSpinner: vi.fn(),
-    failSpinner: vi.fn(),
-    updateSpinner: vi.fn(),
-    stopSpinner: vi.fn(),
-    section: vi.fn(),
-    table: vi.fn(),
-  } as unknown as Logger;
-}
+const APPROVED = { type: 'Approved', value: [1000, undefined, undefined] };
 
-describe('SimulationRunner', () => {
-  describe('throwIfFailed()', () => {
-    it('does not throw when execution succeeded', () => {
-      const runner = new SimulationRunner(createSilentLogger());
-      const result: SimulationResult = {
-        referendumId: 1,
-        executionSucceeded: true,
-        events: [],
-      };
-      expect(() => runner.throwIfFailed(result, 'Test')).not.toThrow();
-    });
+describe('simulateReferendum', () => {
+  it('existing referendum without any submitted extrinsic', async () => {
+    const { api, chopsticks } = createFakeChain({ referendumInfo: { 1944: APPROVED } });
 
-    it('throws with label when execution failed', () => {
-      const runner = new SimulationRunner(createSilentLogger());
-      const result: SimulationResult = {
-        referendumId: 1,
-        executionSucceeded: false,
-        events: [],
-      };
-      expect(() => runner.throwIfFailed(result, 'Governance referendum #42')).toThrow(
-        'Governance referendum #42 execution failed'
-      );
-    });
+    const result = await simulateReferendum(
+      {
+        target: { api, manager: chopsticks },
+        source: { kind: 'existing', id: 1944 },
+        kind: GOVERNANCE,
+      },
+      createTestLogger()
+    );
 
-    it('logs each error before throwing', () => {
-      const logger = createSilentLogger();
-      const runner = new SimulationRunner(logger);
-      const result: SimulationResult = {
-        referendumId: 1,
-        executionSucceeded: false,
-        events: [],
-        errors: ['Module error: foo', 'Dispatch failed'],
-      };
-      try {
-        runner.throwIfFailed(result, 'Test');
-      } catch {
-        // expected
-      }
-      expect(logger.error).toHaveBeenCalledWith('  Module error: foo');
-      expect(logger.error).toHaveBeenCalledWith('  Dispatch failed');
-    });
+    expect(result).toEqual({ referendumId: 1944, events: [] });
+    expect(
+      api.txFromCallData,
+      'a second referendum would change the chain state that the test examines'
+    ).not.toHaveBeenCalled();
   });
 
-  describe('createReferendumIfNeeded()', () => {
-    it('returns undefined when no callHex is provided', async () => {
-      const runner = new SimulationRunner(createSilentLogger());
-      const result = await runner.createReferendumIfNeeded({
-        api: {} as any,
-        chopsticks: {} as any,
-        callHex: undefined,
-        preimageHex: undefined,
-        isFellowship: false,
-      });
-      expect(result).toBeUndefined();
+  it('simulation of the referendum that the submitted call creates', async () => {
+    const { api, chopsticks } = createFakeChain({ fellowshipReferendumInfo: { 612: APPROVED } });
+    vi.mocked(api.query.FellowshipReferenda.ReferendumCount.getValue)
+      .mockResolvedValueOnce(612)
+      .mockResolvedValueOnce(613);
+    vi.mocked(api.txFromCallData).mockResolvedValue({
+      create: vi.fn(async () => new Uint8Array([0x01])),
+      decodedCall: { type: 'FellowshipReferenda', value: { type: 'submit' } },
+      getEncodedData: vi.fn(),
     });
+
+    const result = await simulateReferendum(
+      {
+        target: { api, manager: chopsticks },
+        source: { kind: 'create', submitCall: '0xaabb' },
+        kind: FELLOWSHIP,
+      },
+      createTestLogger()
+    );
+
+    expect(api.txFromCallData).toHaveBeenCalledWith(new Uint8Array([0xaa, 0xbb]));
+    expect(
+      result.referendumId,
+      'the new referendum takes the referendum count before the submission as its index'
+    ).toBe(612);
   });
 });

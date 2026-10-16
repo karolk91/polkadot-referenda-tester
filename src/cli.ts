@@ -18,15 +18,34 @@ for (const stream of [process.stdout, process.stderr] as const) {
 
 import { Command } from 'commander';
 import { version } from '../package.json';
+import { DEFAULT_MAX_PUMP_ROUNDS } from './bridge/bridge-pump';
 import { listReferendums } from './commands/list-referendums';
-import { testReferendum } from './commands/test-referendum';
 import {
   addStepOptions,
+  DEFAULT_BRIDGE_URLS,
   parseThenSegments,
+  positiveInteger,
   splitArgvOnThen,
   THEN_FLAG,
   THEN_HELP,
-} from './utils/then-args';
+} from './commands/test-options';
+import { testReferendum } from './commands/test-referendum';
+
+const ENDPOINT_FORMAT =
+  'url, url,block, or path to a chopsticks YAML config (endpoint, wasm-override, import-storage, ...)';
+
+function addChainOptions(command: Command): Command {
+  return command
+    .option(
+      '--governance-chain-url <url>',
+      `Governance chain RPC endpoint URL. Format: ${ENDPOINT_FORMAT}`
+    )
+    .option(
+      '--fellowship-chain-url <url>',
+      `Fellowship chain RPC endpoint URL. Format: ${ENDPOINT_FORMAT}`
+    )
+    .option('-v, --verbose', 'Enable verbose logging');
+}
 
 const program = new Command();
 
@@ -40,46 +59,41 @@ program
 // segment, and the `test` preAction hook below parses the later segments.
 const { main: mainArgs, segments: thenSegments } = splitArgvOnThen(process.argv.slice(2));
 
-// Single chain referendum test
-const testCommand = addStepOptions(
-  program
-    .command('test')
-    .description(
-      'Test a referendum by simulating its execution. Chain several referenda with --then (see below).'
-    )
+const testCommand = addChainOptions(
+  addStepOptions(
+    program
+      .command('test')
+      .description(
+        'Test a referendum by simulating its execution. Chain several referenda with --then (see below).'
+      )
+  )
 )
-  .option(
-    '--governance-chain-url <url>',
-    'Governance chain RPC endpoint URL. Format: url, url,block, or path to a chopsticks YAML config (with endpoint+wasm-override+import-storage+...) (e.g., wss://polkadot.io or wss://polkadot.io,12345)'
-  )
-  .option(
-    '--fellowship-chain-url <url>',
-    'Fellowship chain RPC endpoint URL. Format: url, url,block, or path to a chopsticks YAML config (with endpoint+wasm-override+import-storage+...) (only required when using --fellowship)'
-  )
-  .option('-p, --port <port>', 'Local Chopsticks starting port', '8000')
-  .option('--no-cleanup', 'Keep Chopsticks instance running after test')
-  .option('-v, --verbose', 'Enable verbose logging')
+  .option('--no-cleanup', 'Leave the Chopsticks forks running after the run for manual inspection')
   .option(
     '--additional-chains <urls>',
-    'Comma-separated list of additional chain URLs to spawn alongside the primary chains. Use this for relays (e.g. Polkadot relay, REQUIRED for the bridged scenario) and for monitoring other chains. Each entry: url, url,block, or path to a chopsticks YAML config (with endpoint+wasm-override+import-storage+...). Relays are auto-detected by URL (no parachain prefix). E.g., wss://rpc.polkadot.io,wss://kusama-rpc.polkadot.io,./configs/some-chain.yml'
+    `Comma-separated list of additional chains to fork alongside the primary chains, such as relay chains or other chains whose events matter. Relay chains are detected from their runtime spec_name. Each entry: ${ENDPOINT_FORMAT}. E.g., wss://rpc.polkadot.io,wss://kusama-rpc.polkadot.io,./configs/some-chain.yml`
   )
   .option(
     '--asset-hub-polkadot-url <url>',
-    'Polkadot Asset Hub RPC endpoint URL. Required when the bridged scenario is detected. Format: url, url,block, or path to a chopsticks YAML config (with endpoint+wasm-override+import-storage+...)'
+    `Polkadot Asset Hub RPC endpoint URL for the bridged scenario. Format: ${ENDPOINT_FORMAT}`,
+    DEFAULT_BRIDGE_URLS.assetHubPolkadot
   )
   .option(
     '--bridge-hub-polkadot-url <url>',
-    'Polkadot Bridge Hub RPC endpoint URL. Required when the bridged scenario is detected. Format: url, url,block, or path to a chopsticks YAML config (with endpoint+wasm-override+import-storage+...)'
-  )
-  .option(
-    '--asset-hub-kusama-url <url>',
-    'Kusama Asset Hub RPC endpoint URL. Optional — defaults to --governance-chain-url when bridged. Format: url, url,block, or path to a chopsticks YAML config (with endpoint+wasm-override+import-storage+...)'
+    `Polkadot Bridge Hub RPC endpoint URL for the bridged scenario. Format: ${ENDPOINT_FORMAT}`,
+    DEFAULT_BRIDGE_URLS.bridgeHubPolkadot
   )
   .option(
     '--bridge-hub-kusama-url <url>',
-    'Kusama Bridge Hub RPC endpoint URL. Required when the bridged scenario is detected. Format: url, url,block, or path to a chopsticks YAML config (with endpoint+wasm-override+import-storage+...)'
+    `Kusama Bridge Hub RPC endpoint URL for the bridged scenario. Format: ${ENDPOINT_FORMAT}`,
+    DEFAULT_BRIDGE_URLS.bridgeHubKusama
   )
-  .option('--bridge-pump-rounds <n>', 'Max bridge pump rounds before giving up (default: 8)')
+  .option(
+    '--bridge-pump-rounds <n>',
+    'Max bridge pump rounds before giving up',
+    positiveInteger,
+    DEFAULT_MAX_PUMP_ROUNDS
+  )
   .addHelpText('after', THEN_HELP)
   // The `--then` segments become `options.thenSteps`; parse errors use commander's own reporting.
   .hook('preAction', (command) => {
@@ -91,30 +105,19 @@ const testCommand = addStepOptions(
   })
   .action(testReferendum);
 
-// Only `test` accepts `--then`.
 program.hook('preAction', (_program, actionCommand) => {
   if (thenSegments.length > 0 && actionCommand !== testCommand) {
     actionCommand.error(`error: ${THEN_FLAG} is only supported by the "test" command`);
   }
 });
 
-// List all referendums
-program
-  .command('list')
-  .description('List all referendums and their current status')
-  .option(
-    '--governance-chain-url <url>',
-    'Governance chain RPC endpoint URL. Format: url, url,block, or path to a chopsticks YAML config (with endpoint+wasm-override+import-storage+...) (e.g., wss://polkadot.io or wss://polkadot.io,12345)'
-  )
-  .option(
-    '--fellowship-chain-url <url>',
-    'Fellowship chain RPC endpoint URL. Format: url, url,block, or path to a chopsticks YAML config (with endpoint+wasm-override+import-storage+...)'
-  )
+addChainOptions(
+  program.command('list').description('List all referendums and their current status')
+)
   .option(
     '--status <status>',
     'Filter by status (e.g., ongoing, approved, rejected, cancelled, timedout, killed)'
   )
-  .option('-v, --verbose', 'Enable verbose logging')
   .action(listReferendums);
 
 program.parse(mainArgs, { from: 'user' });

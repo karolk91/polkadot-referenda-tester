@@ -72,7 +72,6 @@ The bridged path spawns five core chains: Polkadot Collectives + Asset Hub Polka
 - `--asset-hub-polkadot-url` → `wss://polkadot-asset-hub-rpc.polkadot.io`
 - `--bridge-hub-polkadot-url` → `wss://polkadot-bridge-hub-rpc.polkadot.io`
 - `--bridge-hub-kusama-url` → `wss://kusama-bridge-hub-rpc.polkadot.io`
-- `--asset-hub-kusama-url` → defaults to `--governance-chain-url` (they name the same AHK chain; if you pass it, it MUST match the governance URL)
 
 In the bridged path, `--additional-chains` is classified per network and routed onto the correct side; relays take the reserved relay key (and are advanced during the bridge pump) and non-bridge system parachains are spawned, HRMP-wired, advanced during the pump, and **also settled after the AHK public referendum** so any `authorize_upgrade` fan-out actually executes on them.
 
@@ -113,7 +112,6 @@ Triggered automatically when `--fellowship-chain-url` is on Polkadot and `--gove
 - A fellowship referendum is REQUIRED (`-f <id>` or `--call-to-create-fellowship-referendum <hex>`).
 - `--bridge-hub-polkadot-url` and `--bridge-hub-kusama-url`: pass through if the user supplies them; otherwise the tool uses the public-RPC defaults (Step 2). For an "all chains" Kusama request, Bridge Hub Kusama is already a core chain — it is deduped automatically if also present in `--additional-chains`.
 - `--asset-hub-polkadot-url`: optional, defaults to the public RPC.
-- `--asset-hub-kusama-url`: omit (defaults to governance URL). Only pass it if it equals `--governance-chain-url`.
 - `--bridge-pump-rounds <n>`: optional, default 8. Increase only if the bridge pump reports it didn't drain.
 - **Second-half Kusama governance referendum** — the step that actually *dispatches* the bridged whitelisted call. It runs when you provide EITHER:
   - `-r <id>` — force-approve an **existing** AHK referendum (typically on the `WhitelistedCaller` track), or

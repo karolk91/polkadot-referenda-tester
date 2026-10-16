@@ -7,25 +7,12 @@ edition = "2021"
 publish = false
 autotests = false
 
+[lib]
+name = "harness"
+
 [[test]]
 name = "tests"
 path = "tests/tests.rs"
-
-[[test]]
-name = "generate_chain_specs"
-path = "tests/generate_chain_specs.rs"
-
-[[test]]
-name = "approved_future_enactment"
-path = "tests/approved_future_enactment.rs"
-
-[[test]]
-name = "bake_raw_overrides"
-path = "tests/bake_raw_overrides.rs"
-
-[[test]]
-name = "bridged"
-path = "tests/bridged.rs"
 
 [dependencies]
 anyhow = "1"

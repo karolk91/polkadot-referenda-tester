@@ -45,7 +45,7 @@ POLKADOT_BINARY_PATH="${BIN_DIR}/polkadot" \
   POLKADOT_PARACHAIN_BINARY_PATH="${BIN_DIR}/polkadot-parachain" \
   CHAIN_SPECS_DIR="${CHAIN_SPECS_DIR}" \
   RUST_LOG=info \
-  cargo test --test generate_chain_specs -- --nocapture
+  cargo run --bin generate_chain_specs
 
 echo ""
 echo "Chain specs generated:"
