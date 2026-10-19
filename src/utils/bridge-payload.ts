@@ -94,7 +94,6 @@ export function findVersionedTypeId(metadata: UnifiedMetadata, leafName: string)
     candidates.push({ id: entry.id, pathLen: path.length });
   }
   if (candidates.length === 0) return null;
-  // Prefer the shortest path (typically `["xcm", "VersionedXcm"]` over deeper variants).
-  candidates.sort((a, b) => a.pathLen - b.pathLen);
+  candidates.sort((first, second) => first.pathLen - second.pathLen);
   return candidates[0].id;
 }

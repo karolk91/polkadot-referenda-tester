@@ -4,7 +4,7 @@ CLI for dry-running Polkadot/Kusama referenda against local Chopsticks forks.
 
 ## Usage
 
-Run with `npx` without installing (requires Node.js 22 or newer):
+Run with `npx` without installing (requires Node.js 22.12 or newer):
 
 ```bash
 # Single-chain execution
@@ -109,7 +109,7 @@ When `--fellowship-chain-url` points at a Polkadot chain (Collectives) and `--go
 
 1. Forks five chains locally: Polkadot Collectives, Polkadot Asset Hub, Polkadot Bridge Hub, Kusama Asset Hub and Kusama Bridge Hub.
 2. Runs the fellowship referendum on Polkadot Collectives, which sends the `whitelist_call` towards Kusama Asset Hub over the Polkadot↔Kusama bridge.
-3. Drives the bridge (both Bridge Hubs) until the message is delivered and `CallWhitelisted` is emitted on Kusama Asset Hub.
+3. Relays the bridge message between the two Bridge Hubs and checks its delivery: `MessageAccepted` on Polkadot Bridge Hub, `MessagesReceived` on Kusama Bridge Hub and `MessageQueue.Processed { success: true }` on Kusama Asset Hub. A missing marker fails the run. A missing `Whitelist.CallWhitelisted` on Kusama Asset Hub only prints a warning, because a failed `Transact` does not fail the XCM message that carries it.
 4. If `--call-to-create-governance-referendum` is also supplied, runs the Kusama Asset Hub WhitelistedCaller referendum so the whitelisted call actually dispatches.
 
 ```bash
@@ -127,7 +127,6 @@ Notes:
 
 - A fellowship referendum is required (`--fellowship <id>` or `--call-to-create-fellowship-referendum`); the governance referendum is optional.
 - `--asset-hub-polkadot-url`, `--bridge-hub-polkadot-url` and `--bridge-hub-kusama-url` default to the canonical polkadot.io RPCs (shown explicitly above) — override them to fork at a specific block (`url,block`) or use a chopsticks YAML config.
-- `--asset-hub-kusama-url` is redundant when bridged: it defaults to `--governance-chain-url` (they are the same chain) and must match it if given.
 - Extra chains passed via `--additional-chains` (e.g. the Polkadot/Kusama relays) are auto-routed onto the correct side of the bridge.
 - Only the Polkadot fellowship → Kusama governance direction is currently supported.
 
@@ -147,35 +146,33 @@ npm run cli -- test \
 
 | Flag | Description |
 | --- | --- |
-| `--governance-chain-url <url>` | Governance chain RPC endpoint. Format: `url` or `url,block` (e.g., `wss://polkadot.io,12345`) |
-| `-r, --referendum <id>` | Main governance referendum ID to test |
-| `--fellowship-chain-url <url>` | Fellowship chain RPC endpoint. Format: `url` or `url,block` (required when using `--fellowship`) |
+| `--governance-chain-url <url>` | Governance chain RPC endpoint. Format: `url`, `url,block` (e.g., `wss://polkadot.io,12345`) or a path to a chopsticks YAML config |
+| `-r, --referendum <id>` | Governance referendum ID to test |
+| `--fellowship-chain-url <url>` | Fellowship chain RPC endpoint, in the same formats (required for a fellowship referendum) |
 | `-f, --fellowship <id>` | Fellowship referendum ID for whitelisting scenarios |
-| `-p, --port <port>` | Local Chopsticks starting port (default: `8000`) |
-| `--pre-call <hex>` | Hex string of call to execute before the main referendum (via Scheduler.Inline) |
-| `--pre-origin <origin>` | Origin for pre-execution call (e.g., `"Root"`, `"WhitelistedCaller"`, `"Origins.Treasurer"`) |
+| `--pre-call <hex>` | Hex string of a call to execute before the referendum of a step with one referendum (via Scheduler.Inline) |
+| `--pre-origin <origin>` | Origin of the pre-call (e.g., `"Root"`, `"WhitelistedCaller"`, `"Origins.Treasurer"`); requires `--pre-call` |
 | `--additional-chains <urls>` | Comma-separated list of additional chain URLs to monitor for XCM events. Format: `url` or `url,block` |
 | `--call-to-create-governance-referendum <hex>` | Call data to create a governance referendum (hex). Mutually exclusive with `--referendum` |
-| `--call-to-note-preimage-for-governance-referendum <hex>` | Call data to note preimage for governance referendum (hex, optional) |
+| `--call-to-note-preimage-for-governance-referendum <hex>` | Call data to note preimage for governance referendum (hex, optional; requires `--call-to-create-governance-referendum`) |
 | `--call-to-create-fellowship-referendum <hex>` | Call data to create a fellowship referendum (hex). Mutually exclusive with `--fellowship` |
-| `--call-to-note-preimage-for-fellowship-referendum <hex>` | Call data to note preimage for fellowship referendum (hex, optional) |
+| `--call-to-note-preimage-for-fellowship-referendum <hex>` | Call data to note preimage for fellowship referendum (hex, optional; requires `--call-to-create-fellowship-referendum`) |
 | `--asset-hub-polkadot-url <url>` | Polkadot Asset Hub RPC endpoint (bridged scenario). Defaults to `wss://polkadot-asset-hub-rpc.polkadot.io` |
 | `--bridge-hub-polkadot-url <url>` | Polkadot Bridge Hub RPC endpoint (bridged scenario). Defaults to `wss://polkadot-bridge-hub-rpc.polkadot.io` |
-| `--asset-hub-kusama-url <url>` | Kusama Asset Hub RPC endpoint (bridged scenario). Defaults to `--governance-chain-url` and must match it |
 | `--bridge-hub-kusama-url <url>` | Kusama Bridge Hub RPC endpoint (bridged scenario). Defaults to `wss://kusama-bridge-hub-rpc.polkadot.io` |
 | `--bridge-pump-rounds <n>` | Max bridge pump rounds before giving up (bridged scenario, default: `8`) |
 | `--post-test <module>` | Module run against the live forks after the referendum executes: a bundled name (`apply-authorized-upgrade`, `dump-chain-events`) or a path to your own (`./my-post-test.mjs`). See [Post-tests](#post-tests) |
-| `--post-test-args <json>` | Value passed to the post-test as `args` (parsed as JSON when possible) |
+| `--post-test-args <json>` | Value passed to the post-test as `args` (parsed as JSON when possible); requires `--post-test` |
 | `--then` | Separator starting another referendum step on the same forked network; repeat per step. Takes the same per-referendum flags as the first step |
 | `-v, --verbose` | Enable verbose logging |
-| `--no-cleanup` | Keep Chopsticks instance running after test |
+| `--no-cleanup` | Leave the Chopsticks forks running after the run for manual inspection |
 | `-h, --help` | Display help for command |
 
 ## Dev Scripts
 
 ```bash
 npm run build          # compile to dist/
-npm run cli -- test    # run directly with ts-node
+npm run cli -- test    # run directly from source with tsx
 npm run lint           # lint with Biome
 npm run lint:fix       # fix lint issues with Biome
 npm run format         # format with Biome

@@ -49,7 +49,7 @@ tmp/
 .chopsticks*
 
 # Integration tests
-bin/
+/bin/
 integration-tests/target/
 .polkadot-bin/
 # Build cache for fast-runtime WASMs (the WASMs themselves are committed)

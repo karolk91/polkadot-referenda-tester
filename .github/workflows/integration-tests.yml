@@ -28,16 +28,16 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Download dist
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
           path: dist/
 
       - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -46,7 +46,7 @@ jobs:
         run: npm ci
 
       - name: Download test binary
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: test-binary
           path: integration-tests/
@@ -67,7 +67,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Free disk space
         if: runner.environment == 'github-hosted'
@@ -76,7 +76,7 @@ jobs:
           tool-cache: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -111,7 +111,7 @@ jobs:
           ls "${npm_config_cache}"/_npx/*/node_modules/polkadot-referenda-tester/post-tests/{apply-authorized-upgrade,dump-chain-events}.mjs
 
       - name: Upload dist
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist
           path: dist/
@@ -124,7 +124,7 @@ jobs:
         uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: integration-tests
           shared-key: integration-tests
@@ -150,16 +150,13 @@ jobs:
             cp "${binary_path}" "${output}"
           }
           compile_test tests test-binary
-          compile_test bridged bridged-test-binary
           cat build.log
 
       - name: Upload test binaries
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-binary
-          path: |
-            integration-tests/test-binary
-            integration-tests/bridged-test-binary
+          path: integration-tests/test-binary
           retention-days: 1
           compression-level: 6
 
@@ -185,18 +182,19 @@ jobs:
             filter: kusama_governance_all_tracks
           - name: kusama-fellowship
             filter: kusama_fellowship_all_tracks
+          - name: polkadot-governance-approved-enactment
+            filter: polkadot_governance_approved_future_enactment
           # Polkadot->Kusama bridged scenario: spawns both ecosystems
           # locally (relay + AH + Collectives + BH / relay + AH + BH), no
-          # public RPCs. Lives in its own test target, hence its own binary.
+          # public RPCs.
           - name: bridged
             filter: bridged_fellowship_by_id
-            binary: bridged-test-binary
 
     name: ${{ matrix.suite.name }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Free disk space
         if: runner.environment == 'github-hosted'
@@ -225,13 +223,13 @@ jobs:
 
       # --- Download pre-built artifacts ---
       - name: Download dist
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
           path: dist/
 
       - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -240,7 +238,7 @@ jobs:
         run: npm ci
 
       - name: Download test binary
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: test-binary
           path: integration-tests/
@@ -248,15 +246,15 @@ jobs:
       # --- Run tests (using pre-compiled binary + committed chain specs) ---
       - name: Run ${{ matrix.suite.name }} tests
         run: |
-          chmod +x "integration-tests/${TEST_BINARY}"
-          "integration-tests/${TEST_BINARY}" "${TEST_FILTER}" --nocapture
+          chmod +x integration-tests/test-binary
+          integration-tests/test-binary "${TEST_FILTER}" --nocapture
         env:
-          TEST_BINARY: ${{ matrix.suite.binary || 'test-binary' }}
           TEST_FILTER: ${{ matrix.suite.filter }}
           POLKADOT_BINARY_PATH: ${{ env.BIN_DIR }}/polkadot
           POLKADOT_PARACHAIN_BINARY_PATH: ${{ env.BIN_DIR }}/polkadot-parachain
           TOOL_PROJECT_DIR: ${{ github.workspace }}
           CHAIN_SPECS_DIR: ${{ github.workspace }}/integration-tests/chain-specs
+          FAST_RUNTIMES_DIR: ${{ github.workspace }}/integration-tests/runtimes/fast
           # `chain_spec=error` silences zombienet's raw-spec override warnings. When a
           # `with_raw_spec_override()` key is missing from the loaded spec it logs a WARN
           # that dumps the whole `genesis.raw.top` map on ONE line — megabytes per key.
@@ -272,7 +270,7 @@ jobs:
       # leaves us with nothing to debug from.
       - name: Upload zombienet logs
         if: ${{ failure() || cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: zombienet-logs-${{ matrix.suite.name }}-${{ github.run_id }}
           path: /tmp/zombie-*/**/*.log

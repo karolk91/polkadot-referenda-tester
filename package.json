@@ -35,7 +35,7 @@
     "url": "https://github.com/karolk91/polkadot-referenda-tester/issues"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12"
   },
   "publishConfig": {
     "provenance": true
@@ -47,13 +47,11 @@
     "@polkadot-api/metadata-builders": "0.15.2",
     "@polkadot-api/substrate-bindings": "0.21.2",
     "@polkadot-api/utils": "0.4.0",
-    "@polkadot/api": "^16.5.4",
     "@polkadot/keyring": "^14.0.3",
     "@polkadot/util": "^14.0.1",
     "@polkadot/util-crypto": "^14.0.1",
-    "chalk": "^4.1.2",
-    "cli-table3": "^0.6.5",
-    "commander": "^14.0.1",
+    "chalk": "^6.0.1",
+    "commander": "^15.0.0",
     "js-yaml": "^5.4.2",
     "nanospinner": "^1.1.0",
     "polkadot-api": "3.2.1",
@@ -64,12 +62,12 @@
     "@tsconfig/node20": "^20.1.9",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.20.4",
-    "ts-node": "^10.9.2",
-    "typescript": "^5.8.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
     "vitest": "^5.0.3"
   },
   "scripts": {
-    "cli": "ts-node src/cli.ts",
+    "cli": "tsx src/cli.ts",
     "build": "tsc",
     "prepare": "tsc",
     "lint": "biome lint src/",
@@ -78,7 +76,7 @@
     "format:check": "biome format src/",
     "check": "biome check src/",
     "check:fix": "biome check --write src/",
-    "test": "vitest run",
+    "test": "tsc -p tsconfig.test.json && vitest run",
     "test:watch": "vitest"
   }
 }

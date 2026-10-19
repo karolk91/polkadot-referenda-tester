@@ -19,27 +19,6 @@ export interface ParsedEndpoint {
   baseConfig?: Record<string, unknown>;
 }
 
-export type UrlNetworkHint = 'polkadot' | 'kusama' | 'paseo' | 'westend' | 'rococo' | 'unknown';
-
-/**
- * Best-effort network inference from an RPC URL substring. Used at CLI parse time
- * before any chain connection exists. Not a substitute for `chain-registry`'s
- * runtime-metadata-based identification, but enough to route the bridged scenario.
- */
-export function inferNetworkFromUrl(url: string): UrlNetworkHint {
-  // Check more-specific networks before "polkadot" because public-RPC endpoints
-  // for Kusama/Westend/etc. are commonly hosted under *.polkadot.io
-  // (e.g. wss://kusama-asset-hub-rpc.polkadot.io) — the substring "polkadot"
-  // would otherwise outrank the actually-correct network token in the subdomain.
-  const lower = url.toLowerCase();
-  if (lower.includes('kusama')) return 'kusama';
-  if (lower.includes('paseo')) return 'paseo';
-  if (lower.includes('westend')) return 'westend';
-  if (lower.includes('rococo')) return 'rococo';
-  if (lower.includes('polkadot')) return 'polkadot';
-  return 'unknown';
-}
-
 /**
  * Parse a chain endpoint string that may include a block number.
  *
@@ -117,13 +96,8 @@ function parseChopsticksConfigFile(filePath: string): ParsedEndpoint {
     }
     block = parsed.block;
   }
-  // Strip `endpoint`/`block` since we surface them as `url`/`block` instead. Everything
-  // else (wasm-override, import-storage, runtime-log-level, …) flows through as
-  // `baseConfig` for the topology builder.
-  const { endpoint: _ep, block: _b, ...rest } = parsed;
-  void _ep;
-  void _b;
-  return { url: endpoint, block, baseConfig: rest };
+  const { endpoint: _endpoint, block: _block, ...baseConfig } = parsed;
+  return { url: endpoint, block, baseConfig };
 }
 
 /**
@@ -144,34 +118,29 @@ export function parseMultipleEndpoints(input: string): ParsedEndpoint[] {
   }
 
   const endpoints: ParsedEndpoint[] = [];
-  const parts = input.split(',').map((p) => p.trim());
+  const parts = input.split(',').map((part) => part.trim());
 
-  let i = 0;
-  while (i < parts.length) {
-    const part = parts[i];
+  let position = 0;
+  while (position < parts.length) {
+    const part = parts[position];
+    const next = parts[position + 1];
 
     if (part.includes('://')) {
-      // URL form, optionally followed by a block number in the next slot.
-      if (
-        i + 1 < parts.length &&
-        !parts[i + 1].includes('://') &&
-        !looksLikeFilePath(parts[i + 1])
-      ) {
-        const blockNum = parseInt(parts[i + 1], 10);
+      if (next !== undefined && !next.includes('://') && !looksLikeFilePath(next)) {
+        const blockNum = parseInt(next, 10);
         if (!Number.isNaN(blockNum) && blockNum >= 0) {
           endpoints.push({ url: part, block: blockNum });
-          i += 2;
+          position += 2;
           continue;
         }
       }
       endpoints.push({ url: part });
-      i += 1;
+      position += 1;
     } else if (looksLikeFilePath(part)) {
-      // Path to a chopsticks YAML config file — load it.
       endpoints.push(parseChopsticksConfigFile(part));
-      i += 1;
+      position += 1;
     } else {
-      throw new Error(`Expected URL or config-file path at position ${i}, got: ${part}`);
+      throw new Error(`Expected URL or config-file path at position ${position}, got: ${part}`);
     }
   }
 

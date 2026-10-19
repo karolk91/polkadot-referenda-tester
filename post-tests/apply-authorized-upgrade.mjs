@@ -44,11 +44,14 @@ import { blake2AsHex, cryptoWaitReady } from '@polkadot/util-crypto';
 import {
   eventKey,
   humanJson,
+  inProcessChain,
   log,
+  postTestArgs,
   printBlock,
   readStorage,
   ROUTINE,
   section,
+  selectedChains,
 } from './lib/chopsticks-block.mjs';
 
 const DEFAULT_REPO = 'polkadot-fellows/runtimes';
@@ -78,12 +81,12 @@ const NOTABLE = new Set([
 // ---------------------------------------------------------------------------------------------
 
 /** Parse the `release` arg into { owner, repo, tag }. */
-export function parseRelease(release) {
+function parseRelease(release) {
   if (!release) throw new Error('post-test args need `release` (GitHub release URL/tag) or `wasmDir`');
-  const url = release.match(/github\.com\/([^/]+)\/([^/]+)\/releases\/tag\/([^/?#]+)/);
-  if (url) return { owner: url[1], repo: url[2], tag: decodeURIComponent(url[3]) };
-  const at = release.match(/^([^/@\s]+)\/([^/@\s]+)@(.+)$/);
-  if (at) return { owner: at[1], repo: at[2], tag: at[3] };
+  const releaseUrl = release.match(/github\.com\/([^/]+)\/([^/]+)\/releases\/tag\/([^/?#]+)/);
+  if (releaseUrl) return { owner: releaseUrl[1], repo: releaseUrl[2], tag: decodeURIComponent(releaseUrl[3]) };
+  const repoAtTag = release.match(/^([^/@\s]+)\/([^/@\s]+)@(.+)$/);
+  if (repoAtTag) return { owner: repoAtTag[1], repo: repoAtTag[2], tag: repoAtTag[3] };
   const [owner, repo] = DEFAULT_REPO.split('/');
   return { owner, repo, tag: release };
 }
@@ -96,12 +99,12 @@ function ghHeaders() {
 }
 
 /** Download every `*.compact.compressed.wasm` asset of the release into cacheDir (skips cached files). */
-export async function fetchReleaseWasms({ owner, repo, tag }, cacheDir) {
+async function fetchReleaseWasms({ owner, repo, tag }, cacheDir) {
   const api = `https://api.github.com/repos/${owner}/${repo}/releases/tags/${encodeURIComponent(tag)}`;
-  const res = await fetch(api, { headers: ghHeaders() });
-  if (!res.ok) throw new Error(`GitHub API ${res.status} for ${api}: ${(await res.text()).slice(0, 200)}`);
-  const release = await res.json();
-  const assets = (release.assets ?? []).filter((a) => /\.compact\.compressed\.wasm$/.test(a.name));
+  const response = await fetch(api, { headers: ghHeaders() });
+  if (!response.ok) throw new Error(`GitHub API ${response.status} for ${api}: ${(await response.text()).slice(0, 200)}`);
+  const release = await response.json();
+  const assets = (release.assets ?? []).filter((asset) => /\.compact\.compressed\.wasm$/.test(asset.name));
   if (assets.length === 0) throw new Error(`Release ${owner}/${repo}@${tag} has no *.compact.compressed.wasm assets`);
   mkdirSync(cacheDir, { recursive: true });
 
@@ -109,18 +112,18 @@ export async function fetchReleaseWasms({ owner, repo, tag }, cacheDir) {
   // Limit parallelism; the assets are ~1-2.5 MB each.
   const queue = [...assets];
   const workers = Array.from({ length: 4 }, async () => {
-    for (let a = queue.shift(); a; a = queue.shift()) {
-      const file = path.join(cacheDir, a.name);
-      if (existsSync(file) && statSync(file).size === a.size) {
-        files.push({ name: a.name, file, cached: true });
+    for (let asset = queue.shift(); asset; asset = queue.shift()) {
+      const file = path.join(cacheDir, asset.name);
+      if (existsSync(file) && statSync(file).size === asset.size) {
+        files.push({ name: asset.name, file, cached: true });
         continue;
       }
-      const dl = await fetch(a.browser_download_url, { headers: { 'User-Agent': 'polkadot-referenda-tester' } });
-      if (!dl.ok) throw new Error(`Download failed ${dl.status}: ${a.browser_download_url}`);
-      const buf = Buffer.from(await dl.arrayBuffer());
-      if (buf.length !== a.size) throw new Error(`Size mismatch for ${a.name}: got ${buf.length}, expected ${a.size}`);
-      writeFileSync(file, buf);
-      files.push({ name: a.name, file, cached: false });
+      const download = await fetch(asset.browser_download_url, { headers: { 'User-Agent': 'polkadot-referenda-tester' } });
+      if (!download.ok) throw new Error(`Download failed ${download.status}: ${asset.browser_download_url}`);
+      const bytes = Buffer.from(await download.arrayBuffer());
+      if (bytes.length !== asset.size) throw new Error(`Size mismatch for ${asset.name}: got ${bytes.length}, expected ${asset.size}`);
+      writeFileSync(file, bytes);
+      files.push({ name: asset.name, file, cached: false });
     }
   });
   await Promise.all(workers);
@@ -128,10 +131,10 @@ export async function fetchReleaseWasms({ owner, repo, tag }, cacheDir) {
 }
 
 /** Load wasm files from a local directory. */
-export function loadLocalWasms(dir) {
+function loadLocalWasms(dir) {
   const files = readdirSync(dir)
-    .filter((f) => f.endsWith('.wasm'))
-    .map((f) => ({ name: f, file: path.join(dir, f), cached: true }));
+    .filter((name) => name.endsWith('.wasm'))
+    .map((name) => ({ name, file: path.join(dir, name), cached: true }));
   if (files.length === 0) throw new Error(`No *.wasm files in ${dir}`);
   return { release: { tag: `local:${dir}` }, files };
 }
@@ -140,14 +143,14 @@ export function loadLocalWasms(dir) {
  * Hash every wasm (blake2-256, the value `authorize_upgrade` commits to) and index by hash.
  * Stores only the hash and the path, and re-reads the matched asset's bytes when applying it.
  */
-export function indexWasmsByHash(files) {
+function indexWasmsByHash(files) {
   const byHash = new Map();
-  for (const f of files) {
-    const bytes = readFileSync(f.file);
-    const specVersion = f.name.match(/-v(\d+)\./)?.[1];
+  for (const wasm of files) {
+    const bytes = readFileSync(wasm.file);
+    const specVersion = wasm.name.match(/-v(\d+)\./)?.[1];
     const hash = blake2AsHex(bytes, 256);
     byHash.set(hash, {
-      ...f,
+      ...wasm,
       size: bytes.length,
       hash,
       specVersion: specVersion ? Number(specVersion) : undefined,
@@ -161,8 +164,8 @@ export function indexWasmsByHash(files) {
 // ---------------------------------------------------------------------------------------------
 
 async function runtimeVersionOf(block) {
-  const v = await block.runtimeVersion;
-  return { specName: String(v.specName), specVersion: Number(v.specVersion), transactionVersion: Number(v.transactionVersion) };
+  const version = await block.runtimeVersion;
+  return { specName: String(version.specName), specVersion: Number(version.specVersion), transactionVersion: Number(version.transactionVersion) };
 }
 
 async function codeHashOf(block) {
@@ -171,9 +174,9 @@ async function codeHashOf(block) {
 
 async function mbmCursor(block) {
   const meta = await block.meta;
-  const q = meta.query.multiBlockMigrations?.cursor;
-  if (!q) return { supported: false, active: false };
-  const cursor = await readStorage(block, meta, q);
+  const cursorQuery = meta.query.multiBlockMigrations?.cursor;
+  if (!cursorQuery) return { supported: false, active: false };
+  const cursor = await readStorage(block, meta, cursorQuery);
   return { supported: true, active: !!cursor, cursor: cursor ? humanJson(cursor, 400) : undefined };
 }
 
@@ -181,158 +184,185 @@ async function mbmCursor(block) {
 // Per-chain upgrade flow
 // ---------------------------------------------------------------------------------------------
 
-async function upgradeChain(ptChain, wasmsByHash, opts) {
-  const { label, specName, kind } = ptChain;
-  const chain = ptChain.chain;
-  const result = { label, specName, kind, status: 'unknown', notes: [], notable: [], other: new Map() };
+function chainResult({ label, specName, kind }, status, notes) {
+  return { label, specName, kind, status, notes, notable: [], other: new Map() };
+}
 
-  if (!chain || typeof chain.newBlock !== 'function') {
-    result.status = 'error';
-    result.notes.push('no in-process chopsticks Blockchain on the post-test chain object');
-    return result;
-  }
-
-  section(`${label} (${specName}, ${kind})`);
-  let head = chain.head;
-  let meta = await head.meta;
+async function readAuthorization(chain, wasmsByHash, opts) {
+  const head = chain.head;
+  const meta = await head.meta;
   const before = await runtimeVersionOf(head);
   const lastUpgradeBefore = await readStorage(head, meta, meta.query.system.lastRuntimeUpgrade);
   log(`  head: #${head.number} ${head.hash}`);
   log(`  runtime before: ${before.specName} v${before.specVersion} (tx v${before.transactionVersion})`);
   if (lastUpgradeBefore) log(`  System.LastRuntimeUpgrade before: ${humanJson(lastUpgradeBefore, 200)}`);
 
-  // 1. Authorized upgrade on chain?
   const authorized = await readStorage(head, meta, meta.query.system.authorizedUpgrade);
   if (!authorized) {
-    result.status = 'skipped';
-    result.notes.push('no System.AuthorizedUpgrade in storage — nothing to apply');
-    log(`  ⏭  ${result.notes[0]}`);
-    return result;
+    const note = 'no System.AuthorizedUpgrade in storage — nothing to apply';
+    log(`  ⏭  ${note}`);
+    return { status: 'skipped', notes: [note] };
   }
   const authorizedHash = authorized.codeHash.toHex();
   const checkVersion = authorized.checkVersion.isTrue;
-  result.authorizedHash = authorizedHash;
   log(`  System.AuthorizedUpgrade: code_hash=${authorizedHash} check_version=${checkVersion}`);
 
-  // 2. Match a release asset by hash (this is the hash verification).
   const asset = wasmsByHash.get(authorizedHash);
   if (!asset) {
-    result.status = opts.failOnMissing ? 'failed' : 'skipped';
-    result.notes.push(`no release asset hashes to ${authorizedHash}`);
-    log(`  ❌ ${result.notes[0]}`);
-    log(`     assets available: ${[...wasmsByHash.values()].map((a) => `${a.name}=${a.hash.slice(0, 10)}…`).join(', ')}`);
-    return result;
+    const note = `no release asset hashes to ${authorizedHash}`;
+    log(`  ❌ ${note}`);
+    log(`     assets available: ${[...wasmsByHash.values()].map((wasm) => `${wasm.name}=${wasm.hash.slice(0, 10)}…`).join(', ')}`);
+    return { status: opts.failOnMissing ? 'failed' : 'skipped', notes: [note], authorizedHash };
   }
   const code = readFileSync(asset.file);
-  result.asset = asset.name;
   log(`  ✅ hash verified: ${asset.name} blake2-256 == authorized code_hash`);
   log(`     size=${code.length} bytes sha256=${createHash('sha256').update(code).digest('hex')}${asset.specVersion ? ` asset spec_version=${asset.specVersion}` : ''}`);
+  const notes = [];
   if (checkVersion && asset.specVersion !== undefined && asset.specVersion <= before.specVersion) {
-    result.notes.push(`asset spec_version ${asset.specVersion} is not greater than current ${before.specVersion}; check_version=true will reject it`);
-    log(`  ⚠️  ${result.notes.at(-1)}`);
+    notes.push(`asset spec_version ${asset.specVersion} is not greater than current ${before.specVersion}; check_version=true will reject it`);
+    log(`  ⚠️  ${notes.at(-1)}`);
   }
+  return { status: 'authorized', notes, authorizedHash, checkVersion, asset, code, before };
+}
 
-  // 3. Build the unsigned apply_authorized_upgrade extrinsic and include it in a block.
+async function dryRunFailure(chain, extrinsic) {
+  try {
+    const { outcome } = await chain.dryRunExtrinsic(extrinsic);
+    return humanJson(outcome, 500);
+  } catch (error) {
+    return `dry-run threw: ${error.message}`;
+  }
+}
+
+async function applyUpgrade(chain, label, code, opts) {
+  const meta = await chain.head.meta;
   const call = meta.tx.system.applyAuthorizedUpgrade(u8aToHex(code));
-  const xtHex = meta.registry.createType('GenericExtrinsic', call).toHex();
+  const extrinsic = meta.registry.createType('GenericExtrinsic', call).toHex();
   log(`  ⛏  building block with System.apply_authorized_upgrade (${code.length} bytes, unsigned)…`);
-  const applyBlock = await chain.newBlock({ transactions: [xtHex] });
-  const included = (await applyBlock.extrinsics).includes(xtHex);
-  if (!included) {
-    // The block builder drops extrinsics whose apply_extrinsic result is Err; dry-run for the reason.
-    let reason = 'unknown';
-    try {
-      const { outcome } = await chain.dryRunExtrinsic(xtHex);
-      reason = humanJson(outcome, 500);
-    } catch (e) {
-      reason = `dry-run threw: ${e.message}`;
-    }
-    result.status = 'failed';
-    result.notes.push(`apply_authorized_upgrade was NOT included in block #${applyBlock.number}: ${reason}`);
-    log(`  ❌ ${result.notes.at(-1)}`);
+  const applyBlock = await chain.newBlock({ transactions: [extrinsic] });
+  if (!(await applyBlock.extrinsics).includes(extrinsic)) {
+    const note = `apply_authorized_upgrade was NOT included in block #${applyBlock.number}: ${await dryRunFailure(chain, extrinsic)}`;
+    log(`  ❌ ${note}`);
     await printBlock(label, applyBlock, { max: opts.max, tag: 'apply block (extrinsic dropped)', mark: NOTABLE });
-    return result;
+    return { included: false, note };
   }
 
-  // 4. Build blocks: the apply block, then enough blocks past the code switch (which occurs one
-  //    block later on parachains), extending while MBM is active.
-  let codeUpdatedAt;
-  let pvfStoredAt;
-  let pvfAppliedAt;
-  const collect = (blockNumber, events) => {
-    const isPostUpgrade = codeUpdatedAt !== undefined && blockNumber > codeUpdatedAt;
-    for (const ev of events) {
-      const key = eventKey(ev);
+  const application = {
+    included: true,
+    firstBlock: applyBlock.number,
+    lastBlock: applyBlock.number,
+    notable: [],
+    other: new Map(),
+    notes: [],
+    mbmSeenActive: false,
+  };
+  const recordEvents = (blockNumber, events) => {
+    const isPostUpgrade = application.codeUpdatedAt !== undefined && blockNumber > application.codeUpdatedAt;
+    for (const record of events) {
+      const key = eventKey(record);
       if (NOTABLE.has(key)) {
-        result.notable.push(`#${blockNumber} ${key}${ev.event.data.length ? ` ${humanJson(ev.event.data, 300)}` : ''}`);
-        if (key === 'system.CodeUpdated') codeUpdatedAt = codeUpdatedAt ?? blockNumber;
-        if (key === 'parachainSystem.ValidationFunctionStored') pvfStoredAt = pvfStoredAt ?? blockNumber;
-        if (key === 'parachainSystem.ValidationFunctionApplied') pvfAppliedAt = pvfAppliedAt ?? blockNumber;
+        application.notable.push(`#${blockNumber} ${key}${record.event.data.length ? ` ${humanJson(record.event.data, 300)}` : ''}`);
+        if (key === 'system.CodeUpdated') application.codeUpdatedAt ??= blockNumber;
+        if (key === 'parachainSystem.ValidationFunctionStored') application.pvfStoredAt ??= blockNumber;
+        if (key === 'parachainSystem.ValidationFunctionApplied') application.pvfAppliedAt ??= blockNumber;
         // MBM can start and finish inside one block, so the cursor poll below never reads it as
         // active.
-        if (key === 'multiBlockMigrations.UpgradeStarted') result.mbmSeenActive = true;
+        if (key === 'multiBlockMigrations.UpgradeStarted') application.mbmSeenActive = true;
       } else if (isPostUpgrade && !ROUTINE.has(key)) {
-        result.other.set(key, (result.other.get(key) ?? 0) + 1);
+        application.other.set(key, (application.other.get(key) ?? 0) + 1);
       }
     }
   };
-
-  const dump = async (block, tag) => {
+  const printAndRecord = async (block, tag) => {
     const { events } = await printBlock(label, block, { max: opts.max, tag, mark: NOTABLE });
-    collect(block.number, events);
+    recordEvents(block.number, events);
   };
-  await dump(applyBlock, 'apply_authorized_upgrade');
+  await printAndRecord(applyBlock, 'apply_authorized_upgrade');
 
-  let last = applyBlock;
   let mbm = { supported: false, active: false };
-  const sinceSwitch = () => last.number - (codeUpdatedAt ?? applyBlock.number);
-  const extra = () => last.number - applyBlock.number;
-  while (sinceSwitch() < opts.blocksAfterUpgrade || (mbm.active && extra() < opts.maxMigrationBlocks)) {
-    last = await chain.newBlock();
-    const tag = last.number === codeUpdatedAt + 1 ? 'first block on NEW runtime (on_runtime_upgrade runs here)' : undefined;
-    await dump(last, tag);
-    mbm = await mbmCursor(last);
+  const blocksSinceSwitch = () => application.lastBlock - (application.codeUpdatedAt ?? applyBlock.number);
+  const extraBlocks = () => application.lastBlock - applyBlock.number;
+  while (blocksSinceSwitch() < opts.blocksAfterUpgrade || (mbm.active && extraBlocks() < opts.maxMigrationBlocks)) {
+    const block = await chain.newBlock();
+    application.lastBlock = block.number;
+    const tag = block.number === application.codeUpdatedAt + 1 ? 'first block on NEW runtime (on_runtime_upgrade runs here)' : undefined;
+    await printAndRecord(block, tag);
+    mbm = await mbmCursor(block);
     if (mbm.active) {
-      result.mbmSeenActive = true;
+      application.mbmSeenActive = true;
       log(`     ⏳ MultiBlockMigrations cursor active: ${mbm.cursor}`);
-    } else if (mbm.supported && result.mbmSeenActive) {
+    } else if (mbm.supported && application.mbmSeenActive) {
       log(`     ✅ MultiBlockMigrations cursor cleared`);
     }
   }
-  if (mbm.active) result.notes.push(`stopped after ${extra()} extra blocks; MBM cursor still active`);
-  result.blocks = { first: applyBlock.number, last: last.number };
+  if (mbm.active) application.notes.push(`stopped after ${extraBlocks()} extra blocks; MBM cursor still active`);
+  application.mbm = mbm;
+  return application;
+}
 
-  // 5. Verify the new code + version at head.
-  head = chain.head;
+async function verifyUpgrade(chain, kind, authorization, application) {
+  const head = chain.head;
+  const meta = await head.meta;
+  const { authorizedHash, asset, before, checkVersion } = authorization;
+  const { codeUpdatedAt, pvfStoredAt, pvfAppliedAt, mbm, mbmSeenActive } = application;
   const after = await runtimeVersionOf(head);
   const headCodeHash = await codeHashOf(head);
-  meta = await head.meta;
   const lastUpgradeAfter = await readStorage(head, meta, meta.query.system.lastRuntimeUpgrade);
   const stillAuthorized = await readStorage(head, meta, meta.query.system.authorizedUpgrade);
-  result.before = before;
-  result.after = after;
-  result.codeUpdatedAt = codeUpdatedAt;
-  result.pvfStoredAt = pvfStoredAt;
-  result.pvfAppliedAt = pvfAppliedAt;
-  result.mbm = mbm;
-
   log(`\n  runtime after:  ${after.specName} v${after.specVersion} (tx v${after.transactionVersion})`);
   if (lastUpgradeAfter) log(`  System.LastRuntimeUpgrade after: ${humanJson(lastUpgradeAfter, 200)}`);
   log(`  :code blake2-256 at head: ${headCodeHash}`);
 
-  const checks = [];
-  checks.push([codeUpdatedAt !== undefined, `System.CodeUpdated observed${codeUpdatedAt !== undefined ? ` at #${codeUpdatedAt}` : ''}`]);
-  checks.push([headCodeHash === authorizedHash, `:code hash == authorized hash`]);
-  if (asset.specVersion !== undefined) checks.push([after.specVersion === asset.specVersion, `spec_version ${after.specVersion} == asset ${asset.specVersion}`]);
-  checks.push([after.specVersion > before.specVersion, `spec_version increased ${before.specVersion} → ${after.specVersion}`]);
-  checks.push([after.specName === before.specName, `spec_name unchanged (${after.specName})`]);
-  checks.push([!stillAuthorized, `System.AuthorizedUpgrade cleared`]);
-  if (kind !== 'relay') checks.push([pvfStoredAt !== undefined && pvfAppliedAt !== undefined, `PVF stored (#${pvfStoredAt}) and applied (#${pvfAppliedAt})`]);
-  if (mbm.supported) checks.push([!mbm.active, mbm.active ? `MBM cursor still active: ${mbm.cursor}` : `MBM cursor idle${result.mbmSeenActive ? ' (ran and completed)' : ' (no multi-block migrations queued)'}`]);
-  for (const [ok, text] of checks) log(`  ${ok ? '✅' : '❌'} ${text}`);
-  result.checks = checks;
-  result.status = checks.every(([ok]) => ok) ? 'upgraded' : 'failed';
-  return result;
+  const checks = [
+    [codeUpdatedAt !== undefined, `System.CodeUpdated observed${codeUpdatedAt !== undefined ? ` at #${codeUpdatedAt}` : ''}`],
+    [headCodeHash === authorizedHash, ':code hash == authorized hash'],
+    ...(asset.specVersion !== undefined
+      ? [[after.specVersion === asset.specVersion, `spec_version ${after.specVersion} == asset ${asset.specVersion}`]]
+      : []),
+    ...(checkVersion
+      ? [[after.specVersion > before.specVersion, `spec_version increased ${before.specVersion} → ${after.specVersion}`]]
+      : []),
+    [after.specName === before.specName, `spec_name unchanged (${after.specName})`],
+    [!stillAuthorized, 'System.AuthorizedUpgrade cleared'],
+    ...(kind !== 'relay'
+      ? [[pvfStoredAt !== undefined && pvfAppliedAt !== undefined, `PVF stored (#${pvfStoredAt}) and applied (#${pvfAppliedAt})`]]
+      : []),
+    ...(mbm.supported
+      ? [[!mbm.active, mbm.active ? `MBM cursor still active: ${mbm.cursor}` : `MBM cursor idle${mbmSeenActive ? ' (ran and completed)' : ' (no multi-block migrations queued)'}`]]
+      : []),
+  ];
+  for (const [isPassed, text] of checks) log(`  ${isPassed ? '✅' : '❌'} ${text}`);
+  return { after, isPassed: checks.every(([isPassed]) => isPassed) };
+}
+
+async function upgradeChain(postTestChain, wasmsByHash, opts) {
+  const { label, specName, kind } = postTestChain;
+  const chain = inProcessChain(postTestChain);
+  section(`${label} (${specName}, ${kind})`);
+
+  const authorization = await readAuthorization(chain, wasmsByHash, opts);
+  const result = (status, notes, details = {}) => ({
+    ...chainResult(postTestChain, status, notes),
+    authorizedHash: authorization.authorizedHash,
+    asset: authorization.asset?.name,
+    ...details,
+  });
+  if (authorization.status !== 'authorized') {
+    return result(authorization.status, authorization.notes);
+  }
+  const application = await applyUpgrade(chain, label, authorization.code, opts);
+  if (!application.included) {
+    return result('failed', [...authorization.notes, application.note]);
+  }
+  const verification = await verifyUpgrade(chain, kind, authorization, application);
+  return result(verification.isPassed ? 'upgraded' : 'failed', [...authorization.notes, ...application.notes], {
+    before: authorization.before,
+    after: verification.after,
+    blocks: { first: application.firstBlock, last: application.lastBlock },
+    codeUpdatedAt: application.codeUpdatedAt,
+    notable: application.notable,
+    other: application.other,
+  });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -343,7 +373,7 @@ export default async function run(ctx) {
   // Without this, @polkadot/util-crypto uses the pure-JS blake2, about 10x slower than the wasm
   // implementation. This script hashes every release asset and each chain's 2 MB `:code`.
   await cryptoWaitReady();
-  const args = ctx.args && typeof ctx.args === 'object' ? ctx.args : {};
+  const args = postTestArgs(ctx);
   const opts = {
     blocksAfterUpgrade: Number(args.blocksAfterUpgrade ?? DEFAULT_BLOCKS_AFTER),
     maxMigrationBlocks: Number(args.maxMigrationBlocks ?? DEFAULT_MAX_MIGRATION_BLOCKS),
@@ -357,58 +387,57 @@ export default async function run(ctx) {
     source = loadLocalWasms(path.resolve(args.wasmDir));
     log(`  wasm source: local dir ${args.wasmDir}`);
   } else {
-    const rel = parseRelease(args.release);
-    const cacheDir = path.resolve(args.cacheDir ?? path.join('.cache', 'release-runtimes', rel.tag));
-    log(`  release: ${rel.owner}/${rel.repo}@${rel.tag}  (cache: ${cacheDir})`);
-    source = await fetchReleaseWasms(rel, cacheDir);
+    const release = parseRelease(args.release);
+    const cacheDir = path.resolve(args.cacheDir ?? path.join('.cache', 'release-runtimes', release.tag));
+    log(`  release: ${release.owner}/${release.repo}@${release.tag}  (cache: ${cacheDir})`);
+    source = await fetchReleaseWasms(release, cacheDir);
     log(`  release "${source.release.name}" published ${source.release.publishedAt}`);
   }
   const wasmsByHash = indexWasmsByHash(source.files);
-  log(`  ${source.files.length} wasm asset(s) hashed (${source.files.filter((f) => f.cached).length} from cache):`);
-  for (const a of [...wasmsByHash.values()].sort((x, y) => x.name.localeCompare(y.name))) {
-    log(`    ${a.hash}  ${a.name}  (${a.size} bytes)`);
+  log(`  ${source.files.length} wasm asset(s) hashed (${source.files.filter((wasm) => wasm.cached).length} from cache):`);
+  for (const wasm of [...wasmsByHash.values()].sort((first, second) => first.name.localeCompare(second.name))) {
+    log(`    ${wasm.hash}  ${wasm.name}  (${wasm.size} bytes)`);
   }
 
-  const only = Array.isArray(args.only) ? new Set(args.only) : undefined;
-  const targets = ctx.chains.filter((c) => !only || only.has(c.label) || only.has(c.specName));
-  log(`\n  chains: ${targets.map((c) => c.label).join(', ')}`);
+  const targets = selectedChains(ctx, args, { includeMain: true });
+  log(`\n  chains: ${targets.map((target) => target.label).join(', ')}`);
 
   const results = [];
-  for (const c of targets) {
+  for (const target of targets) {
     try {
-      results.push(await upgradeChain(c, wasmsByHash, opts));
-    } catch (e) {
-      results.push({ label: c.label, specName: c.specName, kind: c.kind, status: 'error', notes: [e.stack || String(e)], notable: [], other: new Map() });
-      log(`  💥 ${c.label}: ${e.message}`);
+      results.push(await upgradeChain(target, wasmsByHash, opts));
+    } catch (error) {
+      results.push(chainResult(target, 'error', [error.stack || String(error)]));
+      log(`  💥 ${target.label}: ${error.message}`);
     }
   }
 
   section('Summary');
-  for (const r of results) {
-    const icon = r.status === 'upgraded' ? '✅' : r.status === 'skipped' ? '⏭ ' : '❌';
-    const ver = r.before && r.after ? ` ${r.before.specVersion} → ${r.after.specVersion}` : '';
-    log(`\n${icon} ${r.label} (${r.specName}) — ${r.status}${ver}`);
-    if (r.asset) log(`   asset: ${r.asset}`);
-    if (r.authorizedHash) log(`   authorized hash: ${r.authorizedHash}`);
-    if (r.blocks) log(`   blocks built: #${r.blocks.first}…#${r.blocks.last} (${r.blocks.last - r.blocks.first + 1})`);
-    if (r.codeUpdatedAt !== undefined) log(`   CodeUpdated at #${r.codeUpdatedAt}; first block on new runtime: #${r.codeUpdatedAt + 1}`);
-    if (r.notable.length) {
+  for (const result of results) {
+    const icon = result.status === 'upgraded' ? '✅' : result.status === 'skipped' ? '⏭ ' : '❌';
+    const versions = result.before && result.after ? ` ${result.before.specVersion} → ${result.after.specVersion}` : '';
+    log(`\n${icon} ${result.label} (${result.specName}) — ${result.status}${versions}`);
+    if (result.asset) log(`   asset: ${result.asset}`);
+    if (result.authorizedHash) log(`   authorized hash: ${result.authorizedHash}`);
+    if (result.blocks) log(`   blocks built: #${result.blocks.first}…#${result.blocks.last} (${result.blocks.last - result.blocks.first + 1})`);
+    if (result.codeUpdatedAt !== undefined) log(`   CodeUpdated at #${result.codeUpdatedAt}; first block on new runtime: #${result.codeUpdatedAt + 1}`);
+    if (result.notable.length) {
       log('   upgrade/migration events:');
-      for (const n of r.notable) log(`     • ${n}`);
+      for (const notable of result.notable) log(`     • ${notable}`);
     }
-    if (r.other.size) {
+    if (result.other.size) {
       log('   other post-upgrade activity (event counts on the new runtime):');
-      for (const [k, v] of [...r.other.entries()].sort((a, b) => b[1] - a[1])) log(`     • ${k} ×${v}`);
-    } else if (r.status === 'upgraded') {
+      for (const [key, count] of [...result.other.entries()].sort((first, second) => second[1] - first[1])) log(`     • ${key} ×${count}`);
+    } else if (result.status === 'upgraded') {
       log('   no non-routine events on the new runtime beyond the ones listed above');
     }
-    for (const n of r.notes) log(`   note: ${n}`);
+    for (const note of result.notes) log(`   note: ${note}`);
   }
 
-  const failed = results.filter((r) => r.status === 'failed' || r.status === 'error');
-  const upgraded = results.filter((r) => r.status === 'upgraded').length;
+  const failed = results.filter((result) => result.status === 'failed' || result.status === 'error');
+  const upgraded = results.filter((result) => result.status === 'upgraded').length;
   log(`\n${failed.length === 0 ? '✅' : '❌'} ${upgraded}/${results.length} chains upgraded${failed.length ? `, ${failed.length} failed` : ''}`);
   if (failed.length) {
-    throw new Error(`apply-authorized-upgrade failed on: ${failed.map((r) => `${r.label} (${r.notes[0] ?? r.status})`).join('; ')}`);
+    throw new Error(`apply-authorized-upgrade failed on: ${failed.map((result) => `${result.label} (${result.notes[0] ?? result.status})`).join('; ')}`);
   }
 }

@@ -11,10 +11,29 @@ export const section = (title) => log(`\n${RULE}\n${title}\n${RULE}`);
 /** Per-block events that report nothing about a referendum or an upgrade. */
 export const ROUTINE = new Set(['system.ExtrinsicSuccess']);
 
+export function postTestArgs(ctx) {
+  return ctx.args && typeof ctx.args === 'object' ? ctx.args : {};
+}
+
+export function selectedChains(ctx, args, { includeMain }) {
+  const only = Array.isArray(args.only) ? new Set(args.only) : undefined;
+  return ctx.chains.filter((chain) =>
+    only ? only.has(chain.label) || only.has(chain.specName) : includeMain || chain.label !== ctx.main.label
+  );
+}
+
+export function inProcessChain(postTestChain) {
+  const { chain } = postTestChain;
+  if (!chain || typeof chain.newBlock !== 'function') {
+    throw new Error(`${postTestChain.label}: no in-process chopsticks Blockchain on the post-test chain object`);
+  }
+  return chain;
+}
+
 /** Decode a storage entry of `query` at `block` using the type recorded in metadata. */
 export async function readStorage(block, meta, query, ...args) {
-  const t = query.meta.type;
-  const lookupId = t.isPlain ? t.asPlain : t.asMap.value;
+  const storageType = query.meta.type;
+  const lookupId = storageType.isPlain ? storageType.asPlain : storageType.asMap.value;
   return block.read(meta.registry.createLookupType(lookupId), query, ...args);
 }
 
@@ -28,8 +47,8 @@ export function eventKey(event) {
   return `${event.event.section}.${event.event.method}`;
 }
 
-export function truncate(s, n) {
-  return s.length > n ? `${s.slice(0, n)}…(${s.length - n} more chars)` : s;
+export function truncate(text, maxLength) {
+  return text.length > maxLength ? `${text.slice(0, maxLength)}…(${text.length - maxLength} more chars)` : text;
 }
 
 export function humanJson(codec, max) {
@@ -42,12 +61,12 @@ export function humanJson(codec, max) {
 
 export async function describeExtrinsics(block) {
   const registry = await block.registry;
-  const exts = await block.extrinsics;
-  return exts.map((hex) => {
+  const extrinsics = await block.extrinsics;
+  return extrinsics.map((hex) => {
     try {
-      const ex = registry.createType('GenericExtrinsic', hexToU8a(hex));
-      const args = ex.method.args.map((a) => truncate(a.toHex ? a.toHex() : String(a), 66));
-      return `${ex.method.section}.${ex.method.method}(${args.join(', ')})${ex.isSigned ? '' : ' [unsigned]'}`;
+      const extrinsic = registry.createType('GenericExtrinsic', hexToU8a(hex));
+      const args = extrinsic.method.args.map((arg) => truncate(arg.toHex ? arg.toHex() : String(arg), 66));
+      return `${extrinsic.method.section}.${extrinsic.method.method}(${args.join(', ')})${extrinsic.isSigned ? '' : ' [unsigned]'}`;
     } catch {
       return truncate(hex, 66);
     }
@@ -66,22 +85,22 @@ export async function describeExtrinsics(block) {
  * @returns {{ events: any[], flagged: string[] }} all events (hidden ones included) and the flagged lines
  */
 export async function printBlock(label, block, { max, tag, hide, mark, flag } = {}) {
-  const exts = await describeExtrinsics(block);
+  const extrinsics = await describeExtrinsics(block);
   const events = await readEvents(block);
   log(`\n  📦 ${label} block #${block.number} ${block.hash}${tag ? `   ← ${tag}` : ''}`);
-  log(`     extrinsics (${exts.length}):`);
-  for (const e of exts) log(`       • ${e}`);
-  const shown = hide ? events.filter((ev) => !hide.has(eventKey(ev))) : events;
+  log(`     extrinsics (${extrinsics.length}):`);
+  for (const extrinsic of extrinsics) log(`       • ${extrinsic}`);
+  const shown = hide ? events.filter((record) => !hide.has(eventKey(record))) : events;
   log(
     `     events (${events.length}${hide ? `, ${events.length - shown.length} routine hidden` : ''}):`
   );
   const flagged = [];
-  for (const ev of shown) {
-    const key = eventKey(ev);
-    const data = ev.event.data.length ? ` ${humanJson(ev.event.data, max ?? 300)}` : '';
-    const bad = flag ? flag.test(key) || flag.test(data) : false;
-    if (bad) flagged.push(`#${block.number} ${key}${data}`);
-    const marker = bad ? '   ⚠️' : mark?.has(key) ? ' ◀◀' : '';
+  for (const record of shown) {
+    const key = eventKey(record);
+    const data = record.event.data.length ? ` ${humanJson(record.event.data, max ?? 300)}` : '';
+    const isFlagged = flag ? flag.test(key) || flag.test(data) : false;
+    if (isFlagged) flagged.push(`#${block.number} ${key}${data}`);
+    const marker = isFlagged ? '   ⚠️' : mark?.has(key) ? ' ◀◀' : '';
     log(`       • ${key}${data}${marker}`);
   }
   return { events, flagged };

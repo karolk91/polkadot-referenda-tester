@@ -9,10 +9,10 @@ import {
   type PostTestContext,
   resolvePostTestModule,
   runPostTest,
-} from '../services/post-test-runner';
+} from '../network/post-test-runner';
 
-// Real dynamic import() has no host callback under Vitest's VM, so exercise the orchestration with
-// a require-based loader (the production default is a genuine eval-based import, covered by e2e).
+// Exercise the orchestration with a require-based loader (the production default is a native
+// dynamic import, covered by e2e).
 const requireLoad = async (specifier: string): Promise<unknown> => {
   const req = createRequire(__filename);
   return req(fileURLToPath(specifier));
@@ -39,7 +39,7 @@ const context: PostTestContext = {
     label: 'Main',
     specName: 'x',
     network: 'polkadot',
-    kind: 'system-parachain',
+    kind: 'parachain',
     wsEndpoint: 'ws://127.0.0.1:1',
     chain: undefined,
   },
