@@ -53,7 +53,7 @@
     "@polkadot/util-crypto": "^14.0.1",
     "chalk": "^4.1.2",
     "cli-table3": "^0.6.5",
-    "commander": "^14.0.1",
+    "commander": "^15.0.0",
     "js-yaml": "^5.4.2",
     "nanospinner": "^1.1.0",
     "polkadot-api": "3.2.1",
