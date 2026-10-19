@@ -111,7 +111,7 @@ jobs:
           ls "${npm_config_cache}"/_npx/*/node_modules/polkadot-referenda-tester/post-tests/{apply-authorized-upgrade,dump-chain-events}.mjs
 
       - name: Upload dist
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist
           path: dist/
@@ -154,7 +154,7 @@ jobs:
           cat build.log
 
       - name: Upload test binaries
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-binary
           path: |
@@ -272,7 +272,7 @@ jobs:
       # leaves us with nothing to debug from.
       - name: Upload zombienet logs
         if: ${{ failure() || cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: zombienet-logs-${{ matrix.suite.name }}-${{ github.run_id }}
           path: /tmp/zombie-*/**/*.log
