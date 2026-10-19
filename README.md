@@ -4,7 +4,7 @@ CLI for dry-running Polkadot/Kusama referenda against local Chopsticks forks.
 
 ## Usage
 
-Run with `npx` without installing (requires Node.js 22 or newer):
+Run with `npx` without installing (requires Node.js 22.12 or newer):
 
 ```bash
 # Single-chain execution
@@ -172,7 +172,7 @@ npm run cli -- test \
 
 ```bash
 npm run build          # compile to dist/
-npm run cli -- test    # run directly with ts-node
+npm run cli -- test    # run directly from source with tsx
 npm run lint           # lint with Biome
 npm run lint:fix       # fix lint issues with Biome
 npm run format         # format with Biome

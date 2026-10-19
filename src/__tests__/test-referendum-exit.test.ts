@@ -10,7 +10,7 @@ vi.mock('../network/single-consensus-network', () => ({
 }));
 vi.mock('../network/step-runner', () => ({ runStepsOnNetwork: vi.fn() }));
 vi.mock('../utils/logger', async () => {
-  const { createTestLogger } = await import('./helpers');
+  const { createTestLogger } = await import('./helpers.js');
   return {
     Logger: vi.fn(function (this: object) {
       Object.assign(this, createTestLogger());

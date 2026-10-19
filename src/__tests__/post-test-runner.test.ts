@@ -11,8 +11,8 @@ import {
   runPostTest,
 } from '../network/post-test-runner';
 
-// Real dynamic import() has no host callback under Vitest's VM, so exercise the orchestration with
-// a require-based loader (the production default is a genuine eval-based import, covered by e2e).
+// Exercise the orchestration with a require-based loader (the production default is a native
+// dynamic import, covered by e2e).
 const requireLoad = async (specifier: string): Promise<unknown> => {
   const req = createRequire(__filename);
   return req(fileURLToPath(specifier));

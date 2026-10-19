@@ -35,20 +35,6 @@ export function resolvePostTestModule(
   return bundledPostTests(bundledDir).get(modulePath) ?? path.join(bundledDir, `${modulePath}.mjs`);
 }
 
-/**
- * A dynamic `import()` that remains a dynamic import after TypeScript's CommonJS emit. With
- * `module: CommonJS`, `tsc` rewrites a literal `import()` into `require()`, which cannot load ESM
- * or `.ts` post-tests. A direct `eval` produces a runtime `import()` that retains this module's
- * host import callback, so ESM and Node's `.ts` type stripping both work. The specifier is
- * inlined as an escaped string literal, so the code evaluates nothing from the surrounding scope.
- * `new Function` does not work here: a function built that way has no import callback and fails
- * with "A dynamic import callback was not specified".
- */
-function dynamicImport(specifier: string): Promise<unknown> {
-  // biome-ignore lint/security/noGlobalEval: intentional — preserves dynamic import() in CJS output
-  return eval(`import(${JSON.stringify(specifier)})`) as Promise<unknown>;
-}
-
 /** A live Chopsticks-forked chain passed to a post-test script. */
 export type PostTestChain = Pick<ChainInfo, 'label' | 'specName' | 'network' | 'kind'> & {
   /** WebSocket endpoint of the running Chopsticks node (dev RPCs available). */
@@ -133,7 +119,7 @@ export async function runPostTest(
   context: Omit<PostTestContext, 'args'>,
   argsRaw?: string,
   // Seam for tests: how the module URL is loaded. Production uses the real dynamic import.
-  load: (specifier: string) => Promise<unknown> = dynamicImport
+  load: (specifier: string) => Promise<unknown> = (specifier) => import(specifier)
 ): Promise<void> {
   const resolved = resolvePostTestModule(modulePath);
   if (!isPathSpecifier(modulePath) && !fs.existsSync(resolved)) {

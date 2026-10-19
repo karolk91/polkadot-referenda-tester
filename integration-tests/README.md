@@ -5,7 +5,7 @@ Rust integration tests using [zombienet-sdk](https://github.com/paritytech/zombi
 ## Prerequisites
 
 - Rust toolchain (stable + nightly for formatting)
-- Node.js 22+ with npm (for the TypeScript CLI)
+- Node.js 22.12+ with npm (for the TypeScript CLI)
 - ~20 GB disk space (binaries, runtimes, chain specs, build cache)
 
 ## Setup (step by step)
